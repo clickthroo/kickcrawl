@@ -71,11 +71,13 @@ export interface KickioProfile {
     size: string | null;
     manufacturer: string | null;
     colour: string | null;
+    colour_secondary: string | null;
     boxed_edition: string | null;
     price: number | null;
     currency: string | null;
     quantity: number | null;
     images: string[];
+    stock_status: 'In Stock' | 'Out of Stock' | null;
   };
   custom_attributes: Record<string, string>;
   confidence: Record<string, 'certain' | 'inferred'>;

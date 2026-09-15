@@ -34,11 +34,20 @@ export interface KickioListing {
   size: string | null;
   manufacturer: string | null;
   colour: string | null;
+  colour_secondary: string | null;
   boxed_edition: string | null;
   price: number | null;
   currency: string | null;
   quantity: number | null;
   images: string[];
+  /**
+   * Availability signal detected from the listing text ("Out of stock",
+   * "sold out", a quantity of 0, etc). Not part of the documented Kickio
+   * field set in the mapping guide (which covers product identity, not
+   * listing lifecycle) - this is Kickcrawl's own read of the page, kept
+   * null rather than guessed when no signal is found either way.
+   */
+  stock_status: 'In Stock' | 'Out of Stock' | null;
 }
 
 export interface KickioProfile {
@@ -350,8 +359,18 @@ export function detectShirtType(text: string): ShirtTypeResult {
 // =========================================================================
 
 export function guessTeamFromTitle(title: string): string {
-  let c = title
-    .replace(/\s+[-–—]\s+.*$/, '')
+  // Strip a trailing " - Site Name" or " | Site Name" suffix - common on
+  // scraped page <title>s - by cutting at whichever delimiter appears
+  // first, not just the dash form. Cutting at the wrong one (e.g. applying
+  // the dash rule when a pipe comes first) would leave the other subtitle's
+  // junk in place.
+  const dashAt = title.search(/\s[-–—]\s/);
+  const pipeAt = title.search(/\s\|\s/);
+  const candidates = [dashAt, pipeAt].filter((i) => i >= 0);
+  const cutAt = candidates.length ? Math.min(...candidates) : -1;
+  const withoutSubtitle = cutAt >= 0 ? title.slice(0, cutAt) : title;
+
+  let c = withoutSubtitle
     .replace(/\*+/g, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
@@ -364,7 +383,7 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}(?![\d/-])/g, '')
     .replace(/\b\d{4}\b/g, '')
     .replace(/\b(Home|Away|Third|Fourth|Goalkeeper|GK|Training|Pre[- ]?Match)\b/gi, '')
-    .replace(/\b(Shirt|Jersey|Kit|Top|Football|L\/S|S\/S|Long Sleeve|Short Sleeve)\b/gi, '')
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
     .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
@@ -594,18 +613,66 @@ export function canonicalManufacturer(v: string | null | undefined): string | nu
   return match ?? trimmed;
 }
 
-export function detectColour(text: string): { raw: string | null; canonical: string | null } {
+/**
+ * Find up to `max` distinct colour words mentioned in free text, in the
+ * order they appear - the "main" colours a human skimming the title would
+ * name first. Longer, more specific phrases ("sky blue") are matched ahead
+ * of their bare form ("blue") because COLOUR_WORDS lists them first and the
+ * combined pattern tries alternatives in that order at each position.
+ */
+export function detectColours(text: string, max = 2): Array<{ raw: string; canonical: string | null }> {
   const padded = ` ${text.toLowerCase()} `;
-  for (const word of COLOUR_WORDS) {
-    const re = new RegExp(`(?:^|[\\s,;|/(])${word.toLowerCase()}(?:[\\s,;|/)]|$)`);
-    if (re.test(padded)) return { raw: word, canonical: COLOUR_MAP[word.toLowerCase()] ?? null };
+  const pattern = new RegExp(
+    // The trailing boundary is a lookahead, not a consumed group - two
+    // colour words separated by a single delimiter ("Red White", "Red,
+    // White") would otherwise have that shared character eaten by the
+    // first match, leaving nothing for the second match's own leading
+    // boundary to consume.
+    `(?:^|[\\s,;|/(])(${COLOUR_WORDS.map((w) => escapeRegex(w.toLowerCase())).join('|')})(?=[\\s,;|/)]|$)`,
+    'g',
+  );
+  const out: Array<{ raw: string; canonical: string | null }> = [];
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(padded)) !== null) {
+    const raw = m[1];
+    if (!seen.has(raw)) {
+      seen.add(raw);
+      out.push({ raw, canonical: COLOUR_MAP[raw] ?? null });
+      if (out.length >= max) break;
+    }
   }
-  return { raw: null, canonical: null };
+  return out;
 }
 
 export function canonicalColour(v: string | null | undefined): string | null {
   if (!v) return null;
   return COLOUR_MAP[v.toLowerCase()] ?? null;
+}
+
+const OUT_OF_STOCK_PATTERN = /\b(out of stock|sold out|no longer available|currently unavailable|unavailable|discontinued)\b/i;
+const IN_STOCK_PATTERN = /\b(in stock|add to (cart|basket|bag)|buy now|available now|available to buy)\b/i;
+
+/**
+ * Availability signal, checked in order: an explicit numeric quantity (0 is
+ * decisive either way), then an explicit stock/availability field or the
+ * page text for a stock phrase. "Sold out"/"out of stock" wins over a
+ * lingering "Add to cart" button when both are present, since disabled
+ * buttons commonly stay in the markup after an item sells out. Absence of
+ * any signal is left null rather than assumed - a listing with no visible
+ * stock indicator is not "in stock" by default.
+ */
+export function detectStockStatus(
+  text: string | null | undefined,
+  quantity?: number | null,
+): 'In Stock' | 'Out of Stock' | null {
+  if (typeof quantity === 'number' && Number.isFinite(quantity)) {
+    return quantity <= 0 ? 'Out of Stock' : 'In Stock';
+  }
+  if (!text) return null;
+  if (OUT_OF_STOCK_PATTERN.test(text)) return 'Out of Stock';
+  if (IN_STOCK_PATTERN.test(text)) return 'In Stock';
+  return null;
 }
 
 export function canonicalGender(text: string): string {
@@ -777,17 +844,28 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     manufacturer = detectManufacturer(haystack);
   }
 
-  // ---- Colour ----
+  // ---- Colour (main two) ----
   const explicitColour = caseInsensitiveGet(extracted, 'colour', 'color');
   let colour: string | null = null;
+  let colourSecondary: string | null = null;
   if (explicitColour) {
-    colour = canonicalColour(explicitColour);
-    if (!colour) reviewReasons.push(`colour "${explicitColour}" is not in Kickio's fixed palette`);
+    const parts = explicitColour
+      .split(/[,/]/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    const mapped = parts.map((p) => ({ raw: p, canonical: canonicalColour(p) }));
+    colour = mapped[0]?.canonical ?? null;
+    colourSecondary = mapped[1]?.canonical ?? null;
+    for (const p of mapped) {
+      if (!p.canonical) reviewReasons.push(`colour "${p.raw}" is not in Kickio's fixed palette`);
+    }
   } else {
-    const detected = detectColour(haystack);
-    if (detected.raw) {
-      colour = detected.canonical;
-      if (!colour) reviewReasons.push(`colour "${detected.raw}" is not in Kickio's fixed palette`);
+    const detected = detectColours(haystack, 2);
+    colour = detected[0]?.canonical ?? null;
+    colourSecondary = detected[1]?.canonical ?? null;
+    for (const d of detected) {
+      if (!d.canonical) reviewReasons.push(`colour "${d.raw}" is not in Kickio's fixed palette`);
     }
   }
 
@@ -819,6 +897,21 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   })();
   const currency = input.currency ?? caseInsensitiveGet(extracted, 'currency') ?? 'GBP';
   const quantity = input.quantity ?? 1;
+
+  // ---- Stock status ----
+  // Use the raw (un-defaulted) quantity here - `quantity` above already
+  // fell back to 1 when absent, which would otherwise make every listing
+  // with no real quantity signal look "in stock".
+  const rawQuantity =
+    input.quantity ??
+    (() => {
+      const raw = caseInsensitiveGet(extracted, 'quantity');
+      if (!raw) return null;
+      const n = Number(raw.replace(/[^0-9.]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    })();
+  const explicitStock = caseInsensitiveGet(extracted, 'stock', 'stockStatus', 'availability', 'inStock');
+  const stockStatus = detectStockStatus(explicitStock ?? haystack, rawQuantity);
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};
@@ -860,11 +953,13 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       size,
       manufacturer,
       colour,
+      colour_secondary: colourSecondary,
       boxed_edition: boxed,
       price,
       currency,
       quantity,
       images,
+      stock_status: stockStatus,
     },
     custom_attributes: customAttributes,
     confidence,
