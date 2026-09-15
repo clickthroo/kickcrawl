@@ -19,6 +19,7 @@ export interface Site {
 export interface UrlRecord {
   id: string;
   site_id: string;
+  site_name?: string;
   url: string;
   path: string;
   status: 'discovered' | 'queued' | 'fetched' | 'failed';

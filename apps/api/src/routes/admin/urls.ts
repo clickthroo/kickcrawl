@@ -4,10 +4,168 @@ import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { scrapePage } from '../../lib/scrapeCore.js';
 import { markUrlFetched } from '../../lib/urlStore.js';
 import { persistScrapeResult } from '../../lib/persistResult.js';
-import { buildKickioProfile } from '../../services/kickioProfile.js';
+import { buildKickioProfile, type KickioProfile } from '../../services/kickioProfile.js';
+
+/**
+ * A profile field is free text (team names, player names, colours, etc),
+ * so filters match case-insensitively as a substring rather than requiring
+ * an exact value - matching how the "Path contains" filter already works.
+ */
+function textMatches(value: string | null | undefined, filter: string | undefined): boolean {
+  if (!filter) return true;
+  if (!value) return false;
+  return value.toLowerCase().includes(filter.toLowerCase());
+}
+
+interface ItemFilters {
+  stock_status?: string;
+  team?: string;
+  season?: string;
+  shirt_type?: string;
+  player?: string;
+  number?: string;
+  colour?: string;
+  size?: string;
+  manufacturer?: string;
+  condition?: string;
+}
+
+function matchesProfileFilters(profile: KickioProfile | null, f: ItemFilters): boolean {
+  const hasProfileFilter =
+    f.stock_status || f.team || f.season || f.shirt_type || f.player || f.number || f.colour || f.size || f.manufacturer || f.condition;
+  if (!hasProfileFilter) return true;
+  if (!profile) return false;
+
+  if (f.stock_status && profile.listing.stock_status !== f.stock_status) return false;
+  if (!textMatches(profile.identity.team, f.team)) return false;
+  if (f.season) {
+    const seasons = [profile.identity.season, ...profile.identity.extra_seasons].filter(Boolean) as string[];
+    if (!seasons.some((s) => s.toLowerCase().includes(f.season!.toLowerCase()))) return false;
+  }
+  if (!textMatches(profile.identity.shirt_type, f.shirt_type)) return false;
+  if (!textMatches(profile.identity.player, f.player)) return false;
+  if (!textMatches(profile.identity.number, f.number)) return false;
+  if (
+    f.colour &&
+    !textMatches(profile.listing.colour, f.colour) &&
+    !textMatches(profile.listing.colour_secondary, f.colour)
+  ) {
+    return false;
+  }
+  if (!textMatches(profile.listing.size, f.size)) return false;
+  if (!textMatches(profile.listing.manufacturer, f.manufacturer)) return false;
+  if (!textMatches(profile.listing.condition, f.condition)) return false;
+  return true;
+}
 
 export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
+
+  // Cross-site item list: every scraped item across every site on one page,
+  // filterable by site plus the mapped Kickio profile fields. Profile
+  // fields aren't stored columns (they're derived on the fly), so the SQL
+  // side only filters what's actually indexed (site/status/path) and the
+  // profile-based filters are applied in JS afterwards, over a capped
+  // window of the most recently discovered rows.
+  app.get('/api/admin/items', async (req, reply) => {
+    const query = req.query as {
+      site_id?: string;
+      status?: string;
+      path?: string;
+      stock_status?: string;
+      team?: string;
+      season?: string;
+      shirt_type?: string;
+      player?: string;
+      number?: string;
+      colour?: string;
+      size?: string;
+      manufacturer?: string;
+      condition?: string;
+      page?: string;
+      pageSize?: string;
+    };
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(Math.max(1, Number(query.pageSize) || 25), 200);
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (query.site_id) {
+      params.push(query.site_id);
+      conditions.push(`u.site_id = $${params.length}`);
+    }
+    if (query.status) {
+      params.push(query.status);
+      conditions.push(`u.status = $${params.length}`);
+    }
+    if (query.path) {
+      params.push(`%${query.path}%`);
+      conditions.push(`u.path ILIKE $${params.length}`);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const SCAN_LIMIT = 2000;
+    const { rows } = await pool.query(
+      `SELECT u.*, s.name AS site_name,
+              m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
+              e.content AS preview_extracted, md.content AS preview_markdown
+       FROM urls u
+       JOIN sites s ON s.id = u.site_id
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'metadata'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) m ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'extracted'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) e ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'markdown'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) md ON true
+       ${where} ORDER BY u.discovered_at DESC LIMIT ${SCAN_LIMIT}`,
+      params,
+    );
+
+    const filters: ItemFilters = {
+      stock_status: query.stock_status,
+      team: query.team,
+      season: query.season,
+      shirt_type: query.shirt_type,
+      player: query.player,
+      number: query.number,
+      colour: query.colour,
+      size: query.size,
+      manufacturer: query.manufacturer,
+      condition: query.condition,
+    };
+
+    const items = rows
+      .map((u) => ({
+        ...u,
+        preview_profile:
+          u.preview_title || u.preview_extracted || u.preview_markdown
+            ? buildKickioProfile({
+                url: u.url,
+                title: u.preview_title,
+                description: u.preview_markdown?.slice(0, 4000) ?? null,
+                images: [u.preview_image],
+                extracted: u.preview_extracted,
+                scrapedAt: u.last_fetched_at,
+              })
+            : null,
+      }))
+      .filter((u) => matchesProfileFilters(u.preview_profile, filters));
+
+    const total = items.length;
+    const offset = (page - 1) * pageSize;
+    const pageItems = items.slice(offset, offset + pageSize);
+
+    return reply.send({ success: true, items: pageItems, total, page, pageSize });
+  });
 
   app.get('/api/admin/sites/:siteId/urls', async (req, reply) => {
     const { siteId } = req.params as { siteId: string };
