@@ -78,7 +78,7 @@ export interface KickioProfile {
     currency: string | null;
     quantity: number | null;
     images: string[];
-    stock_status: 'In Stock' | 'Out of Stock' | null;
+    stock_status: 'In Stock' | 'Out of Stock' | 'Unknown' | null;
   };
   custom_attributes: Record<string, string>;
   confidence: Record<string, 'certain' | 'inferred'>;

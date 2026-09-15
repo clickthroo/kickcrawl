@@ -190,8 +190,13 @@ describe('detectStockStatus', () => {
     expect(detectStockStatus('Add to Cart (Sold Out)')).toBe('Out of Stock');
   });
 
-  it('returns null rather than guessing when there is no signal at all', () => {
-    expect(detectStockStatus('A lovely vintage shirt')).toBeNull();
+  it('returns null when there is no text to check at all', () => {
+    expect(detectStockStatus(null)).toBeNull();
+    expect(detectStockStatus('')).toBeNull();
+  });
+
+  it('returns "Unknown" rather than guessing when there is text but no signal in it', () => {
+    expect(detectStockStatus('A lovely vintage shirt')).toBe('Unknown');
   });
 
   it('recognises a bare "SOLD" or "Reserved" marketplace marker', () => {
@@ -337,7 +342,13 @@ describe('buildKickioProfile', () => {
       title: 'Arsenal 2020-21 Home Shirt',
       extracted: { team: 'Arsenal' },
     });
-    expect(unknown.listing.stock_status).toBeNull();
+    expect(unknown.listing.stock_status).toBe('Unknown');
+
+    const noContent = buildKickioProfile({
+      url: 'https://example.com/item/stock-5',
+      extracted: { team: 'Arsenal' },
+    });
+    expect(noContent.listing.stock_status).toBeNull();
   });
 
   it('never invents a team - flags for review instead of guessing when nothing is recoverable', () => {
