@@ -33,10 +33,25 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
-      <form onSubmit={onSubmit} className="w-80 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="mb-1 text-lg font-semibold text-brand-700">Kickcrawl Admin</h1>
-        <p className="mb-4 text-sm text-slate-500">Sign in to manage sites and jobs.</p>
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+      <form
+        onSubmit={onSubmit}
+        className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8"
+      >
+        <div className="mb-5 flex items-center gap-2.5">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+              <circle cx="12" cy="6" r="2" />
+              <circle cx="6" cy="16" r="2" />
+              <circle cx="18" cy="16" r="2" />
+              <path d="M10.5 7.5 7.5 14.5M13.5 7.5l3 7M8 16h8" />
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-base font-semibold text-slate-800">Kickcrawl Admin</h1>
+            <p className="text-xs text-slate-500">Sign in to manage sites and jobs.</p>
+          </div>
+        </div>
         {error && (
           <div className="mb-3">
             <ErrorBanner message={error} />

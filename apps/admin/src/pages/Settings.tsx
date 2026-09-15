@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { Settings as SettingsType } from '../lib/types';
-import { Button, Card, ErrorBanner, Input, Spinner } from '../components/ui';
+import { Button, Card, ErrorBanner, Input, PageHeader, Spinner } from '../components/ui';
 
 export default function Settings() {
   const [form, setForm] = useState<SettingsType | null>(null);
@@ -35,7 +35,7 @@ export default function Settings() {
 
   return (
     <div className="max-w-xl space-y-4">
-      <h1 className="text-xl font-semibold text-slate-800">Settings</h1>
+      <PageHeader title="Settings" />
 
       {error && <ErrorBanner message={error} />}
       {saved && (
@@ -93,7 +93,7 @@ export default function Settings() {
           />
         </Card>
 
-        <Button type="submit" disabled={saving}>
+        <Button type="submit" disabled={saving} className="w-full sm:w-auto">
           {saving ? 'Saving…' : 'Save settings'}
         </Button>
       </form>

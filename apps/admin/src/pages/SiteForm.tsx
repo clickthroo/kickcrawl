@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Site } from '../lib/types';
-import { Button, Card, ErrorBanner, Input } from '../components/ui';
+import { Button, Card, ErrorBanner, Input, PageHeader } from '../components/ui';
 
 const EMPTY: Omit<Site, 'id' | 'created_at' | 'updated_at'> = {
   name: '',
@@ -75,7 +75,7 @@ export default function SiteForm() {
 
   return (
     <div className="max-w-2xl space-y-4">
-      <h1 className="text-xl font-semibold text-slate-800">{isEdit ? 'Edit site' : 'Add site'}</h1>
+      <PageHeader title={isEdit ? 'Edit site' : 'Add site'} />
 
       {error && <ErrorBanner message={error} />}
 
@@ -95,7 +95,7 @@ export default function SiteForm() {
             onChange={(e) => setForm({ ...form, base_url: e.target.value })}
             required
           />
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Input
               label="Rate limit (requests/sec)"
               type="number"
@@ -112,10 +112,11 @@ export default function SiteForm() {
               onChange={(e) => setForm({ ...form, max_depth: Number(e.target.value) })}
             />
           </div>
-          <div className="flex gap-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:gap-6">
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
+                className="h-4 w-4"
                 checked={form.use_browser_default}
                 onChange={(e) => setForm({ ...form, use_browser_default: e.target.checked })}
               />
@@ -124,6 +125,7 @@ export default function SiteForm() {
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
+                className="h-4 w-4"
                 checked={form.use_proxy}
                 onChange={(e) => setForm({ ...form, use_proxy: e.target.checked })}
               />
@@ -132,6 +134,7 @@ export default function SiteForm() {
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
+                className="h-4 w-4"
                 checked={form.is_active}
                 onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
               />
@@ -153,7 +156,7 @@ export default function SiteForm() {
               placeholder={'{\n  "price": ".price",\n  "title": "h1"\n}'}
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <span className="mb-1 block text-sm font-medium text-slate-700">
                 Allowed paths (one per line)
@@ -181,11 +184,11 @@ export default function SiteForm() {
           </div>
         </Card>
 
-        <div className="flex gap-2">
-          <Button type="submit" disabled={submitting}>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button type="submit" disabled={submitting} className="w-full sm:w-auto">
             {submitting ? 'Saving…' : 'Save site'}
           </Button>
-          <Button variant="secondary" onClick={() => navigate('/sites')}>
+          <Button variant="secondary" onClick={() => navigate('/sites')} className="w-full sm:w-auto">
             Cancel
           </Button>
         </div>

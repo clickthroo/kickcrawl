@@ -1,9 +1,9 @@
-import { useState, type InputHTMLAttributes, type ReactNode } from 'react';
+import { useState, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import type { KickioProfile } from '../lib/types';
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>
+    <div className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}>
       {children}
     </div>
   );
@@ -25,19 +25,64 @@ export function Button({
   className?: string;
 }) {
   const styles = {
-    primary: 'bg-brand-600 text-white hover:bg-brand-700',
-    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50',
-    danger: 'bg-white text-red-600 border border-red-200 hover:bg-red-50',
+    primary: 'bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-700',
+    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 active:bg-slate-100',
+    danger: 'bg-white text-red-600 border border-red-200 hover:bg-red-50 active:bg-red-100',
   };
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${className}`}
+      className={`inline-flex min-h-[2.5rem] items-center justify-center whitespace-nowrap rounded-md px-3.5 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${className}`}
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Consistent responsive page header: title (+ optional subtitle) on the
+ * left, action buttons on the right - stacked full-width on mobile,
+ * inline on wider screens rather than squeezing/wrapping awkwardly.
+ */
+export function PageHeader({
+  title,
+  subtitle,
+  actions,
+}: {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <h1 className="truncate text-xl font-semibold text-slate-800">{title}</h1>
+        {subtitle && <div className="mt-0.5 text-sm text-slate-500">{subtitle}</div>}
+      </div>
+      {actions && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+export function Select({
+  label,
+  className = '',
+  ...props
+}: { label?: string; className?: string } & SelectHTMLAttributes<HTMLSelectElement>) {
+  const select = (
+    <select
+      {...props}
+      className={`min-h-[2.5rem] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 ${className}`}
+    />
+  );
+  if (!label) return select;
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
+      {select}
+    </label>
   );
 }
 
@@ -163,7 +208,15 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
       <div className="mt-2 space-y-2">
         <div className="flex flex-wrap gap-1.5">
           <ProfileField label="Team" value={identity.team} confident={confidence.team !== 'inferred'} />
-          <ProfileField label="Season" value={identity.season} confident={confidence.season !== 'inferred'} />
+          <ProfileField
+            label="Season"
+            value={
+              identity.extra_seasons.length > 0
+                ? `${identity.season} → ${identity.extra_seasons[identity.extra_seasons.length - 1]}`
+                : identity.season
+            }
+            confident={confidence.season !== 'inferred'}
+          />
           <ProfileField label="Type" value={identity.shirt_type} confident={confidence.shirt_type !== 'inferred'} />
           <ProfileField label="Gender" value={identity.gender} />
           <ProfileField label="Player" value={identity.player} />
@@ -216,7 +269,7 @@ export function Input({
       <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
       <input
         {...props}
-        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        className="min-h-[2.5rem] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
       />
     </label>
   );

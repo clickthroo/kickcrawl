@@ -240,14 +240,24 @@ function shortSeasonsIn(text: string): string[] {
  */
 export function extractSeason(text: string): SeasonResult {
   const rangeRe = /(\d{4})[-/](\d{2,4})/g;
-  const rangeNormalized = new Set<string>();
+  // Keyed by the normalized base season, so two mentions of the exact same
+  // range (or the same range written two ways) don't count as ambiguous -
+  // but critically this keeps the FULL result (extraSeasons included) from
+  // each match, rather than re-normalizing just the season string alone
+  // afterwards, which would silently drop a genuine span like "1998-00"
+  // (season 1998-99 + extra 1999-00) back down to a single season.
+  const rangeMatches = new Map<string, SeasonResult>();
   let m: RegExpExecArray | null;
   while ((m = rangeRe.exec(text)) !== null) {
-    const norm = normalizeSeason(`${m[1]}-${m[2]}`).season;
-    if (norm) rangeNormalized.add(norm);
+    const r = normalizeSeason(`${m[1]}-${m[2]}`);
+    if (!r.season) continue;
+    const existing = rangeMatches.get(r.season);
+    if (!existing || r.extraSeasons.length > existing.extraSeasons.length) {
+      rangeMatches.set(r.season, r);
+    }
   }
-  if (rangeNormalized.size > 1) return { season: '', extraSeasons: [] };
-  if (rangeNormalized.size === 1) return normalizeSeason([...rangeNormalized][0]);
+  if (rangeMatches.size > 1) return { season: '', extraSeasons: [] };
+  if (rangeMatches.size === 1) return [...rangeMatches.values()][0];
 
   const shorts = shortSeasonsIn(text);
   if (shorts.length === 1) return normalizeSeason(shorts[0]);

@@ -2,7 +2,17 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Job, JobPageItem } from '../lib/types';
-import { Badge, Button, Card, ErrorBanner, KickioProfilePanel, ProgressBar, Spinner, Thumbnail } from '../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorBanner,
+  KickioProfilePanel,
+  PageHeader,
+  ProgressBar,
+  Spinner,
+  Thumbnail,
+} from '../components/ui';
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
@@ -48,22 +58,26 @@ export default function JobDetail() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-800">
+      <PageHeader
+        title={
+          <>
             {job.site_name ?? 'Untitled'} — <span className="capitalize">{job.type}</span> job
-          </h1>
-          <div className="mt-1 flex items-center gap-2">
+          </>
+        }
+        subtitle={
+          <span className="flex items-center gap-2">
             <Badge status={job.status} />
             <span className="text-xs text-slate-400">{job.id}</span>
-          </div>
-        </div>
-        {job.type === 'crawl' && (
-          <Button onClick={rerun} disabled={rerunning}>
-            {rerunning ? 'Queuing…' : 'Re-run'}
-          </Button>
-        )}
-      </div>
+          </span>
+        }
+        actions={
+          job.type === 'crawl' && (
+            <Button onClick={rerun} disabled={rerunning} className="w-full sm:w-auto">
+              {rerunning ? 'Queuing…' : 'Re-run'}
+            </Button>
+          )
+        }
+      />
 
       {error && <ErrorBanner message={error} />}
 

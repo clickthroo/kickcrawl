@@ -59,6 +59,21 @@ describe('extractSeason', () => {
     expect(r.extraSeasons).toEqual(['1992-93', '1993-94']);
   });
 
+  it('keeps the extra season from a single two-year-span range like "1998-00"', () => {
+    // Regression: a lone "YYYY-YY" range spanning more than one season was
+    // being re-normalized from its own collapsed season string, silently
+    // dropping the extra season it had already correctly computed.
+    const r = extractSeason('1998-00 Nigeria Home Shirt L');
+    expect(r.season).toBe('1998-99');
+    expect(r.extraSeasons).toEqual(['1999-00']);
+  });
+
+  it('does the same via extractSeasonSpan (the function actually used for titles)', () => {
+    const r = extractSeasonSpan('1998-00 Nigeria Home Shirt L');
+    expect(r.season).toBe('1998-99');
+    expect(r.extraSeasons).toEqual(['1999-00']);
+  });
+
   it('leaves multiple distinct season ranges blank', () => {
     expect(extractSeason('Chelsea 2010-11 and 2015-16 Home Shirt').season).toBe('');
   });
@@ -262,6 +277,16 @@ describe('buildKickioProfile', () => {
     expect(profile.listing.colour).toBe('Blue');
     expect(profile.custom_attributes['jacket-style']).toBe('Track Jacket');
     expect(profile.confidence['custom_attributes.jacket-style']).toBe('certain');
+  });
+
+  it('maps a shirt spanning two seasons (real example: "1998-00 Nigeria Home Shirt L")', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/1998-00-nigeria-home-shirt-l',
+      title: '1998-00 Nigeria Home Shirt L',
+      extracted: { team: 'Nigeria' },
+    });
+    expect(profile.identity.season).toBe('1998-99');
+    expect(profile.identity.extra_seasons).toEqual(['1999-00']);
   });
 
   it('detects the main two colours from free text when no explicit colour field is given', () => {
