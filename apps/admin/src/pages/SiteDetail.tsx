@@ -167,9 +167,15 @@ export default function SiteDetail() {
                     <div className="truncate font-medium text-slate-800" title={u.preview_title ?? undefined}>
                       {u.preview_title ?? u.path}
                     </div>
-                    <div className="truncate text-xs text-slate-400" title={u.url}>
-                      {u.path}
-                    </div>
+                    <a
+                      href={u.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block truncate text-xs text-slate-400 hover:text-brand-600 hover:underline"
+                      title={u.url}
+                    >
+                      {u.url}
+                    </a>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       <Badge status={u.status} />
                       {u.preview_profile?.needs_review && (
