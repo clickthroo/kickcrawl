@@ -20,14 +20,28 @@ export function extractLinks($: CheerioAPI, pageUrl: string): string[] {
   return [...links];
 }
 
+function stripWww(hostname: string): string {
+  return hostname.startsWith('www.') ? hostname.slice(4) : hostname;
+}
+
+/**
+ * A bare domain and its "www." counterpart are treated as the same site
+ * unconditionally - sites very commonly canonicalize sitemap/link URLs to
+ * whichever of the two isn't what an admin typed as the base URL, and
+ * without this a real sitemap's worth of URLs can silently filter down to
+ * zero. includeSubdomains only controls genuinely distinct subdomains
+ * (shop., blog., etc.) beyond that www/bare equivalence.
+ */
 export function isSameSite(url: string, baseOrigin: string, includeSubdomains: boolean): boolean {
   try {
     const u = new URL(url);
     const base = new URL(baseOrigin);
+    const uHost = stripWww(u.hostname);
+    const baseHost = stripWww(base.hostname);
     if (includeSubdomains) {
-      return u.hostname === base.hostname || u.hostname.endsWith(`.${base.hostname}`);
+      return uHost === baseHost || uHost.endsWith(`.${baseHost}`);
     }
-    return u.hostname === base.hostname;
+    return uHost === baseHost;
   } catch {
     return false;
   }

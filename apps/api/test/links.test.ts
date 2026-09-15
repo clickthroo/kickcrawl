@@ -31,6 +31,12 @@ describe('isSameSite', () => {
     expect(isSameSite('https://shop.example.com/a', 'https://example.com', false)).toBe(false);
     expect(isSameSite('https://shop.example.com/a', 'https://example.com', true)).toBe(true);
   });
+
+  it('treats a bare domain and its www. counterpart as the same site regardless of includeSubdomains', () => {
+    expect(isSameSite('https://www.example.com/a', 'https://example.com', false)).toBe(true);
+    expect(isSameSite('https://example.com/a', 'https://www.example.com', false)).toBe(true);
+    expect(isSameSite('https://www.example.com/a', 'https://example.com', true)).toBe(true);
+  });
 });
 
 describe('matchesPathPattern', () => {
