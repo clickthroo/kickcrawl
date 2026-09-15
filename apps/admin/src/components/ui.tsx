@@ -237,7 +237,11 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
           {listing.stock_status && (
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                listing.stock_status === 'In Stock' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                listing.stock_status === 'In Stock'
+                  ? 'bg-green-100 text-green-700'
+                  : listing.stock_status === 'Out of Stock'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-slate-100 text-slate-600'
               }`}
             >
               {listing.stock_status}

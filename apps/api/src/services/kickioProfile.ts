@@ -44,10 +44,13 @@ export interface KickioListing {
    * Availability signal detected from the listing text ("Out of stock",
    * "sold out", a quantity of 0, etc). Not part of the documented Kickio
    * field set in the mapping guide (which covers product identity, not
-   * listing lifecycle) - this is Kickcrawl's own read of the page, kept
-   * null rather than guessed when no signal is found either way.
+   * listing lifecycle) - this is Kickcrawl's own read of the page.
+   * 'Unknown' means there was page text to check but neither an in-stock
+   * nor an out-of-stock signal was found in it - kept distinct from `null`
+   * (nothing was scraped for this item at all) so it stays filterable
+   * instead of silently vanishing from both filter options.
    */
-  stock_status: 'In Stock' | 'Out of Stock' | null;
+  stock_status: 'In Stock' | 'Out of Stock' | 'Unknown' | null;
 }
 
 export interface KickioProfile {
@@ -700,14 +703,14 @@ const LAST_ONE_PATTERN = /\b(last one|last item|final one|only one left)\b/i;
  *  6. A bare marketplace marker ("SOLD", "Reserved").
  * "Sold out"/"out of stock" wins over a lingering "Add to cart" button when
  * both are present, since disabled buttons commonly stay in the markup
- * after an item sells out. Absence of any signal is left null rather than
- * assumed - a listing with no visible stock indicator is not "in stock" by
- * default.
+ * after an item sells out. Never guessed from absence alone: `null` means
+ * there was no text to check at all, 'Unknown' means there was text but
+ * none of the above signals matched it.
  */
 export function detectStockStatus(
   text: string | null | undefined,
   quantity?: number | null,
-): 'In Stock' | 'Out of Stock' | null {
+): 'In Stock' | 'Out of Stock' | 'Unknown' | null {
   if (typeof quantity === 'number' && Number.isFinite(quantity)) {
     return quantity <= 0 ? 'Out of Stock' : 'In Stock';
   }
@@ -725,7 +728,7 @@ export function detectStockStatus(
 
   if (OUT_OF_STOCK_BARE_WORDS.test(text)) return 'Out of Stock';
 
-  return null;
+  return 'Unknown';
 }
 
 export function canonicalGender(text: string): string {

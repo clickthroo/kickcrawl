@@ -150,6 +150,7 @@ export default function Items() {
               <option value="">Any</option>
               <option value="In Stock">In Stock</option>
               <option value="Out of Stock">Out of Stock</option>
+              <option value="Unknown">Unknown</option>
             </Select>
           </div>
           <div className="sm:w-64">
