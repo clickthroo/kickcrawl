@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { pool } from '../../db.js';
 import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { runMap } from '../../lib/mapCore.js';
+import { crawlQueue } from '../../queue.js';
+import { createJob } from '../../lib/jobRecords.js';
 
 const siteSchema = z.object({
   name: z.string().min(1),
@@ -123,5 +125,33 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
         .code(502)
         .send({ success: false, error: err instanceof Error ? err.message : 'Map run failed' });
     }
+  });
+
+  // Unlike "map" (which only discovers URLs), a crawl fetches each page's
+  // content as it discovers it - queued as a background job so items show
+  // up with titles/profiles already populated instead of needing a
+  // one-by-one re-scrape afterwards.
+  app.post('/api/admin/sites/:id/crawl', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query('SELECT * FROM sites WHERE id = $1', [id]);
+    const site = rows[0];
+    if (!site) return reply.code(404).send({ success: false, error: 'Site not found' });
+
+    const payload = {
+      url: site.base_url,
+      limit: 2000,
+      maxDepth: site.max_depth,
+      includePaths: site.allowed_paths ?? [],
+      excludePaths: site.denied_paths ?? [],
+      scrapeOptions: {
+        formats: ['markdown', 'links'] as ('markdown' | 'links')[],
+        onlyMainContent: true,
+        useBrowser: site.use_browser_default,
+      },
+    };
+    const jobId = await createJob('crawl', site.id, payload, 'queued');
+    await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload });
+
+    return reply.send({ success: true, jobId });
   });
 }

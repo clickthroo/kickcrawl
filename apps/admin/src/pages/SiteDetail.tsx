@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Site, UrlRecord } from '../lib/types';
 import {
@@ -17,6 +17,7 @@ import {
 
 export default function SiteDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [site, setSite] = useState<Site | null>(null);
   const [urls, setUrls] = useState<UrlRecord[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -24,6 +25,7 @@ export default function SiteDetail() {
   const [pathFilter, setPathFilter] = useState('');
   const [page, setPage] = useState(1);
   const [mapping, setMapping] = useState(false);
+  const [crawling, setCrawling] = useState(false);
   const [rescraping, setRescraping] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +72,23 @@ export default function SiteDetail() {
     }
   }
 
+  async function runCrawl() {
+    if (!site) return;
+    setCrawling(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await api.post<{ success: boolean; jobId: string }>(
+        `/admin/sites/${site.id}/crawl`,
+      );
+      navigate(`/jobs/${res.jobId}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Crawl failed to start');
+    } finally {
+      setCrawling(false);
+    }
+  }
+
   async function rescrape(urlId: string) {
     setRescraping(urlId);
     setError(null);
@@ -99,8 +118,22 @@ export default function SiteDetail() {
                 Edit site
               </Button>
             </Link>
-            <Button onClick={runMap} disabled={mapping} className="flex-1 sm:flex-initial">
+            <Button
+              variant="secondary"
+              onClick={runMap}
+              disabled={mapping}
+              className="flex-1 sm:flex-initial"
+              title="Discover URLs on this site without fetching their content"
+            >
               {mapping ? 'Mapping…' : 'Run map'}
+            </Button>
+            <Button
+              onClick={runCrawl}
+              disabled={crawling}
+              className="flex-1 sm:flex-initial"
+              title="Discover URLs and fetch each page's content as it's found"
+            >
+              {crawling ? 'Starting…' : 'Run crawl'}
             </Button>
           </>
         }
