@@ -208,7 +208,15 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
       <div className="mt-2 space-y-2">
         <div className="flex flex-wrap gap-1.5">
           <ProfileField label="Team" value={identity.team} confident={confidence.team !== 'inferred'} />
-          <ProfileField label="Season" value={identity.season} confident={confidence.season !== 'inferred'} />
+          <ProfileField
+            label="Season"
+            value={
+              identity.extra_seasons.length > 0
+                ? `${identity.season} → ${identity.extra_seasons[identity.extra_seasons.length - 1]}`
+                : identity.season
+            }
+            confident={confidence.season !== 'inferred'}
+          />
           <ProfileField label="Type" value={identity.shirt_type} confident={confidence.shirt_type !== 'inferred'} />
           <ProfileField label="Gender" value={identity.gender} />
           <ProfileField label="Player" value={identity.player} />
