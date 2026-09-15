@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Job } from '../lib/types';
 import { Badge, Card, PageHeader, ProgressBar, Select, Spinner } from '../components/ui';
 
 export default function Jobs() {
+  const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState(() => searchParams.get('type') ?? '');
 
   useEffect(() => {
     const params = new URLSearchParams();

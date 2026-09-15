@@ -19,6 +19,30 @@ const siteSchema = z.object({
   is_active: z.boolean().optional().default(true),
 });
 
+interface SiteRow {
+  id: string;
+  base_url: string;
+  max_depth: number;
+  allowed_paths: string[] | null;
+  denied_paths: string[] | null;
+  use_browser_default: boolean;
+}
+
+function crawlPayloadForSite(site: SiteRow) {
+  return {
+    url: site.base_url,
+    limit: 2000,
+    maxDepth: site.max_depth,
+    includePaths: site.allowed_paths ?? [],
+    excludePaths: site.denied_paths ?? [],
+    scrapeOptions: {
+      formats: ['markdown', 'links'] as ('markdown' | 'links')[],
+      onlyMainContent: true,
+      useBrowser: site.use_browser_default,
+    },
+  };
+}
+
 export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
 
@@ -137,21 +161,30 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     const site = rows[0];
     if (!site) return reply.code(404).send({ success: false, error: 'Site not found' });
 
-    const payload = {
-      url: site.base_url,
-      limit: 2000,
-      maxDepth: site.max_depth,
-      includePaths: site.allowed_paths ?? [],
-      excludePaths: site.denied_paths ?? [],
-      scrapeOptions: {
-        formats: ['markdown', 'links'] as ('markdown' | 'links')[],
-        onlyMainContent: true,
-        useBrowser: site.use_browser_default,
-      },
-    };
+    const payload = crawlPayloadForSite(site);
     const jobId = await createJob('crawl', site.id, payload, 'queued');
     await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload });
 
     return reply.send({ success: true, jobId });
+  });
+
+  // Queues a crawl for every active site in one call. BullMQ's crawl worker
+  // runs with concurrency 3 (see workers/crawlWorker.ts), so queuing many
+  // sites at once is safe - they queue up and process a few at a time,
+  // each still respecting its own per-site rate_limit_rps. Inactive sites
+  // are skipped, matching the scoping already used for scraping elsewhere
+  // (lib/siteResolver.ts).
+  app.post('/api/admin/sites/crawl-all', async (_req, reply) => {
+    const { rows } = await pool.query('SELECT * FROM sites WHERE is_active = true');
+
+    const jobIds: string[] = [];
+    for (const site of rows) {
+      const payload = crawlPayloadForSite(site);
+      const jobId = await createJob('crawl', site.id, payload, 'queued');
+      await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload });
+      jobIds.push(jobId);
+    }
+
+    return reply.send({ success: true, jobIds, total: jobIds.length });
   });
 }

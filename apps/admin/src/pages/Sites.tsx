@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api } from '../lib/api';
+import { Link, useNavigate } from 'react-router-dom';
+import { api, ApiError } from '../lib/api';
 import type { Site } from '../lib/types';
-import { Button, Card, PageHeader, Spinner } from '../components/ui';
+import { Button, Card, ErrorBanner, PageHeader, Spinner } from '../components/ui';
 
 function StatusBadge({ active }: { active: boolean }) {
   return (
@@ -17,13 +17,29 @@ function StatusBadge({ active }: { active: boolean }) {
 }
 
 export default function Sites() {
+  const navigate = useNavigate();
   const [sites, setSites] = useState<Site[] | null>(null);
+  const [crawlingAll, setCrawlingAll] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function reload() {
     api.get<{ success: boolean; sites: Site[] }>('/admin/sites').then((res) => setSites(res.sites));
   }
 
   useEffect(reload, []);
+
+  async function crawlAll() {
+    setCrawlingAll(true);
+    setError(null);
+    try {
+      await api.post<{ success: boolean; jobIds: string[]; total: number }>('/admin/sites/crawl-all');
+      navigate('/jobs?type=crawl');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to start crawls');
+    } finally {
+      setCrawlingAll(false);
+    }
+  }
 
   if (!sites) return <Spinner />;
 
@@ -32,11 +48,24 @@ export default function Sites() {
       <PageHeader
         title="Sites"
         actions={
-          <Link to="/sites/new" className="w-full sm:w-auto">
-            <Button className="w-full sm:w-auto">Add site</Button>
-          </Link>
+          <>
+            <Button
+              variant="secondary"
+              onClick={crawlAll}
+              disabled={crawlingAll || sites.every((s) => !s.is_active)}
+              className="flex-1 sm:flex-initial"
+              title="Discover and fetch content for every active site"
+            >
+              {crawlingAll ? 'Starting…' : 'Crawl all sites'}
+            </Button>
+            <Link to="/sites/new" className="flex-1 sm:flex-initial">
+              <Button className="w-full">Add site</Button>
+            </Link>
+          </>
         }
       />
+
+      {error && <ErrorBanner message={error} />}
 
       {sites.length === 0 && (
         <Card>
