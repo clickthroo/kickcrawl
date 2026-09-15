@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Site, UrlRecord } from '../lib/types';
-import { Badge, Button, Card, ErrorBanner, Input, Spinner, Thumbnail } from '../components/ui';
+import { Badge, Button, Card, ErrorBanner, Input, KickioProfilePanel, Spinner, Thumbnail } from '../components/ui';
 
 export default function SiteDetail() {
   const { id } = useParams<{ id: string }>();
@@ -161,47 +161,58 @@ export default function SiteDetail() {
               </tr>
             )}
             {urls?.map((u) => (
-              <tr key={u.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                <td className="max-w-md px-4 py-3 text-slate-700">
-                  <div className="flex items-center gap-3">
-                    <Thumbnail src={u.preview_image} alt={u.preview_title ?? u.path} size={36} />
-                    <div className="min-w-0">
-                      <div className="truncate font-medium" title={u.preview_title ?? undefined}>
-                        {u.preview_title ?? u.path}
-                      </div>
-                      <div className="truncate text-xs text-slate-400" title={u.url}>
-                        {u.path}
+              <Fragment key={u.id}>
+                <tr
+                  className={`border-slate-100 hover:bg-slate-50 ${u.preview_profile ? '' : 'border-b last:border-0'}`}
+                >
+                  <td className="max-w-md px-4 py-3 text-slate-700">
+                    <div className="flex items-center gap-3">
+                      <Thumbnail src={u.preview_image} alt={u.preview_title ?? u.path} size={36} />
+                      <div className="min-w-0">
+                        <div className="truncate font-medium" title={u.preview_title ?? undefined}>
+                          {u.preview_title ?? u.path}
+                        </div>
+                        <div className="truncate text-xs text-slate-400" title={u.url}>
+                          {u.path}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Badge status={u.status} />
-                    {u.preview_profile?.needs_review && (
-                      <span
-                        className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700"
-                        title={u.preview_profile.review_reason ?? undefined}
-                      >
-                        Needs review
-                      </span>
-                    )}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-slate-500">
-                  {u.last_fetched_at ? new Date(u.last_fetched_at).toLocaleString() : '—'}
-                </td>
-                <td className="px-4 py-3 text-slate-500">{u.last_status_code ?? '—'}</td>
-                <td className="px-4 py-3 text-right">
-                  <Button
-                    variant="secondary"
-                    onClick={() => rescrape(u.id)}
-                    disabled={rescraping === u.id}
-                  >
-                    {rescraping === u.id ? 'Scraping…' : 'Re-scrape'}
-                  </Button>
-                </td>
-              </tr>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge status={u.status} />
+                      {u.preview_profile?.needs_review && (
+                        <span
+                          className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700"
+                          title={u.preview_profile.review_reason ?? undefined}
+                        >
+                          Needs review
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-500">
+                    {u.last_fetched_at ? new Date(u.last_fetched_at).toLocaleString() : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-slate-500">{u.last_status_code ?? '—'}</td>
+                  <td className="px-4 py-3 text-right">
+                    <Button
+                      variant="secondary"
+                      onClick={() => rescrape(u.id)}
+                      disabled={rescraping === u.id}
+                    >
+                      {rescraping === u.id ? 'Scraping…' : 'Re-scrape'}
+                    </Button>
+                  </td>
+                </tr>
+                {u.preview_profile && (
+                  <tr className="border-b border-slate-100 last:border-0">
+                    <td colSpan={5} className="bg-slate-50/50 px-4 pb-3">
+                      <KickioProfilePanel profile={u.preview_profile} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>

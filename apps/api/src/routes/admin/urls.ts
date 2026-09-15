@@ -52,13 +52,18 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
 
     const urlsWithProfile = rows.map((u) => ({
       ...u,
-      preview_profile: buildKickioProfile({
-        url: u.url,
-        title: u.preview_title,
-        images: [u.preview_image],
-        extracted: u.preview_extracted,
-        scrapedAt: u.last_fetched_at,
-      }),
+      // Only map a profile once there's something to map - an undiscovered/
+      // not-yet-fetched URL has no title, extracted fields or image at all.
+      preview_profile:
+        u.preview_title || u.preview_extracted
+          ? buildKickioProfile({
+              url: u.url,
+              title: u.preview_title,
+              images: [u.preview_image],
+              extracted: u.preview_extracted,
+              scrapedAt: u.last_fetched_at,
+            })
+          : null,
     }));
 
     return reply.send({ success: true, urls: urlsWithProfile, total: Number(countRows[0].count), page, pageSize });
