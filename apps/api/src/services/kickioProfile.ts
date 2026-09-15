@@ -359,8 +359,18 @@ export function detectShirtType(text: string): ShirtTypeResult {
 // =========================================================================
 
 export function guessTeamFromTitle(title: string): string {
-  let c = title
-    .replace(/\s+[-–—]\s+.*$/, '')
+  // Strip a trailing " - Site Name" or " | Site Name" suffix - common on
+  // scraped page <title>s - by cutting at whichever delimiter appears
+  // first, not just the dash form. Cutting at the wrong one (e.g. applying
+  // the dash rule when a pipe comes first) would leave the other subtitle's
+  // junk in place.
+  const dashAt = title.search(/\s[-–—]\s/);
+  const pipeAt = title.search(/\s\|\s/);
+  const candidates = [dashAt, pipeAt].filter((i) => i >= 0);
+  const cutAt = candidates.length ? Math.min(...candidates) : -1;
+  const withoutSubtitle = cutAt >= 0 ? title.slice(0, cutAt) : title;
+
+  let c = withoutSubtitle
     .replace(/\*+/g, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
@@ -373,7 +383,7 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}(?![\d/-])/g, '')
     .replace(/\b\d{4}\b/g, '')
     .replace(/\b(Home|Away|Third|Fourth|Goalkeeper|GK|Training|Pre[- ]?Match)\b/gi, '')
-    .replace(/\b(Shirt|Jersey|Kit|Top|Football|L\/S|S\/S|Long Sleeve|Short Sleeve)\b/gi, '')
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
     .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')

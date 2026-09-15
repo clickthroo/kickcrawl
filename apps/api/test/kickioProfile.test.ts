@@ -75,6 +75,18 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('Man Utd 96/97 Away Shirt')).toBe('Man Utd');
   });
 
+  it('strips a pipe-delimited site-name suffix rather than leaking it into the team', () => {
+    expect(guessTeamFromTitle('1989-90 Wrexham Away Shirt M | Vintage Football Shirts')).toBe('Wrexham');
+  });
+
+  it('strips a dash-delimited site-name suffix even when a pipe suffix is absent', () => {
+    expect(guessTeamFromTitle('1989-90 Wrexham Away Shirt M - Vintage Football Shirts')).toBe('Wrexham');
+  });
+
+  it('cuts at whichever of a dash or pipe subtitle delimiter comes first', () => {
+    expect(guessTeamFromTitle('Wrexham Away Shirt | Site - Extra Junk')).toBe('Wrexham');
+  });
+
   it('strips tournament words and a trailing leftover size letter', () => {
     expect(guessTeamFromTitle('1998 France World Cup Shirt Size M')).toBe('France');
   });
