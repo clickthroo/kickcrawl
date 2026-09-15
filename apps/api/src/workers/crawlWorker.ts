@@ -2,9 +2,10 @@ import { Worker, type Job } from 'bullmq';
 import * as cheerio from 'cheerio';
 import { redisConnection, type CrawlJobData } from '../queue.js';
 import { pool } from '../db.js';
-import { scrapePage } from '../lib/scrapeCore.js';
+import { scrapePage, type ScrapeCoreResult } from '../lib/scrapeCore.js';
 import { resolveSiteForUrl } from '../lib/siteResolver.js';
 import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlStore.js';
+import { persistScrapeResult } from '../lib/persistResult.js';
 import { extractLinks, isPathAllowed, isSameSite } from '../services/links.js';
 import { config } from '../config.js';
 
@@ -19,17 +20,10 @@ async function recordPageResult(
   siteId: string,
   jobId: string,
   url: string,
-  statusCode: number,
-  error: string | undefined,
-  markdown: string | undefined,
+  result: ScrapeCoreResult,
 ): Promise<void> {
-  const urlId = await markUrlFetched(siteId, url, statusCode, error);
-  if (markdown !== undefined) {
-    await pool.query(
-      `INSERT INTO scrape_results (url_id, job_id, format, content, status_code) VALUES ($1, $2, 'markdown', $3, $4)`,
-      [urlId, jobId, JSON.stringify(markdown), statusCode],
-    );
-  }
+  const urlId = await markUrlFetched(siteId, url, result.metadata.statusCode, result.error);
+  await persistScrapeResult(urlId, jobId, result);
 }
 
 async function fireWebhook(jobId: string, status: string): Promise<void> {
@@ -77,9 +71,9 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
 
     if (!result.success) {
       errors.push(`${next.url}: ${result.error}`);
-      await recordPageResult(siteId, jobId, next.url, result.metadata.statusCode, result.error, undefined);
+      await recordPageResult(siteId, jobId, next.url, result);
     } else {
-      await recordPageResult(siteId, jobId, next.url, result.metadata.statusCode, undefined, result.markdown);
+      await recordPageResult(siteId, jobId, next.url, result);
       completed += 1;
 
       if (next.depth < maxDepth && result.rawHtml) {

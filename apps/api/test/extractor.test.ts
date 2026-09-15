@@ -25,4 +25,26 @@ describe('extractBySelectors', () => {
     const result = extractBySelectors(html, { missing: '.does-not-exist' });
     expect(result.missing).toBeUndefined();
   });
+
+  it('reads an <img> selector by its src attribute, resolved to an absolute URL', () => {
+    const imgHtml = '<html><body><img class="photo" src="/images/shirt.jpg" /></body></html>';
+    const result = extractBySelectors(
+      imgHtml,
+      { photo: 'img.photo' },
+      'https://shop.example.com/product/1',
+    );
+    expect(result.photo).toBe('https://shop.example.com/images/shirt.jpg');
+  });
+
+  it('falls back to data-src for lazy-loaded images', () => {
+    const imgHtml = '<html><body><img class="photo" data-src="/lazy.jpg" /></body></html>';
+    const result = extractBySelectors(imgHtml, { photo: 'img.photo' }, 'https://example.com/');
+    expect(result.photo).toBe('https://example.com/lazy.jpg');
+  });
+
+  it('keeps an already-absolute image URL unresolved when no baseUrl is given', () => {
+    const imgHtml = '<html><body><img class="photo" src="https://cdn.example.com/x.jpg" /></body></html>';
+    const result = extractBySelectors(imgHtml, { photo: 'img.photo' });
+    expect(result.photo).toBe('https://cdn.example.com/x.jpg');
+  });
 });

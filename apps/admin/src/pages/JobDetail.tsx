@@ -1,28 +1,20 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
-import type { Job } from '../lib/types';
-import { Badge, Button, Card, ErrorBanner, ProgressBar, Spinner } from '../components/ui';
-
-interface PageLog {
-  url: string;
-  last_status_code: number | null;
-  last_error: string | null;
-  format: string;
-  fetched_at: string;
-}
+import type { Job, JobPageItem } from '../lib/types';
+import { Badge, Button, Card, ErrorBanner, ProgressBar, Spinner, Thumbnail } from '../components/ui';
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
   const [job, setJob] = useState<Job | null>(null);
-  const [pages, setPages] = useState<PageLog[]>([]);
+  const [pages, setPages] = useState<JobPageItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
 
   function load() {
     if (!id) return;
     api
-      .get<{ success: boolean; job: Job; pages: PageLog[] }>(`/admin/jobs/${id}`)
+      .get<{ success: boolean; job: Job; pages: JobPageItem[] }>(`/admin/jobs/${id}`)
       .then((res) => {
         setJob(res.job);
         setPages(res.pages);
@@ -93,46 +85,64 @@ export default function JobDetail() {
         </Card>
       )}
 
-      <Card className="p-0">
-        <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-          Page log
-        </h2>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 text-left text-slate-400">
-              <th className="px-4 py-2">URL</th>
-              <th className="px-4 py-2">Status</th>
-              <th className="px-4 py-2">Fetched at</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pages.length === 0 && (
-              <tr>
-                <td colSpan={3} className="px-4 py-6 text-center text-slate-400">
-                  No pages fetched yet.
-                </td>
-              </tr>
-            )}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-slate-700">Scraped items</h2>
+        {pages.length === 0 ? (
+          <Card>
+            <p className="text-center text-sm text-slate-400">No pages fetched yet.</p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {pages.map((p, i) => (
-              <tr key={i} className="border-b border-slate-100 last:border-0">
-                <td className="max-w-md truncate px-4 py-2 text-slate-700" title={p.url}>
-                  {p.url}
-                </td>
-                <td className="px-4 py-2 text-slate-600">
-                  {p.last_error ? (
-                    <span className="text-red-600">{p.last_status_code ?? 'error'}</span>
-                  ) : (
-                    p.last_status_code
-                  )}
-                </td>
-                <td className="px-4 py-2 text-slate-500">
-                  {new Date(p.fetched_at).toLocaleString()}
-                </td>
-              </tr>
+              <Card key={i} className="space-y-2">
+                <div className="flex items-start gap-3">
+                  <Thumbnail src={p.image} alt={p.title ?? p.url} size={56} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-slate-800" title={p.title ?? p.url}>
+                      {p.title ?? p.url}
+                    </div>
+                    <a
+                      href={p.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block truncate text-xs text-slate-400 hover:text-brand-600"
+                      title={p.url}
+                    >
+                      {p.url}
+                    </a>
+                  </div>
+                </div>
+
+                {p.extracted && Object.keys(p.extracted).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(p.extracted)
+                      // Skip a field that's just the same photo already shown as
+                      // the thumbnail above (e.g. a "photo" selector), and any
+                      // value long enough to be a data URI rather than a label.
+                      .filter(([, value]) => value !== p.image && value.length <= 200)
+                      .map(([field, value]) => (
+                        <span
+                          key={field}
+                          className="max-w-full rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+                        >
+                          <span className="font-medium text-slate-500">{field}:</span>{' '}
+                          <span className="break-all">{value}</span>
+                        </span>
+                      ))}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className={p.last_error ? 'text-red-600' : ''}>
+                    {p.last_error ? `Error (${p.last_status_code ?? '?'})` : `Status ${p.last_status_code}`}
+                  </span>
+                  <span>{new Date(p.fetched_at).toLocaleString()}</span>
+                </div>
+              </Card>
             ))}
-          </tbody>
-        </table>
-      </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

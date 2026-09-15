@@ -3,15 +3,40 @@ import { config } from '../config.js';
 
 export type SelectorMap = Record<string, string>;
 
-/** Runs each CSS selector against the page and returns matched text keyed by field name. */
-export function extractBySelectors(html: string, selectors: SelectorMap): Record<string, string> {
+/**
+ * Runs each CSS selector against the page and returns matched values keyed
+ * by field name. A selector matching an <img> reads its src (resolved to an
+ * absolute URL against baseUrl, when given) instead of its text content, so
+ * a "photo" field can point straight at a selector like `img.product-photo`.
+ */
+export function extractBySelectors(
+  html: string,
+  selectors: SelectorMap,
+  baseUrl?: string,
+): Record<string, string> {
   const $ = cheerio.load(html);
   const out: Record<string, string> = {};
   for (const [field, selector] of Object.entries(selectors)) {
     try {
       const el = $(selector).first();
-      const text = el.attr('content') ?? el.text();
-      if (text) out[field] = text.trim();
+      if (el.length === 0) continue;
+
+      let value: string | undefined;
+      if (el.is('img')) {
+        value = el.attr('src') ?? el.attr('data-src');
+        if (value && baseUrl) {
+          try {
+            value = new URL(value, baseUrl).toString();
+          } catch {
+            // keep the raw value if it can't be resolved
+          }
+        }
+      } else {
+        value = el.attr('content') ?? el.text();
+      }
+
+      value = value?.trim();
+      if (value) out[field] = value;
     } catch {
       // invalid selector - skip that field
     }

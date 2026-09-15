@@ -37,10 +37,43 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
     );
     if (!rows[0]) return reply.code(404).send({ success: false, error: 'Job not found' });
 
+    // One row per URL, pivoting the per-format scrape_results rows
+    // (metadata/extracted/markdown) into a single human-friendly item.
+    // jsonb has no MAX/MIN aggregate in Postgres, so this uses a LATERAL
+    // join per format instead of conditional aggregation.
     const { rows: pages } = await pool.query(
-      `SELECT u.url, u.last_status_code, u.last_error, sr.format, sr.fetched_at
-       FROM scrape_results sr JOIN urls u ON u.id = sr.url_id
-       WHERE sr.job_id = $1 ORDER BY sr.fetched_at DESC LIMIT 500`,
+      `SELECT
+         u.url,
+         u.last_status_code,
+         u.last_error,
+         latest.fetched_at,
+         m.content ->> 'title' AS title,
+         m.content ->> 'image' AS image,
+         e.content AS extracted,
+         md.content AS markdown
+       FROM (SELECT DISTINCT url_id FROM scrape_results WHERE job_id = $1) du
+       JOIN urls u ON u.id = du.url_id
+       LEFT JOIN LATERAL (
+         SELECT max(fetched_at) AS fetched_at FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.job_id = $1
+       ) latest ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.job_id = $1 AND sr.format = 'metadata'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) m ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.job_id = $1 AND sr.format = 'extracted'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) e ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.job_id = $1 AND sr.format = 'markdown'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) md ON true
+       ORDER BY latest.fetched_at DESC
+       LIMIT 500`,
       [id],
     );
 

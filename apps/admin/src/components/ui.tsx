@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode } from 'react';
+import { useState, type InputHTMLAttributes, type ReactNode } from 'react';
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
@@ -82,6 +82,40 @@ export function ProgressBar({ completed, total }: { completed: number; total: nu
     <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
       <div className="h-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
     </div>
+  );
+}
+
+export function Thumbnail({ src, alt, size = 40 }: { src: string | null | undefined; alt: string; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  const style = { width: size, height: size };
+
+  if (!src || failed) {
+    return (
+      <div
+        style={style}
+        className="flex shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-400"
+      >
+        <svg viewBox="0 0 24 24" fill="none" className="h-1/2 w-1/2">
+          <path
+            d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Zm2 12 4.5-5.5 3 3.5L18 10l2 2"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      style={style}
+      onError={() => setFailed(true)}
+      className="shrink-0 rounded-md border border-slate-200 object-cover"
+    />
   );
 }
 

@@ -74,7 +74,7 @@ export async function scrapePage(
 
   const selectors = { ...(site?.default_selectors ?? {}), ...(opts.selectors ?? {}) };
   if (Object.keys(selectors).length > 0) {
-    out.extracted = extractBySelectors(finalResult.html, selectors);
+    out.extracted = extractBySelectors(finalResult.html, selectors, finalResult.finalUrl);
   }
 
   return out;

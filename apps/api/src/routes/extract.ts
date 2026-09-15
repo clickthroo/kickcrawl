@@ -48,7 +48,7 @@ export async function extractRoutes(app: FastifyInstance): Promise<void> {
     let json: Record<string, unknown> = {};
     const selectors = site?.default_selectors ?? {};
     if (Object.keys(selectors).length > 0) {
-      json = extractBySelectors(result.html, selectors);
+      json = extractBySelectors(result.html, selectors, result.finalUrl);
     }
 
     const missingFields = Object.keys(schema).filter((f) => json[f] === undefined);

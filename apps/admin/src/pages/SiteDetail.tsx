@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Site, UrlRecord } from '../lib/types';
-import { Badge, Button, Card, ErrorBanner, Input, Spinner } from '../components/ui';
+import { Badge, Button, Card, ErrorBanner, Input, Spinner, Thumbnail } from '../components/ui';
 
 export default function SiteDetail() {
   const { id } = useParams<{ id: string }>();
@@ -162,8 +162,18 @@ export default function SiteDetail() {
             )}
             {urls?.map((u) => (
               <tr key={u.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                <td className="max-w-md truncate px-4 py-3 text-slate-700" title={u.url}>
-                  {u.path}
+                <td className="max-w-md px-4 py-3 text-slate-700">
+                  <div className="flex items-center gap-3">
+                    <Thumbnail src={u.preview_image} alt={u.preview_title ?? u.path} size={36} />
+                    <div className="min-w-0">
+                      <div className="truncate font-medium" title={u.preview_title ?? undefined}>
+                        {u.preview_title ?? u.path}
+                      </div>
+                      <div className="truncate text-xs text-slate-400" title={u.url}>
+                        {u.path}
+                      </div>
+                    </div>
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   <Badge status={u.status} />

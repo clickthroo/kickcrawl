@@ -3,6 +3,7 @@ import { pool } from '../../db.js';
 import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { scrapePage } from '../../lib/scrapeCore.js';
 import { markUrlFetched } from '../../lib/urlStore.js';
+import { persistScrapeResult } from '../../lib/persistResult.js';
 
 export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
@@ -14,24 +15,37 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
     const pageSize = Math.min(Math.max(1, Number(query.pageSize) || 50), 200);
     const offset = (page - 1) * pageSize;
 
-    const conditions = ['site_id = $1'];
+    const conditions = ['u.site_id = $1'];
     const params: unknown[] = [siteId];
     if (query.status) {
       params.push(query.status);
-      conditions.push(`status = $${params.length}`);
+      conditions.push(`u.status = $${params.length}`);
     }
     if (query.path) {
       params.push(`%${query.path}%`);
-      conditions.push(`path ILIKE $${params.length}`);
+      conditions.push(`u.path ILIKE $${params.length}`);
     }
     const where = conditions.join(' AND ');
 
     const { rows } = await pool.query(
-      `SELECT * FROM urls WHERE ${where} ORDER BY discovered_at DESC LIMIT ${pageSize} OFFSET ${offset}`,
+      `SELECT u.*, m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
+              e.content AS preview_extracted
+       FROM urls u
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'metadata'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) m ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'extracted'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) e ON true
+       WHERE ${where} ORDER BY u.discovered_at DESC LIMIT ${pageSize} OFFSET ${offset}`,
       params,
     );
     const { rows: countRows } = await pool.query(
-      `SELECT count(*) FROM urls WHERE ${where}`,
+      `SELECT count(*) FROM urls u WHERE ${where}`,
       params,
     );
 
@@ -65,13 +79,8 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
       },
     );
 
-    await markUrlFetched(row.site_id, row.url, result.metadata.statusCode, result.error);
-    if (result.markdown !== undefined) {
-      await pool.query(
-        `INSERT INTO scrape_results (url_id, format, content, status_code) VALUES ($1, 'markdown', $2, $3)`,
-        [id, JSON.stringify(result.markdown), result.metadata.statusCode],
-      );
-    }
+    const urlId = await markUrlFetched(row.site_id, row.url, result.metadata.statusCode, result.error);
+    await persistScrapeResult(urlId, null, result);
 
     return reply.send({ success: result.success, result });
   });

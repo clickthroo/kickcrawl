@@ -26,6 +26,20 @@ export interface UrlRecord {
   last_status_code: number | null;
   last_error: string | null;
   discovered_at: string;
+  preview_title: string | null;
+  preview_image: string | null;
+  preview_extracted: Record<string, string> | null;
+}
+
+export interface JobPageItem {
+  url: string;
+  last_status_code: number | null;
+  last_error: string | null;
+  fetched_at: string;
+  title: string | null;
+  image: string | null;
+  extracted: Record<string, string> | null;
+  markdown: string | null;
 }
 
 export interface Job {
