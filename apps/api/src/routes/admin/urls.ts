@@ -30,7 +30,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       `SELECT u.*, m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
-              e.content AS preview_extracted
+              e.content AS preview_extracted, md.content AS preview_markdown
        FROM urls u
        LEFT JOIN LATERAL (
          SELECT content FROM scrape_results sr
@@ -42,6 +42,11 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
          WHERE sr.url_id = u.id AND sr.format = 'extracted'
          ORDER BY sr.fetched_at DESC LIMIT 1
        ) e ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'markdown'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) md ON true
        WHERE ${where} ORDER BY u.discovered_at DESC LIMIT ${pageSize} OFFSET ${offset}`,
       params,
     );
@@ -53,12 +58,18 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
     const urlsWithProfile = rows.map((u) => ({
       ...u,
       // Only map a profile once there's something to map - an undiscovered/
-      // not-yet-fetched URL has no title, extracted fields or image at all.
+      // not-yet-fetched URL has no title, extracted fields or markdown at
+      // all. The markdown (full page text) matters here: a lot of real
+      // stock signals - e.g. a "SOLD OUT" button - live in the page body,
+      // not the <title> tag or meta description, so leaving it out (as
+      // this route previously did, unlike the Job Detail one) meant the
+      // stock detector never actually saw them.
       preview_profile:
-        u.preview_title || u.preview_extracted
+        u.preview_title || u.preview_extracted || u.preview_markdown
           ? buildKickioProfile({
               url: u.url,
               title: u.preview_title,
+              description: u.preview_markdown?.slice(0, 4000) ?? null,
               images: [u.preview_image],
               extracted: u.preview_extracted,
               scrapedAt: u.last_fetched_at,
