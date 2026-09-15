@@ -178,6 +178,36 @@ describe('detectStockStatus', () => {
   it('returns null rather than guessing when there is no signal at all', () => {
     expect(detectStockStatus('A lovely vintage shirt')).toBeNull();
   });
+
+  it('recognises a bare "SOLD" or "Reserved" marketplace marker', () => {
+    expect(detectStockStatus('Arsenal Home Shirt M - SOLD')).toBe('Out of Stock');
+    expect(detectStockStatus('Reserved for John')).toBe('Out of Stock');
+  });
+
+  it('recognises "X left/remaining/in stock/available" counts, either way', () => {
+    expect(detectStockStatus('Only 1 left')).toBe('In Stock');
+    expect(detectStockStatus('3 in stock')).toBe('In Stock');
+    expect(detectStockStatus('2 remaining')).toBe('In Stock');
+    expect(detectStockStatus('0 available')).toBe('Out of Stock');
+  });
+
+  it('recognises "last one" style urgency phrasing as in stock', () => {
+    expect(detectStockStatus('Last one! Buy now')).toBe('In Stock');
+    expect(detectStockStatus('Only one left in this size')).toBe('In Stock');
+  });
+
+  it('recognises schema.org Offer.availability values, URL or bare token', () => {
+    expect(detectStockStatus('https://schema.org/OutOfStock')).toBe('Out of Stock');
+    expect(detectStockStatus('https://schema.org/InStock')).toBe('In Stock');
+    expect(detectStockStatus('OutOfStock')).toBe('Out of Stock');
+    expect(detectStockStatus('InStock')).toBe('In Stock');
+  });
+
+  it('recognises further common phrasing (no longer available, reserved, ended)', () => {
+    expect(detectStockStatus('This listing has ended')).toBe('Out of Stock');
+    expect(detectStockStatus('No longer available')).toBe('Out of Stock');
+    expect(detectStockStatus('Still available - message to buy')).toBe('In Stock');
+  });
 });
 
 describe('buildKickioProfile', () => {
