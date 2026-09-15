@@ -560,14 +560,73 @@ export function extractSizeFromVariant(variantTitle: string | null | undefined):
 }
 
 // =========================================================================
-// Condition (Part 2 "Condition" - ladder + Vinted locale table)
+// Condition (Kickio's 5-tier condition ladder + per-retailer overrides)
 // =========================================================================
 
-export function gradeConditionText(raw: string | null | undefined): string | null {
+/** Kickio's fixed condition grades - every mapped condition lands on one of these. */
+export type ConditionGrade = 'Brand New (With Tags)' | 'Mint' | 'Very Good' | 'Good' | 'Needs Attention';
+
+/**
+ * Retailer-specific condition wording, checked before the generic ladder
+ * below. Keyed by hostname (lowercase, no "www."). A retailer's own phrase
+ * always wins over a generic guess, since resellers sometimes use terms
+ * (grading letters, house-brand labels) that either don't appear in the
+ * generic ladder at all or would be misread by it.
+ *
+ * Only add a row once you've confirmed the exact wording that retailer
+ * uses in its own listings - never guessed, for the same reason every
+ * other field in this file refuses to invent a value: a wrong override
+ * silently outranks the generic ladder for every item on that site.
+ *
+ * One named section per retailer, each a standalone array ordered from
+ * most-specific pattern to least (so e.g. "Very Good" is matched before
+ * the bare "Good" it would otherwise also match), merged into the lookup
+ * table at the bottom.
+ */
+
+// ---- vintagefootballshirts.com ----
+// Confirmed from the site's own condition filter facets: As New, BNIB,
+// Excellent, Good, Mint, Very good, Very Good, w/tags. "As New" and
+// "Excellent" aren't defined by the retailer beyond their facet names -
+// treated here as Mint and Very Good respectively (no perceptible wear
+// vs. great-but-visibly-used), the more common convention in resale
+// grading; revisit if VFS's own usage turns out to rank them differently.
+const VINTAGE_FOOTBALL_SHIRTS_CONDITIONS: [RegExp, ConditionGrade][] = [
+  [/\bbnib\b/i, 'Brand New (With Tags)'],
+  [/w\/\s*tags?\b/i, 'Brand New (With Tags)'],
+  [/\bmint\b/i, 'Mint'],
+  [/\bas\s*new\b/i, 'Mint'],
+  [/\bexcellent\b/i, 'Very Good'],
+  [/\bvery\s*good\b/i, 'Very Good'],
+  [/\bgood\b/i, 'Good'],
+];
+
+export const RETAILER_CONDITION_OVERRIDES: Record<string, [RegExp, ConditionGrade][]> = {
+  'vintagefootballshirts.com': VINTAGE_FOOTBALL_SHIRTS_CONDITIONS,
+};
+
+/** Hostname (no "www.") to key retailer-specific overrides by, or null if `url` isn't parseable. */
+export function retailerHostname(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export function gradeConditionText(raw: string | null | undefined, hostname?: string | null): ConditionGrade | null {
   if (!raw) return null;
   const text = raw.replace(/\s+/g, ' ').trim();
   if (!text) return null;
   const l = text.toLowerCase();
+
+  const overrides = hostname ? RETAILER_CONDITION_OVERRIDES[hostname] : undefined;
+  if (overrides) {
+    for (const [pattern, grade] of overrides) {
+      if (pattern.test(l)) return grade;
+    }
+  }
 
   const rating = l.match(/\b(\d{1,2})\s*\/\s*10\b/);
   if (rating) {
@@ -575,7 +634,6 @@ export function gradeConditionText(raw: string | null | undefined): string | nul
     if (r === 10) return 'Mint';
     if (r >= 8) return 'Very Good';
     if (r >= 6) return 'Good';
-    if (r >= 4) return 'Fair';
     return 'Needs Attention';
   }
 
@@ -592,14 +650,14 @@ export function gradeConditionText(raw: string | null | undefined): string | nul
     return 'Very Good';
   if (/^good$|\bgood\s+condition\b|\bbuon\w*\b|^bien$|\bbon\s+.tat\b|^gut$|^goed$/.test(l)) return 'Good';
   if (/\bsatisfactor\w*\b|\bdiscret\w*\b|\baceptable\b|\bsatisfaisant\w*\b|\bzufriedenstellend\b|\bredelijk\b/.test(l))
-    return 'Fair';
+    return 'Needs Attention';
 
   if (/\bbnwt\b|\bnwt\b|\bbnib\b/.test(l)) return 'Brand New (With Tags)';
   if (/\bdeadstock\b|\bnos\b|\bbrand\s*new\b/.test(l)) return 'Brand New (With Tags)';
   if (/\bbnwot\b|\bnwot\b|near\s*mint|\bmint\b|pristine|perfect\s*condition/.test(l)) return 'Mint';
   if (/excellent|\bvgc\b|great\s*condition|as\s*new/.test(l)) return 'Very Good';
   if (/good\s*condition|\bgood\b/.test(l)) return 'Good';
-  if (/fair|acceptable/.test(l)) return 'Fair';
+  if (/\bfair\b|acceptable/.test(l)) return 'Needs Attention';
   if (/well\s*used|\bworn\b|poor\s*condition|vintage\s*condition|heavily\s*used/.test(l)) return 'Needs Attention';
   if (/\bpre[- ]?owned\b|\bused\b/.test(l)) return 'Good';
   if (/\bnew\b/.test(l)) return 'Brand New (With Tags)';
@@ -799,6 +857,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   const extracted = input.extracted ?? null;
 
   const images = (input.images ?? []).filter((i): i is string => !!i && i.trim().length > 0);
+  const hostname = retailerHostname(input.url);
 
   const confidence: Record<string, Confidence> = {};
   const reviewReasons: string[] = [];
@@ -929,13 +988,13 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   const explicitCondition = caseInsensitiveGet(extracted, 'condition');
   let condition: string | null = null;
   if (explicitCondition) {
-    condition = gradeConditionText(explicitCondition);
+    condition = gradeConditionText(explicitCondition, hostname);
     if (!condition) {
       condition = explicitCondition; // guide: pass the raw string through rather than dropping it
       reviewReasons.push(`condition text "${explicitCondition}" did not match Kickio's condition ladder`);
     }
   } else {
-    condition = gradeConditionText(haystack);
+    condition = gradeConditionText(haystack, hostname);
   }
 
   // ---- Size ----

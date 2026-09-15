@@ -9,6 +9,8 @@ import {
   extractSizeFromTitle,
   gradeConditionText,
   guessTeamFromTitle,
+  retailerHostname,
+  RETAILER_CONDITION_OVERRIDES,
 } from '../src/services/kickioProfile.js';
 
 describe('detectShirtType', () => {
@@ -137,6 +139,71 @@ describe('gradeConditionText', () => {
 
   it('recognises a bare "Good" embedded in a longer description', () => {
     expect(gradeConditionText('Arsenal Track Jacket Size XL Good')).toBe('Good');
+  });
+
+  it('maps onto Kickio\'s 5-tier ladder only - no "Fair" tier', () => {
+    expect(gradeConditionText('Fair condition, some wear')).toBe('Needs Attention');
+    expect(gradeConditionText('Acceptable condition')).toBe('Needs Attention');
+    expect(gradeConditionText('Satisfactory')).toBe('Needs Attention');
+    expect(gradeConditionText('5/10 condition')).toBe('Needs Attention');
+  });
+
+  it('lets a retailer-specific override outrank the generic ladder', () => {
+    RETAILER_CONDITION_OVERRIDES['test-retailer.example.com'] = [
+      [/\bgrade a\b/i, 'Mint'],
+      [/\bgrade b\b/i, 'Good'],
+    ];
+    try {
+      expect(gradeConditionText('Grade A - as new', 'test-retailer.example.com')).toBe('Mint');
+      expect(gradeConditionText('Grade B', 'test-retailer.example.com')).toBe('Good');
+      // No override for this host - falls through to the generic ladder.
+      expect(gradeConditionText('Grade A', 'other-retailer.example.com')).toBeNull();
+    } finally {
+      delete RETAILER_CONDITION_OVERRIDES['test-retailer.example.com'];
+    }
+  });
+});
+
+describe('vintagefootballshirts.com condition mapping', () => {
+  const host = 'vintagefootballshirts.com';
+
+  it('maps every confirmed VFS condition facet to the right Kickio grade', () => {
+    expect(gradeConditionText('BNIB', host)).toBe('Brand New (With Tags)');
+    expect(gradeConditionText('w/tags', host)).toBe('Brand New (With Tags)');
+    expect(gradeConditionText('Mint', host)).toBe('Mint');
+    expect(gradeConditionText('As New', host)).toBe('Mint');
+    expect(gradeConditionText('Excellent', host)).toBe('Very Good');
+    expect(gradeConditionText('Very good', host)).toBe('Very Good');
+    expect(gradeConditionText('Very Good', host)).toBe('Very Good');
+    expect(gradeConditionText('Good', host)).toBe('Good');
+  });
+
+  it("checks 'Very Good' before the bare 'Good' it would otherwise also match", () => {
+    expect(gradeConditionText('Condition: Very Good', host)).toBe('Very Good');
+  });
+
+  it('applies via the "www." host too, since buildKickioProfile strips it before lookup', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/1983-85-aston-villa-home-shirt-m-3314',
+      title: '1983-85 Aston Villa Home Shirt M',
+      extracted: { team: 'Aston Villa', condition: 'Excellent' },
+    });
+    expect(profile.listing.condition).toBe('Very Good');
+  });
+});
+
+describe('retailerHostname', () => {
+  it('extracts a lowercase hostname with "www." stripped', () => {
+    expect(retailerHostname('https://www.VintageFootballShirts.com/products/x')).toBe(
+      'vintagefootballshirts.com',
+    );
+    expect(retailerHostname('https://preview-test.example.com/shirt/1')).toBe('preview-test.example.com');
+  });
+
+  it('returns null for missing or unparseable input', () => {
+    expect(retailerHostname(null)).toBeNull();
+    expect(retailerHostname(undefined)).toBeNull();
+    expect(retailerHostname('not a url')).toBeNull();
   });
 });
 
@@ -312,6 +379,20 @@ describe('buildKickioProfile', () => {
     });
     expect(profile.listing.colour).toBe('Red');
     expect(profile.listing.colour_secondary).toBe('White');
+  });
+
+  it("uses a retailer's own condition wording (from the item's URL) over the generic ladder", () => {
+    RETAILER_CONDITION_OVERRIDES['grading-retailer.example.com'] = [[/\bgrade a\b/i, 'Mint']];
+    try {
+      const profile = buildKickioProfile({
+        url: 'https://grading-retailer.example.com/products/arsenal-home',
+        title: 'Arsenal 2020-21 Home Shirt',
+        extracted: { team: 'Arsenal', condition: 'Grade A' },
+      });
+      expect(profile.listing.condition).toBe('Mint');
+    } finally {
+      delete RETAILER_CONDITION_OVERRIDES['grading-retailer.example.com'];
+    }
   });
 
   it('reports stock status from a quantity of 0, an explicit field, or page text - never guessed', () => {
