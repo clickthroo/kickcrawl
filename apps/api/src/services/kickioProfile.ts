@@ -650,17 +650,49 @@ export function canonicalColour(v: string | null | undefined): string | null {
   return COLOUR_MAP[v.toLowerCase()] ?? null;
 }
 
-const OUT_OF_STOCK_PATTERN = /\b(out of stock|sold out|no longer available|currently unavailable|unavailable|discontinued)\b/i;
-const IN_STOCK_PATTERN = /\b(in stock|add to (cart|basket|bag)|buy now|available now|available to buy)\b/i;
+// Plain-English phrases. Checked ahead of the shorter/riskier bare-word
+// signals below so a specific phrase always wins over a loose one.
+const OUT_OF_STOCK_PHRASES =
+  /\b(out of stock|sold out|no longer available|no longer in stock|not currently available|currently unavailable|temporarily unavailable|not available|item unavailable|unavailable|discontinued|item sold|this item has sold|listing (?:has )?ended|no stock|zero stock)\b/i;
+const IN_STOCK_PHRASES =
+  /\b(in stock|add to (cart|basket|bag)|buy now|available now|available to buy|still available|ready to ship|ships (?:today|now|immediately)|in-stock)\b/i;
+
+// Bare, standalone markers common on reseller/marketplace listings ("SOLD"
+// stamped over a photo, an item marked "Reserved" for another buyer). Kept
+// separate from the phrase lists above and checked afterwards since a bare
+// word carries more false-positive risk than a specific phrase - e.g. "sold"
+// could in principle appear in unrelated marketing copy - but the tradeoff
+// is worth it: these are extremely common on exactly the kind of vintage/
+// resale listings Kickcrawl targets, and a false negative (missing a real
+// "SOLD" stamp) is worse here than a rare false positive.
+const OUT_OF_STOCK_BARE_WORDS = /\b(sold|reserved)\b/i;
+
+// schema.org Offer.availability values, as either the full URL
+// ("https://schema.org/OutOfStock") or the bare enum token some sites emit
+// in a data attribute or extracted field ("OutOfStock", "outofstock").
+const SCHEMA_OUT_OF_STOCK = /\b(outofstock|soldout|discontinued)\b/i;
+const SCHEMA_IN_STOCK = /\b(instock|limitedavailability)\b/i;
+
+// "3 in stock", "1 left", "0 remaining" - a decisive count, so parsed before
+// any word-based signal. Checked against the SAME text as everything else,
+// not just an explicit field, since this phrasing shows up in titles and
+// descriptions too ("Only 1 left!").
+const STOCK_COUNT_PATTERN = /\b(\d+)\s*(?:x\s*)?(?:in stock|left(?:\s+in\s+stock)?|remaining|available)\b/i;
+const LAST_ONE_PATTERN = /\b(last one|last item|final one|only one left)\b/i;
 
 /**
- * Availability signal, checked in order: an explicit numeric quantity (0 is
- * decisive either way), then an explicit stock/availability field or the
- * page text for a stock phrase. "Sold out"/"out of stock" wins over a
- * lingering "Add to cart" button when both are present, since disabled
- * buttons commonly stay in the markup after an item sells out. Absence of
- * any signal is left null rather than assumed - a listing with no visible
- * stock indicator is not "in stock" by default.
+ * Availability signal, checked in order of how decisive/specific it is:
+ *  1. An explicit numeric quantity (0 is decisive either way).
+ *  2. A "<N> left/remaining/in stock/available" count in the text.
+ *  3. "Last one" / "only one left" - still purchasable, just low stock.
+ *  4. schema.org's Offer.availability enum, in URL or bare-token form.
+ *  5. A specific out-of-stock phrase, then a specific in-stock phrase.
+ *  6. A bare marketplace marker ("SOLD", "Reserved").
+ * "Sold out"/"out of stock" wins over a lingering "Add to cart" button when
+ * both are present, since disabled buttons commonly stay in the markup
+ * after an item sells out. Absence of any signal is left null rather than
+ * assumed - a listing with no visible stock indicator is not "in stock" by
+ * default.
  */
 export function detectStockStatus(
   text: string | null | undefined,
@@ -670,8 +702,19 @@ export function detectStockStatus(
     return quantity <= 0 ? 'Out of Stock' : 'In Stock';
   }
   if (!text) return null;
-  if (OUT_OF_STOCK_PATTERN.test(text)) return 'Out of Stock';
-  if (IN_STOCK_PATTERN.test(text)) return 'In Stock';
+
+  const countMatch = text.match(STOCK_COUNT_PATTERN);
+  if (countMatch) return parseInt(countMatch[1], 10) > 0 ? 'In Stock' : 'Out of Stock';
+  if (LAST_ONE_PATTERN.test(text)) return 'In Stock';
+
+  if (SCHEMA_OUT_OF_STOCK.test(text)) return 'Out of Stock';
+  if (SCHEMA_IN_STOCK.test(text)) return 'In Stock';
+
+  if (OUT_OF_STOCK_PHRASES.test(text)) return 'Out of Stock';
+  if (IN_STOCK_PHRASES.test(text)) return 'In Stock';
+
+  if (OUT_OF_STOCK_BARE_WORDS.test(text)) return 'Out of Stock';
+
   return null;
 }
 
@@ -910,8 +953,24 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       const n = Number(raw.replace(/[^0-9.]/g, ''));
       return Number.isFinite(n) ? n : null;
     })();
-  const explicitStock = caseInsensitiveGet(extracted, 'stock', 'stockStatus', 'availability', 'inStock');
-  const stockStatus = detectStockStatus(explicitStock ?? haystack, rawQuantity);
+  const explicitStock = caseInsensitiveGet(
+    extracted,
+    'stock',
+    'stockStatus',
+    'availability',
+    'availabilityStatus',
+    'inStock',
+    'inventory',
+    'inventoryStatus',
+    'stockLevel',
+    'productAvailability',
+  );
+  // Scan the explicit field (if the site has one) together with the title/
+  // description, not instead of it - a bare "SOLD" stamp is far more likely
+  // to show up in the title itself than in a dedicated stock field, which
+  // most sites Kickcrawl scrapes won't have configured at all.
+  const stockText = explicitStock ? `${explicitStock} ${haystack}` : haystack;
+  const stockStatus = detectStockStatus(stockText, rawQuantity);
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};
