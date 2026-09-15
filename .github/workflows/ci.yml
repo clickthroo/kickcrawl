@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck API
+        run: npx tsc -p apps/api/tsconfig.json --noEmit
+
+      - name: Typecheck admin
+        run: npx tsc --noEmit -p apps/admin/tsconfig.json
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build API
+        run: npm run build:api
+
+      - name: Build admin
+        run: npm run build:admin
