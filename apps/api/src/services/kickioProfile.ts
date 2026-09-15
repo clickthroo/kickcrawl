@@ -573,14 +573,37 @@ export type ConditionGrade = 'Brand New (With Tags)' | 'Mint' | 'Very Good' | 'G
  * (grading letters, house-brand labels) that either don't appear in the
  * generic ladder at all or would be misread by it.
  *
- * Only add a row here once you've confirmed the exact wording that
- * retailer uses in its own listings - never guessed, for the same reason
- * every other field in this file refuses to invent a value: a wrong
- * override silently outranks the generic ladder for every item on that
- * site. Example of the shape to add:
- *   'example-retailer.com': [[/\bgrade a\b/i, 'Mint'], [/\bgrade b\b/i, 'Good']],
+ * Only add a row once you've confirmed the exact wording that retailer
+ * uses in its own listings - never guessed, for the same reason every
+ * other field in this file refuses to invent a value: a wrong override
+ * silently outranks the generic ladder for every item on that site.
+ *
+ * One named section per retailer, each a standalone array ordered from
+ * most-specific pattern to least (so e.g. "Very Good" is matched before
+ * the bare "Good" it would otherwise also match), merged into the lookup
+ * table at the bottom.
  */
-export const RETAILER_CONDITION_OVERRIDES: Record<string, [RegExp, ConditionGrade][]> = {};
+
+// ---- vintagefootballshirts.com ----
+// Confirmed from the site's own condition filter facets: As New, BNIB,
+// Excellent, Good, Mint, Very good, Very Good, w/tags. "As New" and
+// "Excellent" aren't defined by the retailer beyond their facet names -
+// treated here as Mint and Very Good respectively (no perceptible wear
+// vs. great-but-visibly-used), the more common convention in resale
+// grading; revisit if VFS's own usage turns out to rank them differently.
+const VINTAGE_FOOTBALL_SHIRTS_CONDITIONS: [RegExp, ConditionGrade][] = [
+  [/\bbnib\b/i, 'Brand New (With Tags)'],
+  [/w\/\s*tags?\b/i, 'Brand New (With Tags)'],
+  [/\bmint\b/i, 'Mint'],
+  [/\bas\s*new\b/i, 'Mint'],
+  [/\bexcellent\b/i, 'Very Good'],
+  [/\bvery\s*good\b/i, 'Very Good'],
+  [/\bgood\b/i, 'Good'],
+];
+
+export const RETAILER_CONDITION_OVERRIDES: Record<string, [RegExp, ConditionGrade][]> = {
+  'vintagefootballshirts.com': VINTAGE_FOOTBALL_SHIRTS_CONDITIONS,
+};
 
 /** Hostname (no "www.") to key retailer-specific overrides by, or null if `url` isn't parseable. */
 export function retailerHostname(url: string | null | undefined): string | null {

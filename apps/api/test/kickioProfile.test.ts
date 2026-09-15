@@ -164,6 +164,34 @@ describe('gradeConditionText', () => {
   });
 });
 
+describe('vintagefootballshirts.com condition mapping', () => {
+  const host = 'vintagefootballshirts.com';
+
+  it('maps every confirmed VFS condition facet to the right Kickio grade', () => {
+    expect(gradeConditionText('BNIB', host)).toBe('Brand New (With Tags)');
+    expect(gradeConditionText('w/tags', host)).toBe('Brand New (With Tags)');
+    expect(gradeConditionText('Mint', host)).toBe('Mint');
+    expect(gradeConditionText('As New', host)).toBe('Mint');
+    expect(gradeConditionText('Excellent', host)).toBe('Very Good');
+    expect(gradeConditionText('Very good', host)).toBe('Very Good');
+    expect(gradeConditionText('Very Good', host)).toBe('Very Good');
+    expect(gradeConditionText('Good', host)).toBe('Good');
+  });
+
+  it("checks 'Very Good' before the bare 'Good' it would otherwise also match", () => {
+    expect(gradeConditionText('Condition: Very Good', host)).toBe('Very Good');
+  });
+
+  it('applies via the "www." host too, since buildKickioProfile strips it before lookup', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/1983-85-aston-villa-home-shirt-m-3314',
+      title: '1983-85 Aston Villa Home Shirt M',
+      extracted: { team: 'Aston Villa', condition: 'Excellent' },
+    });
+    expect(profile.listing.condition).toBe('Very Good');
+  });
+});
+
 describe('retailerHostname', () => {
   it('extracts a lowercase hostname with "www." stripped', () => {
     expect(retailerHostname('https://www.VintageFootballShirts.com/products/x')).toBe(
