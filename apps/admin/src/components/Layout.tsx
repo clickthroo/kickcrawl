@@ -40,6 +40,16 @@ function IconSites(props: IconProps) {
   );
 }
 
+function IconItems(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="3.5" y="4" width="17" height="4.5" rx="1.2" />
+      <rect x="3.5" y="10.25" width="17" height="4.5" rx="1.2" />
+      <rect x="3.5" y="16.5" width="17" height="4.5" rx="1.2" />
+    </IconBase>
+  );
+}
+
 function IconJobs(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -91,6 +101,7 @@ function LogoMark() {
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', tabLabel: 'Home', icon: IconDashboard, end: true },
   { to: '/sites', label: 'Sites', tabLabel: 'Sites', icon: IconSites, end: false },
+  { to: '/items', label: 'Items', tabLabel: 'Items', icon: IconItems, end: false },
   { to: '/jobs', label: 'Jobs', tabLabel: 'Jobs', icon: IconJobs, end: false },
   { to: '/api-keys', label: 'API Keys', tabLabel: 'Keys', icon: IconKey, end: false },
   { to: '/settings', label: 'Settings', tabLabel: 'Settings', icon: IconSettings, end: false },
