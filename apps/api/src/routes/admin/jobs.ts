@@ -3,6 +3,7 @@ import { pool } from '../../db.js';
 import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { crawlQueue } from '../../queue.js';
 import { createJob } from '../../lib/jobRecords.js';
+import { buildKickioProfile } from '../../services/kickioProfile.js';
 
 export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
@@ -77,7 +78,23 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
       [id],
     );
 
-    return reply.send({ success: true, job: rows[0], pages });
+    // Every scraped item also gets a read-only Kickio product profile -
+    // team/season/type/condition/etc mapped per the shirt mapping guide -
+    // so an admin can see how it would map without Kickcrawl ever writing
+    // to Kickio's own database.
+    const pagesWithProfile = pages.map((p) => ({
+      ...p,
+      profile: buildKickioProfile({
+        url: p.url,
+        title: p.title,
+        description: p.markdown?.slice(0, 4000) ?? null,
+        images: [p.image],
+        extracted: p.extracted,
+        scrapedAt: p.fetched_at,
+      }),
+    }));
+
+    return reply.send({ success: true, job: rows[0], pages: pagesWithProfile });
   });
 
   app.post('/api/admin/jobs/:id/rerun', async (req, reply) => {

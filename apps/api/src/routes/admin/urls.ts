@@ -4,6 +4,7 @@ import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { scrapePage } from '../../lib/scrapeCore.js';
 import { markUrlFetched } from '../../lib/urlStore.js';
 import { persistScrapeResult } from '../../lib/persistResult.js';
+import { buildKickioProfile } from '../../services/kickioProfile.js';
 
 export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
@@ -49,7 +50,18 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
       params,
     );
 
-    return reply.send({ success: true, urls: rows, total: Number(countRows[0].count), page, pageSize });
+    const urlsWithProfile = rows.map((u) => ({
+      ...u,
+      preview_profile: buildKickioProfile({
+        url: u.url,
+        title: u.preview_title,
+        images: [u.preview_image],
+        extracted: u.preview_extracted,
+        scrapedAt: u.last_fetched_at,
+      }),
+    }));
+
+    return reply.send({ success: true, urls: urlsWithProfile, total: Number(countRows[0].count), page, pageSize });
   });
 
   app.post('/api/admin/urls/:id/rescrape', async (req, reply) => {

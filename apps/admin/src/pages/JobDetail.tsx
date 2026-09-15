@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Job, JobPageItem } from '../lib/types';
-import { Badge, Button, Card, ErrorBanner, ProgressBar, Spinner, Thumbnail } from '../components/ui';
+import { Badge, Button, Card, ErrorBanner, KickioProfilePanel, ProgressBar, Spinner, Thumbnail } from '../components/ui';
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
@@ -131,6 +131,8 @@ export default function JobDetail() {
                       ))}
                   </div>
                 )}
+
+                <KickioProfilePanel profile={p.profile} />
 
                 <div className="flex items-center justify-between text-xs text-slate-400">
                   <span className={p.last_error ? 'text-red-600' : ''}>

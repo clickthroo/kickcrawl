@@ -176,7 +176,17 @@ export default function SiteDetail() {
                   </div>
                 </td>
                 <td className="px-4 py-3">
-                  <Badge status={u.status} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge status={u.status} />
+                    {u.preview_profile?.needs_review && (
+                      <span
+                        className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700"
+                        title={u.preview_profile.review_reason ?? undefined}
+                      >
+                        Needs review
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-slate-500">
                   {u.last_fetched_at ? new Date(u.last_fetched_at).toLocaleString() : '—'}

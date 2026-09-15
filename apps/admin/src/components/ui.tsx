@@ -1,4 +1,5 @@
 import { useState, type InputHTMLAttributes, type ReactNode } from 'react';
+import type { KickioProfile } from '../lib/types';
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
@@ -116,6 +117,83 @@ export function Thumbnail({ src, alt, size = 40 }: { src: string | null | undefi
       onError={() => setFailed(true)}
       className="shrink-0 rounded-md border border-slate-200 object-cover"
     />
+  );
+}
+
+function ProfileField({
+  label,
+  value,
+  confident,
+}: {
+  label: string;
+  value: string | number | null | undefined;
+  confident?: boolean;
+}) {
+  if (value === null || value === undefined || value === '') return null;
+  return (
+    <span className="max-w-full rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+      <span className="font-medium text-slate-500">{label}:</span> <span className="break-all">{value}</span>
+      {confident === false && <span className="ml-1 text-amber-600" title="Inferred, not confirmed">~</span>}
+    </span>
+  );
+}
+
+/**
+ * Read-only preview of the Kickio product profile derived for a scraped
+ * item - team/season/type/condition/etc, mapped per the shirt mapping
+ * guide. Nothing here is ever written to Kickio's database; it's purely
+ * so an admin can see how the item would map.
+ */
+export function KickioProfilePanel({ profile }: { profile: KickioProfile | null | undefined }) {
+  if (!profile) return null;
+  const { identity, listing, custom_attributes, confidence, needs_review, review_reason, category } = profile;
+
+  return (
+    <details className="group rounded-md border border-slate-200 bg-slate-50/50 px-3 py-2">
+      <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-medium text-slate-500">
+        <span>
+          Kickio profile <span className="font-normal text-slate-400">· {category}</span>
+        </span>
+        {needs_review ? (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">Needs review</span>
+        ) : (
+          <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">Mapped</span>
+        )}
+      </summary>
+      <div className="mt-2 space-y-2">
+        <div className="flex flex-wrap gap-1.5">
+          <ProfileField label="Team" value={identity.team} confident={confidence.team !== 'inferred'} />
+          <ProfileField label="Season" value={identity.season} confident={confidence.season !== 'inferred'} />
+          <ProfileField label="Type" value={identity.shirt_type} confident={confidence.shirt_type !== 'inferred'} />
+          <ProfileField label="Gender" value={identity.gender} />
+          <ProfileField label="Player" value={identity.player} />
+          <ProfileField label="Number" value={identity.number} />
+          <ProfileField label="Issue" value={identity.issue} />
+          <ProfileField label="Special edition" value={identity.special_edition} />
+          <ProfileField label="Sleeves" value={identity.sleeves} />
+          <ProfileField label="Signed" value={identity.signed} />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <ProfileField label="Condition" value={listing.condition} />
+          <ProfileField label="Size" value={listing.size} />
+          <ProfileField label="Manufacturer" value={listing.manufacturer} />
+          <ProfileField label="Colour" value={listing.colour} />
+          <ProfileField label="Boxed" value={listing.boxed_edition} />
+          <ProfileField label="Price" value={listing.price != null ? `${listing.price} ${listing.currency ?? ''}`.trim() : null} />
+          {Object.entries(custom_attributes).map(([k, v]) => (
+            <ProfileField
+              key={k}
+              label={k}
+              value={v}
+              confident={confidence[`custom_attributes.${k}`] !== 'inferred'}
+            />
+          ))}
+        </div>
+        {needs_review && review_reason && (
+          <p className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">{review_reason}</p>
+        )}
+      </div>
+    </details>
   );
 }
 
