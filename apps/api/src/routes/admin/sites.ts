@@ -1,0 +1,127 @@
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { pool } from '../../db.js';
+import { requireAdminSession } from '../../middleware/adminAuth.js';
+import { runMap } from '../../lib/mapCore.js';
+
+const siteSchema = z.object({
+  name: z.string().min(1),
+  base_url: z.string().url(),
+  rate_limit_rps: z.number().positive().optional().default(1),
+  max_depth: z.number().int().min(0).optional().default(2),
+  use_browser_default: z.boolean().optional().default(false),
+  use_proxy: z.boolean().optional().default(false),
+  default_selectors: z.record(z.string()).optional().default({}),
+  allowed_paths: z.array(z.string()).optional().default([]),
+  denied_paths: z.array(z.string()).optional().default([]),
+  is_active: z.boolean().optional().default(true),
+});
+
+export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
+  app.addHook('preHandler', requireAdminSession);
+
+  app.get('/api/admin/sites', async (_req, reply) => {
+    const { rows } = await pool.query(`
+      SELECT s.*,
+        (SELECT count(*) FROM urls u WHERE u.site_id = s.id) AS url_count,
+        (SELECT count(*) FROM urls u WHERE u.site_id = s.id AND u.status = 'fetched') AS fetched_count
+      FROM sites s ORDER BY s.created_at DESC
+    `);
+    return reply.send({ success: true, sites: rows });
+  });
+
+  app.get('/api/admin/sites/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query('SELECT * FROM sites WHERE id = $1', [id]);
+    if (!rows[0]) return reply.code(404).send({ success: false, error: 'Site not found' });
+    return reply.send({ success: true, site: rows[0] });
+  });
+
+  app.post('/api/admin/sites', async (req, reply) => {
+    const parsed = siteSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ success: false, error: parsed.error.message });
+    const s = parsed.data;
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO sites (name, base_url, rate_limit_rps, max_depth, use_browser_default, use_proxy,
+           default_selectors, allowed_paths, denied_paths, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [
+          s.name,
+          s.base_url,
+          s.rate_limit_rps,
+          s.max_depth,
+          s.use_browser_default,
+          s.use_proxy,
+          JSON.stringify(s.default_selectors),
+          s.allowed_paths,
+          s.denied_paths,
+          s.is_active,
+        ],
+      );
+      return reply.send({ success: true, site: rows[0] });
+    } catch (err) {
+      return reply.code(409).send({ success: false, error: 'A site with that base URL already exists' });
+    }
+  });
+
+  app.put('/api/admin/sites/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = siteSchema.partial().safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ success: false, error: parsed.error.message });
+    const s = parsed.data;
+
+    const { rows } = await pool.query(
+      `UPDATE sites SET
+         name = COALESCE($2, name),
+         base_url = COALESCE($3, base_url),
+         rate_limit_rps = COALESCE($4, rate_limit_rps),
+         max_depth = COALESCE($5, max_depth),
+         use_browser_default = COALESCE($6, use_browser_default),
+         use_proxy = COALESCE($7, use_proxy),
+         default_selectors = COALESCE($8, default_selectors),
+         allowed_paths = COALESCE($9, allowed_paths),
+         denied_paths = COALESCE($10, denied_paths),
+         is_active = COALESCE($11, is_active),
+         updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [
+        id,
+        s.name,
+        s.base_url,
+        s.rate_limit_rps,
+        s.max_depth,
+        s.use_browser_default,
+        s.use_proxy,
+        s.default_selectors ? JSON.stringify(s.default_selectors) : null,
+        s.allowed_paths,
+        s.denied_paths,
+        s.is_active,
+      ],
+    );
+    if (!rows[0]) return reply.code(404).send({ success: false, error: 'Site not found' });
+    return reply.send({ success: true, site: rows[0] });
+  });
+
+  app.delete('/api/admin/sites/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    await pool.query('DELETE FROM sites WHERE id = $1', [id]);
+    return reply.send({ success: true });
+  });
+
+  app.post('/api/admin/sites/:id/map', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query('SELECT * FROM sites WHERE id = $1', [id]);
+    const site = rows[0];
+    if (!site) return reply.code(404).send({ success: false, error: 'Site not found' });
+
+    try {
+      const urls = await runMap(site.base_url, site.id, { limit: 5000 });
+      return reply.send({ success: true, total: urls.length });
+    } catch (err) {
+      return reply
+        .code(502)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Map run failed' });
+    }
+  });
+}

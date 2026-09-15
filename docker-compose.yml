@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kickcrawl
+      POSTGRES_PASSWORD: kickcrawl
+      POSTGRES_DB: kickcrawl
+    ports:
+      - '5432:5432'
+    volumes:
+      - kickcrawl_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U kickcrawl']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - '3000:3000'
+    environment:
+      DATABASE_URL: postgresql://kickcrawl:kickcrawl@postgres:5432/kickcrawl
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      APP_URL: http://localhost:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      PROXY_URL: ${PROXY_URL:-}
+      DEFAULT_USER_AGENT: ${DEFAULT_USER_AGENT:-KickioBot/1.0 (+https://kickio.com/bot)}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@kickio.com}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret-change-me}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+
+volumes:
+  kickcrawl_pgdata:

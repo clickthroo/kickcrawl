@@ -1,0 +1,74 @@
+import type { FastifyInstance } from 'fastify';
+import { pool } from '../../db.js';
+import { requireAdminSession } from '../../middleware/adminAuth.js';
+import { crawlQueue } from '../../queue.js';
+import { createJob } from '../../lib/jobRecords.js';
+
+export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
+  app.addHook('preHandler', requireAdminSession);
+
+  app.get('/api/admin/jobs', async (req, reply) => {
+    const { status, type } = req.query as { status?: string; type?: string };
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (status) {
+      params.push(status);
+      conditions.push(`status = $${params.length}`);
+    }
+    if (type) {
+      params.push(type);
+      conditions.push(`type = $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const { rows } = await pool.query(
+      `SELECT j.*, s.name AS site_name FROM jobs j LEFT JOIN sites s ON s.id = j.site_id
+       ${where} ORDER BY j.created_at DESC LIMIT 200`,
+      params,
+    );
+    return reply.send({ success: true, jobs: rows });
+  });
+
+  app.get('/api/admin/jobs/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query(
+      'SELECT j.*, s.name AS site_name FROM jobs j LEFT JOIN sites s ON s.id = j.site_id WHERE j.id = $1',
+      [id],
+    );
+    if (!rows[0]) return reply.code(404).send({ success: false, error: 'Job not found' });
+
+    const { rows: pages } = await pool.query(
+      `SELECT u.url, u.last_status_code, u.last_error, sr.format, sr.fetched_at
+       FROM scrape_results sr JOIN urls u ON u.id = sr.url_id
+       WHERE sr.job_id = $1 ORDER BY sr.fetched_at DESC LIMIT 500`,
+      [id],
+    );
+
+    return reply.send({ success: true, job: rows[0], pages });
+  });
+
+  app.post('/api/admin/jobs/:id/rerun', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query('SELECT * FROM jobs WHERE id = $1', [id]);
+    const job = rows[0];
+    if (!job) return reply.code(404).send({ success: false, error: 'Job not found' });
+    if (job.type !== 'crawl') {
+      return reply.code(400).send({ success: false, error: 'Only crawl jobs can be re-run from here' });
+    }
+
+    const payload = job.payload;
+    const newJobId = await createJob('crawl', job.site_id, payload, 'queued');
+    await crawlQueue.add('crawl', {
+      jobId: newJobId,
+      siteId: job.site_id,
+      url: payload.url,
+      limit: payload.limit,
+      maxDepth: payload.maxDepth,
+      includePaths: payload.includePaths ?? [],
+      excludePaths: payload.excludePaths ?? [],
+      scrapeOptions: payload.scrapeOptions ?? {},
+    });
+
+    return reply.send({ success: true, jobId: newJobId });
+  });
+}
