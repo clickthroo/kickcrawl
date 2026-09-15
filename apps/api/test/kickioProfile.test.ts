@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildKickioProfile,
+  detectColours,
   detectShirtType,
+  detectStockStatus,
   extractSeason,
   extractSeasonSpan,
   extractSizeFromTitle,
@@ -111,6 +113,61 @@ describe('gradeConditionText', () => {
   });
 });
 
+describe('detectColours', () => {
+  it('finds the main two distinct colours in order of appearance', () => {
+    const found = detectColours('Arsenal Home Shirt Red White 2020-21');
+    expect(found.map((c) => c.canonical)).toEqual(['Red', 'White']);
+  });
+
+  it('prefers a longer specific phrase over its bare form', () => {
+    const found = detectColours('Chelsea Sky Blue Away Shirt');
+    expect(found[0]).toEqual({ raw: 'sky blue', canonical: 'Blue (Sky)' });
+  });
+
+  it('does not repeat the same colour twice', () => {
+    const found = detectColours('Red shirt, red trim, White sleeves');
+    expect(found.map((c) => c.canonical)).toEqual(['Red', 'White']);
+  });
+
+  it('stops at the requested max even when more colours are mentioned', () => {
+    const found = detectColours('Red White Blue Shirt', 2);
+    expect(found).toHaveLength(2);
+  });
+
+  it('surfaces an unmapped colour as unmapped rather than dropping it silently', () => {
+    const found = detectColours('Teal and Turquoise Shirt');
+    expect(found[0]).toEqual({ raw: 'teal', canonical: null });
+  });
+});
+
+describe('detectStockStatus', () => {
+  it('treats a quantity of 0 as out of stock regardless of text', () => {
+    expect(detectStockStatus('Add to cart', 0)).toBe('Out of Stock');
+  });
+
+  it('treats a positive quantity as in stock', () => {
+    expect(detectStockStatus(null, 3)).toBe('In Stock');
+  });
+
+  it('recognises "sold out" / "out of stock" text', () => {
+    expect(detectStockStatus('SOLD OUT')).toBe('Out of Stock');
+    expect(detectStockStatus('Currently out of stock')).toBe('Out of Stock');
+  });
+
+  it('recognises "in stock" / add-to-cart text', () => {
+    expect(detectStockStatus('In Stock - ships today')).toBe('In Stock');
+    expect(detectStockStatus('Add to Basket')).toBe('In Stock');
+  });
+
+  it('prefers "sold out" over a lingering add-to-cart button', () => {
+    expect(detectStockStatus('Add to Cart (Sold Out)')).toBe('Out of Stock');
+  });
+
+  it('returns null rather than guessing when there is no signal at all', () => {
+    expect(detectStockStatus('A lovely vintage shirt')).toBeNull();
+  });
+});
+
 describe('buildKickioProfile', () => {
   it('maps a full worked example (Man Utd 2012-13 away shirt) matching the guide', () => {
     const profile = buildKickioProfile({
@@ -163,6 +220,57 @@ describe('buildKickioProfile', () => {
     expect(profile.listing.colour).toBe('Blue');
     expect(profile.custom_attributes['jacket-style']).toBe('Track Jacket');
     expect(profile.confidence['custom_attributes.jacket-style']).toBe('certain');
+  });
+
+  it('detects the main two colours from free text when no explicit colour field is given', () => {
+    const profile = buildKickioProfile({
+      url: 'https://example.com/item/colours',
+      title: 'Arsenal 2020-21 Red White Home Shirt',
+      extracted: { team: 'Arsenal' },
+    });
+    expect(profile.listing.colour).toBe('Red');
+    expect(profile.listing.colour_secondary).toBe('White');
+  });
+
+  it('splits an explicit comma/slash-separated colour field into the two mapped colours', () => {
+    const profile = buildKickioProfile({
+      url: 'https://example.com/item/colours-2',
+      title: 'Arsenal 2020-21 Home Shirt',
+      extracted: { team: 'Arsenal', colour: 'Red/White' },
+    });
+    expect(profile.listing.colour).toBe('Red');
+    expect(profile.listing.colour_secondary).toBe('White');
+  });
+
+  it('reports stock status from a quantity of 0, an explicit field, or page text - never guessed', () => {
+    const outOfStockByQuantity = buildKickioProfile({
+      url: 'https://example.com/item/stock-1',
+      title: 'Arsenal 2020-21 Home Shirt',
+      extracted: { team: 'Arsenal' },
+      quantity: 0,
+    });
+    expect(outOfStockByQuantity.listing.stock_status).toBe('Out of Stock');
+
+    const outOfStockByField = buildKickioProfile({
+      url: 'https://example.com/item/stock-2',
+      title: 'Arsenal 2020-21 Home Shirt',
+      extracted: { team: 'Arsenal', availability: 'Out of stock' },
+    });
+    expect(outOfStockByField.listing.stock_status).toBe('Out of Stock');
+
+    const inStock = buildKickioProfile({
+      url: 'https://example.com/item/stock-3',
+      title: 'Arsenal 2020-21 Home Shirt - In Stock',
+      extracted: { team: 'Arsenal' },
+    });
+    expect(inStock.listing.stock_status).toBe('In Stock');
+
+    const unknown = buildKickioProfile({
+      url: 'https://example.com/item/stock-4',
+      title: 'Arsenal 2020-21 Home Shirt',
+      extracted: { team: 'Arsenal' },
+    });
+    expect(unknown.listing.stock_status).toBeNull();
   });
 
   it('never invents a team - flags for review instead of guessing when nothing is recoverable', () => {

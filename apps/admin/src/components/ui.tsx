@@ -178,8 +178,18 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
           <ProfileField label="Size" value={listing.size} />
           <ProfileField label="Manufacturer" value={listing.manufacturer} />
           <ProfileField label="Colour" value={listing.colour} />
+          <ProfileField label="Colour 2" value={listing.colour_secondary} />
           <ProfileField label="Boxed" value={listing.boxed_edition} />
           <ProfileField label="Price" value={listing.price != null ? `${listing.price} ${listing.currency ?? ''}`.trim() : null} />
+          {listing.stock_status && (
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                listing.stock_status === 'In Stock' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}
+            >
+              {listing.stock_status}
+            </span>
+          )}
           {Object.entries(custom_attributes).map(([k, v]) => (
             <ProfileField
               key={k}
