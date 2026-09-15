@@ -1,13 +1,17 @@
 import { XMLParser } from 'fast-xml-parser';
 import { randomUserAgent } from './userAgents.js';
 import { getSitemapUrls } from './robots.js';
+import { safeFetch } from './urlSafety.js';
 
 const parser = new XMLParser({ ignoreAttributes: false });
 const MAX_NESTED_SITEMAPS = 50;
 
+// Nested sitemap URLs come straight out of another site's XML, so they're
+// attacker-influenced, not just the original caller-supplied URL - each one
+// gets the same SSRF validation as any other fetch target.
 async function fetchText(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: { 'User-Agent': randomUserAgent() },
       signal: AbortSignal.timeout(15_000),
     });

@@ -1,8 +1,10 @@
+import type { Page } from 'playwright';
 import { ACCEPT_HEADER, ACCEPT_LANGUAGE, randomUserAgent } from './userAgents.js';
 import { isBlockPage } from './blockDetector.js';
 import { getBrowser } from './browser.js';
 import { acquireSlot } from './rateLimiter.js';
 import { getCrawlDelay, isAllowedByRobots } from './robots.js';
+import { assertSafeUrl, safeFetch, UnsafeUrlError } from './urlSafety.js';
 import { config } from '../config.js';
 
 export interface FetchOptions {
@@ -24,13 +26,12 @@ export interface FetchResult {
 }
 
 async function fetchWithHttp(url: string, userAgent: string): Promise<FetchResult> {
-  const res = await fetch(url, {
+  const res = await safeFetch(url, {
     headers: {
       'User-Agent': userAgent,
       Accept: ACCEPT_HEADER,
       'Accept-Language': ACCEPT_LANGUAGE,
     },
-    redirect: 'follow',
     signal: AbortSignal.timeout(20_000),
   });
   const html = await res.text();
@@ -41,6 +42,28 @@ async function fetchWithHttp(url: string, userAgent: string): Promise<FetchResul
     finalUrl: res.url || url,
     blocked: isBlockPage(res.status, html),
   };
+}
+
+/**
+ * Blocks navigation (including server-side redirects Chromium follows on
+ * its own) to anything but a validated public http(s) URL - `page.goto`
+ * alone would happily follow a redirect chain into a private address even
+ * when the original URL was safe.
+ */
+export async function guardNavigation(page: Page): Promise<void> {
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    if (request.resourceType() !== 'document') {
+      await route.continue();
+      return;
+    }
+    try {
+      await assertSafeUrl(request.url());
+      await route.continue();
+    } catch {
+      await route.abort();
+    }
+  });
 }
 
 async function fetchWithBrowser(
@@ -57,6 +80,7 @@ async function fetchWithBrowser(
   });
   try {
     const page = await context.newPage();
+    await guardNavigation(page);
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     if (waitFor > 0) await page.waitForTimeout(waitFor);
     const html = await page.content();
@@ -79,6 +103,19 @@ async function fetchWithBrowser(
  * request is blocked (403/challenge page), retries once via Playwright.
  */
 export async function fetchPage(url: string, opts: FetchOptions = {}): Promise<FetchResult> {
+  try {
+    await assertSafeUrl(url);
+  } catch (err) {
+    return {
+      html: '',
+      statusCode: 0,
+      usedBrowser: false,
+      finalUrl: url,
+      blocked: false,
+      error: err instanceof UnsafeUrlError ? err.message : 'Unsafe URL',
+    };
+  }
+
   const userAgent = opts.userAgent ?? config.defaultUserAgent;
   const domain = new URL(url).hostname;
 

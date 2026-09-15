@@ -1,5 +1,6 @@
 import robotsParser from 'robots-parser';
 import { randomUserAgent } from './userAgents.js';
+import { safeFetch } from './urlSafety.js';
 
 interface Robot {
   isAllowed(url: string, userAgent: string): boolean | undefined;
@@ -14,7 +15,7 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 async function fetchRobots(origin: string): Promise<Robot | null> {
   const url = `${origin}/robots.txt`;
   try {
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: { 'User-Agent': randomUserAgent() },
       signal: AbortSignal.timeout(10_000),
     });
