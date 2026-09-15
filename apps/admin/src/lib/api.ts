@@ -13,7 +13,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...options,
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
+      // Fastify rejects a request outright when Content-Type is JSON but the
+      // body is empty (e.g. a bodyless POST like "run map" or "log out"), so
+      // this header is only sent when there's actually a body to describe.
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...options.headers,
     },
   });
