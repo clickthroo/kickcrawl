@@ -5,6 +5,27 @@ export class UnsafeUrlError extends Error {}
 
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
+// dns.lookup() has no timeout of its own - unlike every fetch() call in
+// this codebase, which all pass an explicit AbortSignal.timeout(...). A
+// slow/unresponsive resolver for a given domain (some container network
+// setups degrade IPv6 AAAA lookups particularly badly) hangs this
+// indefinitely with nothing to catch it, and assertSafeUrl() runs this on
+// every fetch (and every redirect hop, and the robots.txt fetch), so one
+// slow-resolving domain can freeze an entire crawl job forever.
+const DNS_LOOKUP_TIMEOUT_MS = 8_000;
+
+async function lookupWithTimeout(hostname: string): Promise<{ address: string }[]> {
+  return await Promise.race([
+    lookup(hostname, { all: true }),
+    new Promise<{ address: string }[]>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`DNS lookup for "${hostname}" timed out after ${DNS_LOOKUP_TIMEOUT_MS}ms`)),
+        DNS_LOOKUP_TIMEOUT_MS,
+      ),
+    ),
+  ]);
+}
+
 /** Loopback, link-local (includes 169.254.169.254 cloud metadata), private, and unspecified ranges. */
 function isDisallowedIp(ip: string): boolean {
   if (isIP(ip) === 4) {
@@ -56,7 +77,7 @@ export async function assertSafeUrl(rawUrl: string): Promise<URL> {
 
   let addresses: { address: string }[];
   try {
-    addresses = await lookup(hostname, { all: true });
+    addresses = await lookupWithTimeout(hostname);
   } catch {
     throw new UnsafeUrlError(`Could not resolve host "${hostname}"`);
   }

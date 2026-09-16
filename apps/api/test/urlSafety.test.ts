@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertSafeUrl, UnsafeUrlError } from '../src/services/urlSafety.js';
 
 describe('assertSafeUrl', () => {
@@ -33,5 +33,33 @@ describe('assertSafeUrl', () => {
     await expect(
       assertSafeUrl('http://this-host-should-never-resolve.invalid/'),
     ).rejects.toThrow(UnsafeUrlError);
+  });
+});
+
+describe('assertSafeUrl DNS lookup timeout', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('fails closed instead of hanging forever when the DNS lookup never resolves', async () => {
+    // dns.promises.lookup() has no timeout of its own - a hung resolver
+    // for a real domain would otherwise freeze every fetch (and every
+    // redirect hop, and the robots.txt check) that goes through
+    // assertSafeUrl indefinitely, which is exactly what happened in
+    // production. Mock it to never resolve and confirm assertSafeUrl
+    // still rejects within its own bounded timeout rather than hanging.
+    vi.useFakeTimers();
+    vi.doMock('node:dns/promises', () => ({ lookup: () => new Promise(() => {}) }));
+
+    const { assertSafeUrl: assertSafeUrlFresh, UnsafeUrlError: UnsafeUrlErrorFresh } = await import(
+      '../src/services/urlSafety.js'
+    );
+
+    const pending = assertSafeUrlFresh('http://slow-dns-example.test/');
+    const assertion = expect(pending).rejects.toThrow(UnsafeUrlErrorFresh);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
   });
 });
