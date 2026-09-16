@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { pool } from './db.js';
 import { runMigrations } from './lib/migrate.js';
+import { recoverOrphanedJobs } from './lib/jobRecords.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 
@@ -19,6 +20,11 @@ async function bootstrapAdminUser(): Promise<void> {
 async function main(): Promise<void> {
   await runMigrations(pool);
   await bootstrapAdminUser();
+
+  const recovered = await recoverOrphanedJobs();
+  if (recovered > 0) {
+    console.log(`[recovery] marked ${recovered} orphaned job(s) as failed`);
+  }
 
   const worker = startCrawlWorker();
   const app = await buildApp();
