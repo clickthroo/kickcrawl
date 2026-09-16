@@ -28,6 +28,21 @@ interface SiteRow {
   use_browser_default: boolean;
 }
 
+// Repeatedly clicking "Run crawl"/"Crawl all sites" before an earlier
+// crawl for the same site finishes used to queue a fresh duplicate every
+// time. The per-domain rate limiter (services/rateLimiter.ts) is shared
+// across all jobs hitting that domain, not per-job, so N concurrent
+// crawls for the same site don't run N times faster - they just take
+// turns sharing the same one-request-per-interval budget, making every
+// one of them look stuck.
+async function hasActiveCrawl(siteId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM jobs WHERE site_id = $1 AND type = 'crawl' AND status IN ('queued', 'running') LIMIT 1`,
+    [siteId],
+  );
+  return rows.length > 0;
+}
+
 function crawlPayloadForSite(site: SiteRow) {
   return {
     url: site.base_url,
@@ -161,9 +176,13 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     const site = rows[0];
     if (!site) return reply.code(404).send({ success: false, error: 'Site not found' });
 
+    if (await hasActiveCrawl(site.id)) {
+      return reply.code(409).send({ success: false, error: 'A crawl is already queued or running for this site' });
+    }
+
     const payload = crawlPayloadForSite(site);
     const jobId = await createJob('crawl', site.id, payload, 'queued');
-    await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload });
+    await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload }, { jobId });
 
     return reply.send({ success: true, jobId });
   });
@@ -178,13 +197,18 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     const { rows } = await pool.query('SELECT * FROM sites WHERE is_active = true');
 
     const jobIds: string[] = [];
+    let skipped = 0;
     for (const site of rows) {
+      if (await hasActiveCrawl(site.id)) {
+        skipped += 1;
+        continue;
+      }
       const payload = crawlPayloadForSite(site);
       const jobId = await createJob('crawl', site.id, payload, 'queued');
-      await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload });
+      await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload }, { jobId });
       jobIds.push(jobId);
     }
 
-    return reply.send({ success: true, jobIds, total: jobIds.length });
+    return reply.send({ success: true, jobIds, total: jobIds.length, skipped });
   });
 }

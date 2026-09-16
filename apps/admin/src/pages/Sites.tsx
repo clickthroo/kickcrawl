@@ -21,6 +21,7 @@ export default function Sites() {
   const [sites, setSites] = useState<Site[] | null>(null);
   const [crawlingAll, setCrawlingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   function reload() {
     api.get<{ success: boolean; sites: Site[] }>('/admin/sites').then((res) => setSites(res.sites));
@@ -31,8 +32,18 @@ export default function Sites() {
   async function crawlAll() {
     setCrawlingAll(true);
     setError(null);
+    setMessage(null);
     try {
-      await api.post<{ success: boolean; jobIds: string[]; total: number }>('/admin/sites/crawl-all');
+      const res = await api.post<{ success: boolean; jobIds: string[]; total: number; skipped: number }>(
+        '/admin/sites/crawl-all',
+      );
+      if (res.total === 0) {
+        // Every active site already has a crawl queued/running - starting
+        // another wouldn't run any faster (they'd just share the same
+        // per-site rate limit), so nothing new was queued.
+        setMessage('Every active site already has a crawl in progress - nothing new to start.');
+        return;
+      }
       navigate('/jobs?type=crawl');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to start crawls');
@@ -66,6 +77,11 @@ export default function Sites() {
       />
 
       {error && <ErrorBanner message={error} />}
+      {message && (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+          {message}
+        </div>
+      )}
 
       {sites.length === 0 && (
         <Card>
