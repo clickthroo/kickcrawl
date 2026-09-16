@@ -193,7 +193,24 @@ export function startCrawlWorker(): Worker<CrawlJobData> {
         throw err;
       }
     },
-    { connection: redisConnection, concurrency: 3 },
+    {
+      connection: redisConnection,
+      concurrency: 3,
+      // recoverOrphanedJobs() (lib/jobRecords.ts) marks any job still
+      // 'running' at boot as 'failed', on the assumption that a
+      // single-instance app never has a live process to resume it. But
+      // BullMQ has its own, independent stalled-job recovery: by default
+      // (maxStalledCount: 1) it silently retries a job whose worker died
+      // without renewing its lock, re-invoking this same processor from
+      // scratch and flipping status back to 'running' underneath our
+      // sweep - so a job we'd already declared dead keeps coming back,
+      // each restart appending another "interrupted" error while it's
+      // actually still executing. maxStalledCount: 0 makes BullMQ treat a
+      // stalled job as failed immediately instead of retrying it, so
+      // there's nothing left to resurrect a job our own sweep already
+      // buried.
+      maxStalledCount: 0,
+    },
   );
   worker.on('failed', (job, err) => {
     console.error(`[crawlWorker] job ${job?.id} failed:`, err);
