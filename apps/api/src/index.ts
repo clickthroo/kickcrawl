@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import { pool } from './db.js';
 import { runMigrations } from './lib/migrate.js';
-import { deduplicateQueuedCrawls, recoverOrphanedJobs } from './lib/jobRecords.js';
+import { deduplicateQueuedCrawls, recoverOrphanedJobs, recoverStaleQueuedJobs } from './lib/jobRecords.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 
@@ -29,6 +29,11 @@ async function main(): Promise<void> {
   const deduplicated = await deduplicateQueuedCrawls();
   if (deduplicated > 0) {
     console.log(`[recovery] marked ${deduplicated} duplicate queued crawl(s) as failed`);
+  }
+
+  const stale = await recoverStaleQueuedJobs();
+  if (stale > 0) {
+    console.log(`[recovery] marked ${stale} stale queued crawl(s) as failed`);
   }
 
   const worker = startCrawlWorker();
