@@ -32,3 +32,56 @@ describe('recoverOrphanedJobs', () => {
     expect(await recoverOrphanedJobs()).toBe(0);
   });
 });
+
+describe('deduplicateQueuedCrawls', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('removes older duplicate queued crawls from both Postgres and the BullMQ queue', async () => {
+    // Failing the Postgres row alone isn't enough - the duplicate's
+    // underlying BullMQ job is still sitting in Redis's queue and would
+    // still get picked up and processed regardless of what the row says.
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id FROM')) {
+        return { rows: [{ id: 'old-job-1' }, { id: 'old-job-2' }] };
+      }
+      return { rowCount: 1 }; // failJob()'s own UPDATE
+    });
+    const remove = vi.fn(async () => undefined);
+    const getJob = vi.fn(async () => ({ remove }));
+
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob } }));
+
+    const { deduplicateQueuedCrawls } = await import('../src/lib/jobRecords.js');
+    const removed = await deduplicateQueuedCrawls();
+
+    expect(removed).toBe(2);
+    expect(getJob).toHaveBeenCalledWith('old-job-1');
+    expect(getJob).toHaveBeenCalledWith('old-job-2');
+    expect(remove).toHaveBeenCalledTimes(2);
+  });
+
+  it('still fails the Postgres row when its BullMQ job is already gone', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id FROM')) return { rows: [{ id: 'ghost-job' }] };
+      return { rowCount: 1 };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob: vi.fn(async () => undefined) } }));
+
+    const { deduplicateQueuedCrawls } = await import('../src/lib/jobRecords.js');
+    await expect(deduplicateQueuedCrawls()).resolves.toBe(1);
+  });
+
+  it('returns 0 when there are no duplicates', async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob: vi.fn() } }));
+
+    const { deduplicateQueuedCrawls } = await import('../src/lib/jobRecords.js');
+    expect(await deduplicateQueuedCrawls()).toBe(0);
+  });
+});

@@ -31,16 +31,20 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
     const site = await getOrCreateSiteForUrl(body.url);
 
     const jobId = await createJob('crawl', site.id, body, 'queued');
-    await crawlQueue.add('crawl', {
-      jobId,
-      siteId: site.id,
-      url: body.url,
-      limit: body.limit,
-      maxDepth: body.maxDepth,
-      includePaths: body.includePaths,
-      excludePaths: body.excludePaths,
-      scrapeOptions: body.scrapeOptions,
-    });
+    await crawlQueue.add(
+      'crawl',
+      {
+        jobId,
+        siteId: site.id,
+        url: body.url,
+        limit: body.limit,
+        maxDepth: body.maxDepth,
+        includePaths: body.includePaths,
+        excludePaths: body.excludePaths,
+        scrapeOptions: body.scrapeOptions,
+      },
+      { jobId },
+    );
 
     return reply.send({ success: true, jobId, status: 'queued' });
   });

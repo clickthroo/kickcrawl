@@ -108,16 +108,20 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
 
     const payload = job.payload;
     const newJobId = await createJob('crawl', job.site_id, payload, 'queued');
-    await crawlQueue.add('crawl', {
-      jobId: newJobId,
-      siteId: job.site_id,
-      url: payload.url,
-      limit: payload.limit,
-      maxDepth: payload.maxDepth,
-      includePaths: payload.includePaths ?? [],
-      excludePaths: payload.excludePaths ?? [],
-      scrapeOptions: payload.scrapeOptions ?? {},
-    });
+    await crawlQueue.add(
+      'crawl',
+      {
+        jobId: newJobId,
+        siteId: job.site_id,
+        url: payload.url,
+        limit: payload.limit,
+        maxDepth: payload.maxDepth,
+        includePaths: payload.includePaths ?? [],
+        excludePaths: payload.excludePaths ?? [],
+        scrapeOptions: payload.scrapeOptions ?? {},
+      },
+      { jobId: newJobId },
+    );
 
     return reply.send({ success: true, jobId: newJobId });
   });
