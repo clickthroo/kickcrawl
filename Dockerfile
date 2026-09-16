@@ -21,6 +21,13 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
+# npm workspaces doesn't always hoist every dependency to the root
+# node_modules above - which package lands where depends on version
+# ranges across the whole tree, so it isn't something to rely on staying
+# put. Copy apps/api's own node_modules too so anything npm placed there
+# instead (e.g. playwright, whose exact pinned version needs to match
+# this image's bundled Chromium build) still resolves at runtime.
+COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build /app/apps/admin/dist ./apps/admin/dist
 
 EXPOSE 3000
