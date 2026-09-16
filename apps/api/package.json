@@ -20,7 +20,7 @@
     "ioredis": "^5.4.1",
     "cheerio": "^1.0.0",
     "turndown": "^7.2.0",
-    "playwright": "^1.48.2",
+    "playwright": "1.48.0",
     "bcryptjs": "^2.4.3",
     "uuid": "^9.0.1",
     "dotenv": "^16.4.5",
