@@ -25,15 +25,20 @@ export interface FetchResult {
   error?: string;
 }
 
-async function fetchWithHttp(url: string, userAgent: string): Promise<FetchResult> {
-  const res = await safeFetch(url, {
-    headers: {
-      'User-Agent': userAgent,
-      Accept: ACCEPT_HEADER,
-      'Accept-Language': ACCEPT_LANGUAGE,
+async function fetchWithHttp(url: string, userAgent: string, proxyUrl?: string): Promise<FetchResult> {
+  const res = await safeFetch(
+    url,
+    {
+      headers: {
+        'User-Agent': userAgent,
+        Accept: ACCEPT_HEADER,
+        'Accept-Language': ACCEPT_LANGUAGE,
+      },
+      signal: AbortSignal.timeout(20_000),
     },
-    signal: AbortSignal.timeout(20_000),
-  });
+    5,
+    proxyUrl,
+  );
   const html = await res.text();
   return {
     html,
@@ -152,7 +157,7 @@ export async function fetchPage(url: string, opts: FetchOptions = {}): Promise<F
   }
 
   try {
-    const result = await fetchWithHttp(url, userAgent);
+    const result = await fetchWithHttp(url, userAgent, opts.proxyUrl);
     if (!result.blocked) return result;
     // Blocked - fall through to browser retry below.
   } catch (err) {

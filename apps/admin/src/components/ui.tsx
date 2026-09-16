@@ -236,7 +236,17 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
           <ProfileField label="Colour" value={listing.colour} />
           <ProfileField label="Colour 2" value={listing.colour_secondary} />
           <ProfileField label="Boxed" value={listing.boxed_edition} />
-          <ProfileField label="Price" value={listing.price != null ? `${listing.price} ${listing.currency ?? ''}`.trim() : null} />
+          <ProfileField
+            label="Price"
+            value={listing.price != null ? `${listing.price} ${listing.currency ?? ''}`.trim() : null}
+            confident={confidence.price !== 'inferred'}
+          />
+          {listing.original_price != null && listing.original_currency && (
+            <span className="max-w-full rounded-full bg-slate-50 px-2 py-0.5 text-xs text-slate-400">
+              ≈ {listing.original_price} {listing.original_currency}
+              {listing.fx_rate_used != null && ` at ${listing.fx_rate_used}`}
+            </span>
+          )}
           {listing.stock_status && (
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${

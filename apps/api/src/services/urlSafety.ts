@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import { ProxyAgent } from 'undici';
 
 export class UnsafeUrlError extends Error {}
 
@@ -91,21 +92,43 @@ export async function assertSafeUrl(rawUrl: string): Promise<URL> {
   return url;
 }
 
+// Reused across calls sharing the same proxy URL rather than opening a new
+// pool connection per request - ProxyAgent instances are safe to share.
+const proxyAgents = new Map<string, ProxyAgent>();
+
+function getProxyAgent(proxyUrl: string): ProxyAgent {
+  let agent = proxyAgents.get(proxyUrl);
+  if (!agent) {
+    agent = new ProxyAgent(proxyUrl);
+    proxyAgents.set(proxyUrl, agent);
+  }
+  return agent;
+}
+
 /**
  * fetch() wrapper that validates the target (and every redirect hop) is a
  * public http(s) address before following it - `fetch`'s own
  * `redirect: 'follow'` does not re-validate hosts between hops, which would
  * otherwise let a malicious/compromised site redirect the crawler internally.
+ *
+ * `proxyUrl`, when given, routes the request through it via undici's
+ * ProxyAgent - Node's global `fetch` has no proxy support of its own. A
+ * site's own geolocation (Shopify Markets and similar picking a currency,
+ * language, or price tier from the request's IP) otherwise always sees
+ * wherever this server happens to be hosted, not the region a real
+ * customer of that site would be browsing from.
  */
 export async function safeFetch(
   rawUrl: string,
   init: RequestInit = {},
   maxRedirects = 5,
+  proxyUrl?: string,
 ): Promise<Response> {
+  const dispatcher = proxyUrl ? getProxyAgent(proxyUrl) : undefined;
   let currentUrl = rawUrl;
   for (let i = 0; i <= maxRedirects; i++) {
     await assertSafeUrl(currentUrl);
-    const res = await fetch(currentUrl, { ...init, redirect: 'manual' });
+    const res = await fetch(currentUrl, { ...init, redirect: 'manual', dispatcher } as RequestInit);
     const location = res.headers.get('location');
     if (res.status >= 300 && res.status < 400 && location) {
       currentUrl = new URL(location, currentUrl).toString();

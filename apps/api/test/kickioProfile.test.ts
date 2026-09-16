@@ -461,4 +461,84 @@ describe('buildKickioProfile', () => {
     });
     expect(profile.listing.manufacturer).toBe('Totally Unknown Brand');
   });
+
+  describe('GBP price conversion', () => {
+    it('converts a USD price to GBP using the configured rate, keeping the original for reference', () => {
+      const profile = buildKickioProfile({
+        url: 'https://example.com/item/usd-1',
+        title: 'Some Team 2020-21 Home Shirt',
+        extracted: { team: 'Some Team' },
+        price: 59.99,
+        currency: 'USD',
+        currencyRates: { USD: 0.75 },
+      });
+      expect(profile.listing.price).toBeCloseTo(44.99, 2);
+      expect(profile.listing.currency).toBe('GBP');
+      expect(profile.listing.original_price).toBe(59.99);
+      expect(profile.listing.original_currency).toBe('USD');
+      expect(profile.listing.fx_rate_used).toBe(0.75);
+      expect(profile.confidence.price).toBe('inferred');
+    });
+
+    it('leaves a price as-scraped, and flags for review, when no rate is configured for its currency', () => {
+      const profile = buildKickioProfile({
+        url: 'https://example.com/item/cad-1',
+        title: 'Some Team 2020-21 Home Shirt',
+        extracted: { team: 'Some Team' },
+        price: 79.99,
+        currency: 'CAD',
+        currencyRates: { USD: 0.75 },
+      });
+      expect(profile.listing.price).toBe(79.99);
+      expect(profile.listing.currency).toBe('CAD');
+      expect(profile.listing.original_price).toBeNull();
+      expect(profile.listing.original_currency).toBeNull();
+      expect(profile.listing.fx_rate_used).toBeNull();
+      expect(profile.needs_review).toBe(true);
+      expect(profile.review_reason).toMatch(/no GBP conversion rate configured for currency "CAD"/);
+    });
+
+    it('does nothing when the price is already GBP, even with rates configured', () => {
+      const profile = buildKickioProfile({
+        url: 'https://example.com/item/gbp-1',
+        title: 'Some Team 2020-21 Home Shirt',
+        extracted: { team: 'Some Team' },
+        price: 44.99,
+        currency: 'GBP',
+        currencyRates: { USD: 0.75 },
+      });
+      expect(profile.listing.price).toBe(44.99);
+      expect(profile.listing.currency).toBe('GBP');
+      expect(profile.listing.original_price).toBeNull();
+      expect(profile.listing.original_currency).toBeNull();
+      expect(profile.listing.fx_rate_used).toBeNull();
+      expect(profile.confidence.price).toBeUndefined();
+    });
+
+    it('does nothing when there is no price at all - nothing to convert', () => {
+      const profile = buildKickioProfile({
+        url: 'https://example.com/item/no-price',
+        title: 'Some Team 2020-21 Home Shirt',
+        extracted: { team: 'Some Team' },
+        currency: 'USD',
+        currencyRates: { USD: 0.75 },
+      });
+      expect(profile.listing.price).toBeNull();
+      expect(profile.listing.original_price).toBeNull();
+      expect(profile.needs_review).toBe(false);
+    });
+
+    it('matches the currency code case-insensitively against the rates map', () => {
+      const profile = buildKickioProfile({
+        url: 'https://example.com/item/usd-lower',
+        title: 'Some Team 2020-21 Home Shirt',
+        extracted: { team: 'Some Team' },
+        price: 100,
+        currency: 'usd',
+        currencyRates: { USD: 0.8 },
+      });
+      expect(profile.listing.price).toBe(80);
+      expect(profile.listing.currency).toBe('GBP');
+    });
+  });
 });

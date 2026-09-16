@@ -4,6 +4,7 @@ import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { crawlQueue } from '../../queue.js';
 import { createJob } from '../../lib/jobRecords.js';
 import { buildKickioProfile } from '../../services/kickioProfile.js';
+import { getCurrencyRates } from '../../lib/currencyRates.js';
 
 export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
@@ -82,6 +83,7 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
     // team/season/type/condition/etc mapped per the shirt mapping guide -
     // so an admin can see how it would map without Kickcrawl ever writing
     // to Kickio's own database.
+    const currencyRates = await getCurrencyRates();
     const pagesWithProfile = pages.map((p) => ({
       ...p,
       profile: buildKickioProfile({
@@ -91,6 +93,7 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
         images: [p.image],
         extracted: p.extracted,
         scrapedAt: p.fetched_at,
+        currencyRates,
       }),
     }));
 
