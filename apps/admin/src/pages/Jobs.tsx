@@ -31,6 +31,7 @@ export default function Jobs() {
             <option value="map">Map</option>
             <option value="crawl">Crawl</option>
             <option value="extract">Extract</option>
+            <option value="recheck">Recheck</option>
           </Select>
         </div>
         <div className="sm:w-44">

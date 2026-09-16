@@ -4,6 +4,7 @@ import { runMigrations } from './lib/migrate.js';
 import { deduplicateQueuedCrawls, recoverOrphanedJobs, recoverStaleQueuedJobs } from './lib/jobRecords.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
+import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -37,6 +38,9 @@ async function main(): Promise<void> {
   }
 
   const worker = startCrawlWorker();
+  const recheckWorker = startRecheckWorker();
+  await scheduleRecheck();
+
   const app = await buildApp();
 
   await app.listen({ host: '0.0.0.0', port: config.port });
@@ -45,6 +49,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     await app.close();
     await worker.close();
+    await recheckWorker.close();
     await pool.end();
     process.exit(0);
   };

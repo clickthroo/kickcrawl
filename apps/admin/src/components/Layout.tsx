@@ -50,6 +50,15 @@ function IconItems(props: IconProps) {
   );
 }
 
+function IconSales(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 15.5 9.5 10l4 4 6.5-6.5" />
+      <path d="M15 7.5h5v5" />
+    </IconBase>
+  );
+}
+
 function IconJobs(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -102,6 +111,7 @@ const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', tabLabel: 'Home', icon: IconDashboard, end: true },
   { to: '/sites', label: 'Sites', tabLabel: 'Sites', icon: IconSites, end: false },
   { to: '/items', label: 'Items', tabLabel: 'Items', icon: IconItems, end: false },
+  { to: '/sales', label: 'Sales', tabLabel: 'Sales', icon: IconSales, end: false },
   { to: '/jobs', label: 'Jobs', tabLabel: 'Jobs', icon: IconJobs, end: false },
   { to: '/api-keys', label: 'API Keys', tabLabel: 'Keys', icon: IconKey, end: false },
   { to: '/settings', label: 'Settings', tabLabel: 'Settings', icon: IconSettings, end: false },
