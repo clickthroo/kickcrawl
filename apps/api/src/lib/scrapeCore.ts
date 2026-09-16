@@ -5,6 +5,7 @@ import { getContentHtml } from '../services/mainContent.js';
 import { htmlToMarkdown } from '../services/markdown.js';
 import { extractLinks } from '../services/links.js';
 import { extractBySelectors, type SelectorMap } from '../services/extractor.js';
+import { extractStructuredProductData } from '../services/structuredData.js';
 import type { SiteConfig } from './siteResolver.js';
 
 export type ScrapeFormat = 'markdown' | 'html' | 'links' | 'screenshot';
@@ -73,9 +74,21 @@ export async function scrapePage(
   if (formats.includes('links')) out.links = extractLinks($, finalResult.finalUrl);
 
   const selectors = { ...(site?.default_selectors ?? {}), ...(opts.selectors ?? {}) };
-  if (Object.keys(selectors).length > 0) {
-    out.extracted = extractBySelectors(finalResult.html, selectors, finalResult.finalUrl);
-  }
+  const extracted =
+    Object.keys(selectors).length > 0 ? extractBySelectors(finalResult.html, selectors, finalResult.finalUrl) : {};
+
+  // A site-configured selector always wins (it was picked for a reason), but
+  // most sites won't have one - schema.org JSON-LD is the standard
+  // e-commerce SEO markup (Shopify, WooCommerce, Magento all emit it by
+  // default), so it fills price/currency/stock with real data instead of
+  // leaving every listing blank until someone hand-writes a CSS selector.
+  const structured = extractStructuredProductData(finalResult.html);
+  if (structured.price && !extracted.price) extracted.price = structured.price;
+  if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
+  if (structured.availability && !extracted.availability) extracted.availability = structured.availability;
+  if (structured.sku && !extracted.sku) extracted.sku = structured.sku;
+
+  if (Object.keys(extracted).length > 0) out.extracted = extracted;
 
   return out;
 }
