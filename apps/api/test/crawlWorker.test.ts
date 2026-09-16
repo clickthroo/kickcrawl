@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { filterTraversableLinks, isCrawlItem } from '../src/workers/crawlWorker.js';
 
 describe('filterTraversableLinks', () => {
@@ -56,5 +56,50 @@ describe('isCrawlItem', () => {
   it('an exact allowed_paths entry with no wildcard only matches that exact path', () => {
     expect(isCrawlItem('/products', ['/products'])).toBe(true);
     expect(isCrawlItem('/products/some-shirt', ['/products'])).toBe(false);
+  });
+});
+
+describe('scrapePageWithTimeout', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.doUnmock('../src/lib/scrapeCore.js');
+  });
+
+  it('resolves with the real result when scrapePage finishes well within the timeout', async () => {
+    const fastResult = { success: true, metadata: { sourceURL: 'https://example.com', statusCode: 200 } };
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: async () => fastResult }));
+
+    const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
+    const result = await scrapePageWithTimeout('https://example.com', {}, null);
+
+    expect(result).toBe(fastResult);
+  });
+
+  it('falls back to a timeout failure if the underlying scrape never settles', async () => {
+    // Every individual I/O call inside scrapePage() already has its own
+    // timeout, but this is the catch-all for anything that doesn't - e.g.
+    // a hang in browser.newContext() or context.close() that none of the
+    // inner guards cover. Simulate that by never resolving.
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: () => new Promise(() => {}) }));
+
+    const { scrapePageWithTimeout, PAGE_TIMEOUT_MS } = await import('../src/workers/crawlWorker.js');
+    const promise = scrapePageWithTimeout('https://example.com/stuck', {}, null);
+    await vi.advanceTimersByTimeAsync(PAGE_TIMEOUT_MS);
+    const result = await promise;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/timed out/i);
+    expect(result.metadata.sourceURL).toBe('https://example.com/stuck');
+  });
+
+  it('is generous enough not to mask legitimately slow (but working) pages', async () => {
+    const { PAGE_TIMEOUT_MS } = await import('../src/workers/crawlWorker.js');
+    expect(PAGE_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
   });
 });

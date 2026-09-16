@@ -55,6 +55,38 @@ async function recordPageResult(
   await persistScrapeResult(urlId, jobId, result);
 }
 
+// A catch-all safety net around the per-page fetch. Every individual I/O
+// call inside scrapePage() (DNS, robots.txt, the HTTP fetch, the browser
+// navigation) already has its own timeout, but that only helps if every
+// future code path in there remembers to add one too - a single page
+// hanging on some untimed corner (e.g. browser.newContext(),
+// context.close()) would otherwise freeze the whole job forever, since
+// the crawl loop is strictly sequential. 90s is generous enough to cover
+// the slowest legitimate case (a near-max robots Crawl-delay plus a
+// blocked-page browser retry) without masking a real hang for long.
+export const PAGE_TIMEOUT_MS = 90_000;
+
+export async function scrapePageWithTimeout(
+  url: string,
+  opts: Parameters<typeof scrapePage>[1],
+  site: Parameters<typeof scrapePage>[2],
+): Promise<ScrapeCoreResult> {
+  return await Promise.race([
+    scrapePage(url, opts, site),
+    new Promise<ScrapeCoreResult>((resolve) =>
+      setTimeout(
+        () =>
+          resolve({
+            success: false,
+            error: `Timed out after ${PAGE_TIMEOUT_MS}ms fetching this page`,
+            metadata: { sourceURL: url, statusCode: 0 },
+          }),
+        PAGE_TIMEOUT_MS,
+      ),
+    ),
+  ]);
+}
+
 async function fireWebhook(jobId: string, status: string): Promise<void> {
   if (!config.webhookUrl) return;
   try {
@@ -96,13 +128,16 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
 
     if (isItem) await markUrlQueued(siteId, next.url);
 
-    const result = await scrapePage(
+    console.log(
+      `[crawlWorker] job ${jobId} fetching ${next.url} (depth ${next.depth}, ${completed}/${limit} done, ${queue.length} queued)`,
+    );
+    const result = await scrapePageWithTimeout(
       next.url,
       { formats: scrapeOptions.formats ?? ['markdown'], onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser: scrapeOptions.useBrowser },
       site,
     );
-
     if (!result.success) {
+      console.log(`[crawlWorker] job ${jobId} failed ${next.url}: ${result.error}`);
       if (isItem) {
         errors.push(`${next.url}: ${result.error}`);
         await recordPageResult(siteId, jobId, next.url, result);
