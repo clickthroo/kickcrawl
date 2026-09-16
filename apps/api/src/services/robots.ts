@@ -47,11 +47,21 @@ export async function isAllowedByRobots(url: string, userAgent: string): Promise
   }
 }
 
+// Sites actively deterring scrapers sometimes set an extreme Crawl-delay
+// (minutes or more) specifically to make automated crawling impractical.
+// Honoring that number verbatim in the rate limiter (rateLimiter.ts) turns
+// "slow down" into "wait until this job outlives anyone watching it" -
+// capped so a single directive can slow a crawl down, never effectively
+// freeze it.
+const MAX_CRAWL_DELAY_SEC = 30;
+
 export async function getCrawlDelay(url: string, userAgent: string): Promise<number | undefined> {
   try {
     const origin = new URL(url).origin;
     const robot = await getRobots(origin);
-    return robot?.getCrawlDelay(userAgent) ?? undefined;
+    const delay = robot?.getCrawlDelay(userAgent);
+    if (delay === undefined) return undefined;
+    return Math.min(delay, MAX_CRAWL_DELAY_SEC);
   } catch {
     return undefined;
   }
