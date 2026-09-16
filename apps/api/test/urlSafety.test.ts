@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assertSafeUrl, UnsafeUrlError } from '../src/services/urlSafety.js';
+import { ProxyAgent } from 'undici';
+import { assertSafeUrl, safeFetch, UnsafeUrlError } from '../src/services/urlSafety.js';
 
 describe('assertSafeUrl', () => {
   it('rejects non-http(s) schemes', async () => {
@@ -61,5 +62,43 @@ describe('assertSafeUrl DNS lookup timeout', () => {
     const assertion = expect(pending).rejects.toThrow(UnsafeUrlErrorFresh);
     await vi.advanceTimersByTimeAsync(10_000);
     await assertion;
+  });
+});
+
+describe('safeFetch proxy support', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    // A real public IP, so assertSafeUrl's DNS check passes without a real
+    // network call - mirrors the "allows a normal public https URL" case.
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response('ok', { status: 200 }));
+  });
+
+  it('routes the request through a ProxyAgent when a proxyUrl is given', async () => {
+    // Node's global fetch has no proxy support of its own - a site's own
+    // geolocation (e.g. Shopify Markets picking a currency from the
+    // request's IP) otherwise always sees wherever this server is hosted,
+    // never the region a real customer would actually be browsing from.
+    await safeFetch('https://93.184.216.34/', {}, 5, 'http://proxy.example:8080');
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    expect((init as { dispatcher?: unknown }).dispatcher).toBeInstanceOf(ProxyAgent);
+  });
+
+  it('passes no dispatcher when no proxyUrl is given', async () => {
+    await safeFetch('https://93.184.216.34/');
+
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    expect((init as { dispatcher?: unknown }).dispatcher).toBeUndefined();
+  });
+
+  it('reuses the same ProxyAgent across calls to the same proxy URL', async () => {
+    await safeFetch('https://93.184.216.34/', {}, 5, 'http://proxy.example:8080');
+    await safeFetch('https://93.184.216.34/', {}, 5, 'http://proxy.example:8080');
+
+    const [[, firstInit], [, secondInit]] = vi.mocked(fetch).mock.calls;
+    expect((firstInit as { dispatcher?: unknown }).dispatcher).toBe(
+      (secondInit as { dispatcher?: unknown }).dispatcher,
+    );
   });
 });
