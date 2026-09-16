@@ -5,6 +5,7 @@ import { scrapePage } from '../../lib/scrapeCore.js';
 import { markUrlFetched } from '../../lib/urlStore.js';
 import { persistScrapeResult } from '../../lib/persistResult.js';
 import { buildKickioProfile, type KickioProfile } from '../../services/kickioProfile.js';
+import { getCurrencyRates } from '../../lib/currencyRates.js';
 
 /**
  * A profile field is free text (team names, player names, colours, etc),
@@ -104,6 +105,8 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    const currencyRates = await getCurrencyRates();
+
     const SCAN_LIMIT = 2000;
     const { rows } = await pool.query(
       `SELECT u.*, s.name AS site_name,
@@ -155,6 +158,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
                 images: [u.preview_image],
                 extracted: u.preview_extracted,
                 scrapedAt: u.last_fetched_at,
+                currencyRates,
               })
             : null,
       }))
@@ -185,6 +189,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
       conditions.push(`u.path ILIKE $${params.length}`);
     }
     const where = conditions.join(' AND ');
+    const currencyRates = await getCurrencyRates();
 
     const { rows } = await pool.query(
       `SELECT u.*, m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
@@ -231,6 +236,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
               images: [u.preview_image],
               extracted: u.preview_extracted,
               scrapedAt: u.last_fetched_at,
+              currencyRates,
             })
           : null,
     }));

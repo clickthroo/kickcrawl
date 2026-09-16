@@ -19,6 +19,7 @@ import { adminJobRoutes } from './routes/admin/jobs.js';
 import { adminApiKeyRoutes } from './routes/admin/apiKeys.js';
 import { adminSettingsRoutes } from './routes/admin/settings.js';
 import { adminStatsRoutes } from './routes/admin/stats.js';
+import { adminCurrencyRateRoutes } from './routes/admin/currencyRates.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(adminApiKeyRoutes);
   await app.register(adminSettingsRoutes);
   await app.register(adminStatsRoutes);
+  await app.register(adminCurrencyRateRoutes);
 
   // Serve the built admin UI (apps/admin/dist) as static files in production,
   // with a SPA fallback so client-side routes resolve on refresh.

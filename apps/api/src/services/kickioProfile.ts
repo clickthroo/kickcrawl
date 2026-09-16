@@ -36,8 +36,19 @@ export interface KickioListing {
   colour: string | null;
   colour_secondary: string | null;
   boxed_edition: string | null;
+  /** Always GBP-denominated - Kickio's own marketplace currency, converted from whatever the source site reported. */
   price: number | null;
   currency: string | null;
+  /**
+   * The listing's price/currency exactly as the source site reported it,
+   * before GBP conversion - kept for transparency, since the conversion
+   * uses an admin-maintained approximate rate, not a live/exact one. Both
+   * null when the site's own price was already GBP (nothing to convert).
+   */
+  original_price: number | null;
+  original_currency: string | null;
+  /** The rate_to_gbp actually applied, or null if no conversion happened. */
+  fx_rate_used: number | null;
   quantity: number | null;
   images: string[];
   /**
@@ -80,6 +91,14 @@ export interface KickioProfileInput {
   quantity?: number | null;
   /** Arbitrary site-configured selector/LLM fields, checked by common alias names. */
   extracted?: Record<string, string> | null;
+  /**
+   * Admin-maintained ISO currency code -> GBP conversion rate (1 unit of
+   * that currency = this many GBP), from the currency_rates table. A
+   * non-GBP price is converted using this when a rate for its currency is
+   * configured; left as-scraped (currency untouched) otherwise, since
+   * guessing a rate would violate this file's "never invent a value" rule.
+   */
+  currencyRates?: Record<string, number> | null;
 }
 
 // =========================================================================
@@ -1004,13 +1023,40 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     : extractSizeFromTitle(title);
 
   // ---- Price / currency / quantity ----
-  const price = input.price ?? (() => {
+  const rawPrice = input.price ?? (() => {
     const raw = caseInsensitiveGet(extracted, 'price');
     if (!raw) return null;
     const n = Number(raw.replace(/[^0-9.]/g, ''));
     return Number.isFinite(n) ? n : null;
   })();
-  const currency = input.currency ?? caseInsensitiveGet(extracted, 'currency') ?? 'GBP';
+  const rawCurrency = (input.currency ?? caseInsensitiveGet(extracted, 'currency') ?? 'GBP').toUpperCase();
+
+  // Kickio is a GBP-denominated UK marketplace - a listing priced in
+  // another currency gets converted using an admin-maintained approximate
+  // rate (currencyRates, from the currency_rates table) rather than shown
+  // in its original currency. This is deliberately not a live/exact FX
+  // rate - "never invent a value" still applies, so a currency with no
+  // configured rate is left as-scraped (and flagged for review) instead of
+  // guessing one.
+  let price = rawPrice;
+  let currency = rawCurrency;
+  let originalPrice: number | null = null;
+  let originalCurrency: string | null = null;
+  let fxRateUsed: number | null = null;
+  if (rawPrice != null && rawCurrency !== 'GBP') {
+    const rate = input.currencyRates?.[rawCurrency];
+    if (rate != null) {
+      price = Math.round(rawPrice * rate * 100) / 100;
+      currency = 'GBP';
+      originalPrice = rawPrice;
+      originalCurrency = rawCurrency;
+      fxRateUsed = rate;
+      confidence.price = 'inferred';
+    } else {
+      reviewReasons.push(`no GBP conversion rate configured for currency "${rawCurrency}"`);
+    }
+  }
+
   const quantity = input.quantity ?? 1;
 
   // ---- Stock status ----
@@ -1088,6 +1134,9 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       boxed_edition: boxed,
       price,
       currency,
+      original_price: originalPrice,
+      original_currency: originalCurrency,
+      fx_rate_used: fxRateUsed,
       quantity,
       images,
       stock_status: stockStatus,

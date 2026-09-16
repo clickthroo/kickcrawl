@@ -74,8 +74,13 @@ export interface KickioProfile {
     colour: string | null;
     colour_secondary: string | null;
     boxed_edition: string | null;
+    /** Always GBP - converted from the site's own currency using an admin-set rate, when needed. */
     price: number | null;
     currency: string | null;
+    /** The price/currency exactly as the source site reported it, before conversion - null when no conversion happened. */
+    original_price: number | null;
+    original_currency: string | null;
+    fx_rate_used: number | null;
     quantity: number | null;
     images: string[];
     stock_status: 'In Stock' | 'Out of Stock' | 'Unknown' | null;
@@ -108,6 +113,12 @@ export interface ApiKey {
   key_preview: string;
   last_used_at: string | null;
   created_at: string;
+}
+
+export interface CurrencyRate {
+  code: string;
+  rate_to_gbp: number;
+  updated_at: string;
 }
 
 export interface Settings {
