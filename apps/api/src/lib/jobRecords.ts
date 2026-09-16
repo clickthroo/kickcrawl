@@ -99,3 +99,33 @@ export async function deduplicateQueuedCrawls(): Promise<number> {
   }
   return rows.length;
 }
+
+/**
+ * Fails any 'queued' crawl job whose underlying BullMQ job no longer
+ * exists in Redis - it can never actually run (the worker will never pick
+ * it up), yet the Postgres row still counts as "active" to
+ * hasActiveCrawl() (routes/admin/sites.ts), permanently blocking new
+ * crawls for that site with a false "already queued or running" error.
+ * This happens if a job's BullMQ entry gets separately removed/expired
+ * out from under a still-'queued' row (or was queued before
+ * crawlQueue.add() started passing { jobId }, giving it a different id
+ * than this row expects). Run once at boot, after
+ * deduplicateQueuedCrawls() has already thinned out same-site duplicates -
+ * otherwise this would redo the same dead-job check on rows about to be
+ * discarded anyway.
+ */
+export async function recoverStaleQueuedJobs(): Promise<number> {
+  const { rows } = await pool.query<{ id: string }>(
+    `SELECT id FROM jobs WHERE type = 'crawl' AND status = 'queued'`,
+  );
+
+  let recovered = 0;
+  for (const { id } of rows) {
+    const bullJob = await crawlQueue.getJob(id);
+    if (!bullJob) {
+      await failJob(id, 'Queued crawl was lost from the job queue and could never run');
+      recovered += 1;
+    }
+  }
+  return recovered;
+}

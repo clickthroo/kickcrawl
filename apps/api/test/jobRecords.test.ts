@@ -85,3 +85,51 @@ describe('deduplicateQueuedCrawls', () => {
     expect(await deduplicateQueuedCrawls()).toBe(0);
   });
 });
+
+describe('recoverStaleQueuedJobs', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('fails a queued row whose BullMQ job no longer exists, so it stops permanently blocking hasActiveCrawl()', async () => {
+    // A "queued" row with a dead BullMQ counterpart can never actually
+    // run - the worker will never pick it up - but hasActiveCrawl()
+    // (routes/admin/sites.ts) still treats it as active, so "Run crawl"
+    // falsely reports one already queued/running forever.
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id FROM jobs')) return { rows: [{ id: 'ghost-job' }] };
+      return { rowCount: 1 }; // failJob()'s own UPDATE
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob: vi.fn(async () => undefined) } }));
+
+    const { recoverStaleQueuedJobs } = await import('../src/lib/jobRecords.js');
+    const recovered = await recoverStaleQueuedJobs();
+
+    expect(recovered).toBe(1);
+    const failCall = query.mock.calls.find(([sql]) => sql.includes('UPDATE jobs SET status'));
+    expect(failCall?.[1]).toEqual(['ghost-job', expect.any(String)]);
+  });
+
+  it('leaves a queued row alone when its BullMQ job still exists', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id FROM jobs')) return { rows: [{ id: 'real-job' }] };
+      return { rowCount: 1 };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob: vi.fn(async () => ({ id: 'real-job' })) } }));
+
+    const { recoverStaleQueuedJobs } = await import('../src/lib/jobRecords.js');
+    expect(await recoverStaleQueuedJobs()).toBe(0);
+  });
+
+  it('returns 0 when there are no queued crawl jobs at all', async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob: vi.fn() } }));
+
+    const { recoverStaleQueuedJobs } = await import('../src/lib/jobRecords.js');
+    expect(await recoverStaleQueuedJobs()).toBe(0);
+  });
+});
