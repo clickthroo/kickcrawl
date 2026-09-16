@@ -58,8 +58,15 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     if (visited.has(next.url)) continue;
     visited.add(next.url);
 
+    // The seed URL (the site's own base_url, depth 0) always gets fetched
+    // regardless of allowed/denied paths - those scope which *discovered*
+    // links get followed, not whether the crawl can even start. Without
+    // this, a site whose allowed_paths is scoped to product pages (e.g.
+    // "/products/*", set for the Map/Items view) would filter out its own
+    // homepage before ever fetching it, discover zero links, and the job
+    // would "complete" having crawled nothing.
     const path = new URL(next.url).pathname;
-    if (!isPathAllowed(path, includePaths, excludePaths)) continue;
+    if (next.depth > 0 && !isPathAllowed(path, includePaths, excludePaths)) continue;
 
     await markUrlQueued(siteId, next.url);
 
