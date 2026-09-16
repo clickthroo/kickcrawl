@@ -6,26 +6,36 @@ import { scrapePage, type ScrapeCoreResult } from '../lib/scrapeCore.js';
 import { resolveSiteForUrl } from '../lib/siteResolver.js';
 import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlStore.js';
 import { persistScrapeResult } from '../lib/persistResult.js';
-import { extractLinks, isPathAllowed, isSameSite } from '../services/links.js';
+import { extractLinks, isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
 import { config } from '../config.js';
 
 /**
- * Which of a page's outbound same-site links the crawl should actually
- * discover/follow next - already-visited links are dropped, then whatever
- * remains is scoped to the site's allowed_paths/denied_paths so a
- * restrictive allow-list (e.g. "/products/*") keeps unrelated pages (nav,
- * footer, marketing pages) out of both the crawl queue and the Items list,
- * not just out of what gets fetched.
+ * Which of a page's outbound same-site links the crawl should follow next.
+ * denied_paths is a hard stop - dropped here so a denied page is never even
+ * visited, not just never recorded. allowed_paths is deliberately NOT
+ * applied here: a page outside it (e.g. a category/collection listing) is
+ * often the only way to *reach* pages that are inside it (e.g. individual
+ * product pages), so it still needs to be visited and have its own links
+ * followed - see isCrawlItem() for the allow-list check that decides
+ * whether a visited page gets recorded as an Item.
  */
-export function filterCrawlableLinks(
+export function filterTraversableLinks(
   links: string[],
   visited: Set<string>,
-  includePaths: string[],
   excludePaths: string[],
 ): string[] {
-  return links
-    .filter((l) => !visited.has(l))
-    .filter((l) => isPathAllowed(new URL(l).pathname, includePaths, excludePaths));
+  return links.filter((l) => !visited.has(l)).filter((l) => isPathAllowed(new URL(l).pathname, [], excludePaths));
+}
+
+/**
+ * Whether a visited page counts as a real Item - gets its content
+ * persisted and shown in the Items list - rather than just a stepping
+ * stone the crawl passed through to discover further links. An empty
+ * allowed_paths means everything visited (that isn't denied) is an item.
+ */
+export function isCrawlItem(path: string, includePaths: string[]): boolean {
+  if (includePaths.length === 0) return true;
+  return includePaths.some((p) => matchesPathPattern(path, p));
 }
 
 async function updateJobProgress(jobId: string, total: number, completed: number): Promise<void> {
@@ -77,7 +87,14 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     if (visited.has(next.url)) continue;
     visited.add(next.url);
 
-    await markUrlQueued(siteId, next.url);
+    // The seed (depth 0) is always an item, same as before. Anything else
+    // is an item only if it matches allowed_paths - a page that doesn't
+    // (e.g. a category/collection listing) still gets fetched below and
+    // has its links followed, it just isn't recorded as an Item itself.
+    const path = new URL(next.url).pathname;
+    const isItem = next.depth === 0 || isCrawlItem(path, includePaths);
+
+    if (isItem) await markUrlQueued(siteId, next.url);
 
     const result = await scrapePage(
       next.url,
@@ -86,17 +103,25 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     );
 
     if (!result.success) {
-      errors.push(`${next.url}: ${result.error}`);
-      await recordPageResult(siteId, jobId, next.url, result);
+      if (isItem) {
+        errors.push(`${next.url}: ${result.error}`);
+        await recordPageResult(siteId, jobId, next.url, result);
+      }
     } else {
-      await recordPageResult(siteId, jobId, next.url, result);
-      completed += 1;
+      if (isItem) {
+        await recordPageResult(siteId, jobId, next.url, result);
+        completed += 1;
+      }
 
       if (next.depth < maxDepth && result.rawHtml) {
         const $ = cheerio.load(result.rawHtml);
         const links = extractLinks($, next.url).filter((l) => isSameSite(l, origin, false));
-        const newLinks = filterCrawlableLinks(links, visited, includePaths, excludePaths);
-        await upsertDiscoveredUrls(siteId, newLinks);
+        const newLinks = filterTraversableLinks(links, visited, excludePaths);
+        // Only the links that will themselves be items get recorded into
+        // the Items list - stepping-stone links (e.g. more category
+        // pages) still get queued and traversed below, just not shown.
+        const itemLinks = newLinks.filter((l) => isCrawlItem(new URL(l).pathname, includePaths));
+        await upsertDiscoveredUrls(siteId, itemLinks);
         for (const link of newLinks) {
           queue.push({ url: link, depth: next.depth + 1 });
         }

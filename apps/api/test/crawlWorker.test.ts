@@ -1,51 +1,60 @@
 import { describe, expect, it } from 'vitest';
-import { filterCrawlableLinks } from '../src/workers/crawlWorker.js';
+import { filterTraversableLinks, isCrawlItem } from '../src/workers/crawlWorker.js';
 
-describe('filterCrawlableLinks', () => {
+describe('filterTraversableLinks', () => {
   it('drops already-visited links', () => {
     const visited = new Set(['https://example.com/products/1']);
-    const result = filterCrawlableLinks(
+    const result = filterTraversableLinks(
       ['https://example.com/products/1', 'https://example.com/products/2'],
       visited,
-      [],
       [],
     );
     expect(result).toEqual(['https://example.com/products/2']);
   });
 
-  it('keeps only links matching allowed_paths - the real-world repro (Cult Kits, allowed_paths ["/products"])', () => {
+  it('keeps stepping-stone links even though they are outside allowed_paths - that check happens elsewhere', () => {
+    // The real-world case: Cult Kits' category/collection pages aren't
+    // themselves product pages, but the crawl needs to visit them to
+    // ever reach the products linked from them. Traversal is not
+    // allow-list gated, only denied_paths stops a link from being
+    // followed at all.
     const links = [
+      'https://cultkits.com/collections/mens-shirts',
       'https://cultkits.com/products/some-shirt',
-      'https://cultkits.com/pages/subscribers-email-discount',
-      'https://cultkits.com/pages/the-football-shirt-pod',
-      'https://cultkits.com/pages/join-the-affiliate-program',
     ];
-    // "/products" (no wildcard) only matches that exact path - this test
-    // documents that behavior, not "/products/some-shirt" too. The main
-    // point here is that the /pages/* marketing links never show up at
-    // all, matching what the allow-list is meant to scope out.
-    const result = filterCrawlableLinks(links, new Set(), ['/products'], []);
-    expect(result).toEqual([]);
+    const result = filterTraversableLinks(links, new Set(), []);
+    expect(result).toEqual(links);
   });
 
-  it('a wildcard allowed_paths pattern keeps matching product pages and drops the rest', () => {
-    const links = [
-      'https://cultkits.com/products/some-shirt',
-      'https://cultkits.com/pages/subscribers-email-discount',
-    ];
-    const result = filterCrawlableLinks(links, new Set(), ['/products/*'], []);
-    expect(result).toEqual(['https://cultkits.com/products/some-shirt']);
-  });
-
-  it('denied_paths excludes matching links even with no allow-list set', () => {
+  it('denied_paths excludes matching links from traversal entirely', () => {
     const links = ['https://example.com/products/1', 'https://example.com/admin/secret'];
-    const result = filterCrawlableLinks(links, new Set(), [], ['/admin/*']);
+    const result = filterTraversableLinks(links, new Set(), ['/admin/*']);
     expect(result).toEqual(['https://example.com/products/1']);
   });
 
-  it('keeps everything when no allow/deny paths are configured', () => {
+  it('keeps everything when no denied paths are configured', () => {
     const links = ['https://example.com/anything', 'https://example.com/whatever'];
-    const result = filterCrawlableLinks(links, new Set(), [], []);
+    const result = filterTraversableLinks(links, new Set(), []);
     expect(result).toEqual(links);
+  });
+});
+
+describe('isCrawlItem', () => {
+  it('the real-world repro: a Cult Kits category page is not an item, a product page is', () => {
+    expect(isCrawlItem('/collections/mens-shirts', ['/products/*'])).toBe(false);
+    expect(isCrawlItem('/products/some-shirt', ['/products/*'])).toBe(true);
+  });
+
+  it('marketing/footer pages are not items when allowed_paths is scoped to products', () => {
+    expect(isCrawlItem('/pages/join-the-affiliate-program', ['/products/*'])).toBe(false);
+  });
+
+  it('everything is an item when no allowed_paths is configured', () => {
+    expect(isCrawlItem('/anything', [])).toBe(true);
+  });
+
+  it('an exact allowed_paths entry with no wildcard only matches that exact path', () => {
+    expect(isCrawlItem('/products', ['/products'])).toBe(true);
+    expect(isCrawlItem('/products/some-shirt', ['/products'])).toBe(false);
   });
 });
