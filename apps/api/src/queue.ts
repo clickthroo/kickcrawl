@@ -22,3 +22,8 @@ export interface CrawlJobData {
 }
 
 export const crawlQueue = new Queue<CrawlJobData>('crawl', { connection: redisConnection });
+
+// A single global sweep (not per-site) - recheckWorker.ts loops every
+// active site's already-fetched items itself, same as "Crawl all sites"
+// loops sites, so there's nothing site-specific to put in the job data.
+export const recheckQueue = new Queue('recheck', { connection: redisConnection });

@@ -95,7 +95,7 @@ export interface Job {
   id: string;
   site_id: string | null;
   site_name: string | null;
-  type: 'scrape' | 'map' | 'crawl' | 'extract';
+  type: 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck';
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   payload: Record<string, unknown>;
   total_pages: number;
@@ -113,6 +113,18 @@ export interface ApiKey {
   key_preview: string;
   last_used_at: string | null;
   created_at: string;
+}
+
+export interface Sale {
+  id: string;
+  url_id: string;
+  site_id: string;
+  site_name: string;
+  url: string;
+  title: string | null;
+  price: number | null;
+  currency: string | null;
+  detected_at: string;
 }
 
 export interface CurrencyRate {

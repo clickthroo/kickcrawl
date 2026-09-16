@@ -1,7 +1,7 @@
 import { pool } from '../db.js';
 import { crawlQueue } from '../queue.js';
 
-export type JobType = 'scrape' | 'map' | 'crawl' | 'extract';
+export type JobType = 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export async function createJob(
