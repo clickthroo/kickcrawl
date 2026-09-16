@@ -9,6 +9,25 @@ import { persistScrapeResult } from '../lib/persistResult.js';
 import { extractLinks, isPathAllowed, isSameSite } from '../services/links.js';
 import { config } from '../config.js';
 
+/**
+ * Which of a page's outbound same-site links the crawl should actually
+ * discover/follow next - already-visited links are dropped, then whatever
+ * remains is scoped to the site's allowed_paths/denied_paths so a
+ * restrictive allow-list (e.g. "/products/*") keeps unrelated pages (nav,
+ * footer, marketing pages) out of both the crawl queue and the Items list,
+ * not just out of what gets fetched.
+ */
+export function filterCrawlableLinks(
+  links: string[],
+  visited: Set<string>,
+  includePaths: string[],
+  excludePaths: string[],
+): string[] {
+  return links
+    .filter((l) => !visited.has(l))
+    .filter((l) => isPathAllowed(new URL(l).pathname, includePaths, excludePaths));
+}
+
 async function updateJobProgress(jobId: string, total: number, completed: number): Promise<void> {
   await pool.query(
     `UPDATE jobs SET status = 'running', total_pages = $2, completed_pages = $3 WHERE id = $1`,
@@ -58,16 +77,6 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     if (visited.has(next.url)) continue;
     visited.add(next.url);
 
-    // The seed URL (the site's own base_url, depth 0) always gets fetched
-    // regardless of allowed/denied paths - those scope which *discovered*
-    // links get followed, not whether the crawl can even start. Without
-    // this, a site whose allowed_paths is scoped to product pages (e.g.
-    // "/products/*", set for the Map/Items view) would filter out its own
-    // homepage before ever fetching it, discover zero links, and the job
-    // would "complete" having crawled nothing.
-    const path = new URL(next.url).pathname;
-    if (next.depth > 0 && !isPathAllowed(path, includePaths, excludePaths)) continue;
-
     await markUrlQueued(siteId, next.url);
 
     const result = await scrapePage(
@@ -86,7 +95,7 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       if (next.depth < maxDepth && result.rawHtml) {
         const $ = cheerio.load(result.rawHtml);
         const links = extractLinks($, next.url).filter((l) => isSameSite(l, origin, false));
-        const newLinks = links.filter((l) => !visited.has(l));
+        const newLinks = filterCrawlableLinks(links, visited, includePaths, excludePaths);
         await upsertDiscoveredUrls(siteId, newLinks);
         for (const link of newLinks) {
           queue.push({ url: link, depth: next.depth + 1 });
