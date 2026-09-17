@@ -10,6 +10,9 @@ export interface Site {
   allowed_paths: string[];
   denied_paths: string[];
   is_active: boolean;
+  /** Seller-trust filters for marketplaces where the listing's own seller matters (e.g. Vinted's Pro badge). */
+  require_pro_seller: boolean;
+  min_seller_feedback: number | null;
   created_at: string;
   updated_at: string;
   url_count?: number;

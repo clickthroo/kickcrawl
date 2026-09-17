@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { filterTraversableLinks, isCrawlItem } from '../src/workers/crawlWorker.js';
+import { filterTraversableLinks, isCrawlItem, passesSellerFilter } from '../src/workers/crawlWorker.js';
 
 describe('filterTraversableLinks', () => {
   it('drops already-visited links', () => {
@@ -101,5 +101,46 @@ describe('scrapePageWithTimeout', () => {
   it('is generous enough not to mask legitimately slow (but working) pages', async () => {
     const { PAGE_TIMEOUT_MS } = await import('../src/workers/crawlWorker.js');
     expect(PAGE_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe('passesSellerFilter', () => {
+  it('passes everything when the site has no seller filter configured - most sites have no such concept', () => {
+    const site = { require_pro_seller: false, min_seller_feedback: null };
+    expect(passesSellerFilter('anything at all', site)).toBe(true);
+    expect(passesSellerFilter(undefined, site)).toBe(true);
+  });
+
+  it('keeps a Pro seller item when require_pro_seller is set', () => {
+    const site = { require_pro_seller: true, min_seller_feedback: null };
+    expect(passesSellerFilter('Cushty Kits\n524\nPro', site)).toBe(true);
+  });
+
+  it('drops a non-Pro seller item when require_pro_seller is set', () => {
+    const site = { require_pro_seller: true, min_seller_feedback: null };
+    expect(passesSellerFilter('mark7424\n138\nFrequent Uploads', site)).toBe(false);
+  });
+
+  it('keeps an item whose feedback count meets min_seller_feedback', () => {
+    const site = { require_pro_seller: false, min_seller_feedback: 100 };
+    expect(passesSellerFilter('Cushty Kits\n524\nPro', site)).toBe(true);
+  });
+
+  it('drops an item whose feedback count is below min_seller_feedback', () => {
+    const site = { require_pro_seller: false, min_seller_feedback: 100 };
+    expect(passesSellerFilter('New Seller\n12\nPro', site)).toBe(false);
+  });
+
+  it('fails closed when a filter is configured but there is no content to check at all', () => {
+    // A page we can't confirm passes shouldn't be kept just because we
+    // couldn't check it - the failed-fetch case, not a passing default.
+    const site = { require_pro_seller: true, min_seller_feedback: null };
+    expect(passesSellerFilter(undefined, site)).toBe(false);
+  });
+
+  it('requires both filters to pass when both are configured', () => {
+    const site = { require_pro_seller: true, min_seller_feedback: 1000 };
+    // Pro, but feedback count (524) is below the 1000 threshold.
+    expect(passesSellerFilter('Cushty Kits\n524\nPro', site)).toBe(false);
   });
 });
