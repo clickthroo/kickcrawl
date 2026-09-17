@@ -9,6 +9,7 @@ import { getCurrencyRates } from '../lib/currencyRates.js';
 import { buildKickioProfile } from '../services/kickioProfile.js';
 import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
+import { PAGE_TIMEOUT_MS } from './crawlWorker.js';
 
 export const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -127,6 +128,14 @@ export function startRecheckWorker(): Worker {
       // one on its own - fail it and let the next scheduled tick start
       // clean instead.
       maxStalledCount: 0,
+      // Same rationale as crawlWorker.ts: BullMQ's default lockDuration
+      // (30s) is shorter than a single slow-but-legitimate browser-
+      // rendered page can take, so without this a real fetch gets killed
+      // by BullMQ's own stall watchdog well before it's actually hung.
+      // processRecheck() calls scrapePage() directly (no PAGE_TIMEOUT_MS
+      // race of its own), so this constant is reused here as the same
+      // generous ceiling, not because this file shares that timeout.
+      lockDuration: PAGE_TIMEOUT_MS + 30_000,
     },
   );
   worker.on('failed', (job, err) => {
