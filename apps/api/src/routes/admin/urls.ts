@@ -6,6 +6,7 @@ import { markUrlFetched } from '../../lib/urlStore.js';
 import { persistScrapeResult } from '../../lib/persistResult.js';
 import { buildKickioProfile, type KickioProfile } from '../../services/kickioProfile.js';
 import { getCurrencyRates } from '../../lib/currencyRates.js';
+import { isCrawlItem, passesSellerFilter } from '../../workers/crawlWorker.js';
 
 /**
  * A profile field is free text (team names, player names, colours, etc),
@@ -276,6 +277,21 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
         min_seller_feedback: row.min_seller_feedback,
       },
     );
+
+    // Same rule as crawl/recheck: an item that doesn't pass the site's
+    // seller filter is skipped rather than kept - a manual re-scrape used
+    // to bypass this entirely, letting an admin unintentionally keep (or
+    // refresh) an item that the site's own Pro/feedback filter would
+    // never have recorded in the first place.
+    const isItem = isCrawlItem(row.path, row.allowed_paths ?? []);
+    if (result.success && isItem && !passesSellerFilter(result.markdown, row)) {
+      await pool.query(`DELETE FROM urls WHERE id = $1`, [id]);
+      return reply.send({
+        success: false,
+        result,
+        error: "Item no longer passes the site's seller filter (Pro seller / min feedback) - removed rather than kept.",
+      });
+    }
 
     const urlId = await markUrlFetched(row.site_id, row.url, result.metadata.statusCode, result.error);
     await persistScrapeResult(urlId, null, result);
