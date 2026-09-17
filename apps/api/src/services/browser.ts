@@ -40,10 +40,24 @@ export function getBrowser(): Promise<Browser> {
 }
 
 export async function closeBrowser(): Promise<void> {
-  if (browserPromise) {
-    const browser = await browserPromise;
+  if (!browserPromise) return;
+  // Clear the memoized reference before even attempting to close - a
+  // browser we're recovering from is, by definition, one whose close()
+  // call can itself throw (Playwright throws "Target closed"/"Browser has
+  // been closed" against an already-crashed browser). Confirmed in
+  // production: that throw used to skip the reset entirely, leaving every
+  // later getBrowser() call return the SAME dead instance forever - every
+  // fetch after the first crash failed immediately against a browser that
+  // was never actually replaced, until the whole container got killed and
+  // restarted.
+  const promise = browserPromise;
+  browserPromise = null;
+  try {
+    const browser = await promise;
     await browser.close();
-    browserPromise = null;
+  } catch {
+    // Already gone - nothing left to close, and the reset above already
+    // guarantees the next getBrowser() launches a fresh instance.
   }
 }
 

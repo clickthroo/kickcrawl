@@ -43,6 +43,72 @@ describe('getBrowser', () => {
   });
 });
 
+describe('closeBrowser', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('resets the memoized browser even when close() itself throws - the exact case for a browser already crashed', async () => {
+    // Confirmed in production: after a Chromium crash, browser.close()
+    // against the already-dead instance threw "Target closed", which used
+    // to skip resetting the memoized promise entirely - every later
+    // getBrowser() call kept returning that same dead browser, so every
+    // subsequent fetch crashed immediately too, back-to-back, until the
+    // whole container was killed and restarted.
+    let launches = 0;
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() => {
+          launches += 1;
+          return Promise.resolve({
+            marker: `browser-${launches}`,
+            close: vi.fn(() => Promise.reject(new Error('Target closed'))),
+          });
+        }),
+      },
+    }));
+
+    const { getBrowser, closeBrowser } = await import('../src/services/browser.js');
+
+    const first = await getBrowser();
+    expect(first).toEqual(expect.objectContaining({ marker: 'browser-1' }));
+
+    await closeBrowser();
+
+    const second = await getBrowser();
+    expect(second).toEqual(expect.objectContaining({ marker: 'browser-2' }));
+    expect(launches).toBe(2);
+  });
+
+  it('does nothing when there is no memoized browser to close', async () => {
+    const { closeBrowser } = await import('../src/services/browser.js');
+    await expect(closeBrowser()).resolves.toBeUndefined();
+  });
+
+  it('closes a healthy browser normally and lets the next call launch fresh', async () => {
+    let launches = 0;
+    const close = vi.fn(() => Promise.resolve());
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() => {
+          launches += 1;
+          return Promise.resolve({ marker: `browser-${launches}`, close });
+        }),
+      },
+    }));
+
+    const { getBrowser, closeBrowser } = await import('../src/services/browser.js');
+
+    await getBrowser();
+    await closeBrowser();
+
+    expect(close).toHaveBeenCalledTimes(1);
+    const second = await getBrowser();
+    expect(second).toEqual(expect.objectContaining({ marker: 'browser-2' }));
+  });
+});
+
 describe('withBrowserSlot', () => {
   beforeEach(() => {
     vi.resetModules();
