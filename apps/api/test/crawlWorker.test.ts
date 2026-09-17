@@ -69,6 +69,7 @@ describe('scrapePageWithTimeout', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.doUnmock('../src/lib/scrapeCore.js');
+    vi.doUnmock('../src/services/browser.js');
   });
 
   it('resolves with the real result when scrapePage finishes well within the timeout', async () => {
@@ -101,6 +102,58 @@ describe('scrapePageWithTimeout', () => {
   it('is generous enough not to mask legitimately slow (but working) pages', async () => {
     const { PAGE_TIMEOUT_MS } = await import('../src/workers/crawlWorker.js');
     expect(PAGE_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+  });
+
+  // The real-world case: several catalog pages crashed Chromium's renderer
+  // in a row in production, and every item page fetched afterward hung for
+  // the full timeout against that same still-broken, memoized browser
+  // instance (services/browser.ts) - nothing ever recycled it. These prove
+  // the recovery path fires on the two signals that actually showed up:
+  // our own timeout catching a genuine hang, and Chromium's own fatal,
+  // page-independent failures.
+  it('recycles the shared browser after a genuine hang (our own timeout firing)', async () => {
+    const closeBrowser = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: () => new Promise(() => {}) }));
+    vi.doMock('../src/services/browser.js', () => ({ closeBrowser }));
+
+    const { scrapePageWithTimeout, PAGE_TIMEOUT_MS } = await import('../src/workers/crawlWorker.js');
+    const promise = scrapePageWithTimeout('https://example.com/stuck', {}, null);
+    await vi.advanceTimersByTimeAsync(PAGE_TIMEOUT_MS);
+    await promise;
+
+    expect(closeBrowser).toHaveBeenCalled();
+  });
+
+  it('recycles the shared browser when Chromium itself reports a fatal, page-independent failure', async () => {
+    const closeBrowser = vi.fn().mockResolvedValue(undefined);
+    const crashedResult = {
+      success: false,
+      error: 'page.goto: Page crashed',
+      metadata: { sourceURL: 'https://example.com', statusCode: 0 },
+    };
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: async () => crashedResult }));
+    vi.doMock('../src/services/browser.js', () => ({ closeBrowser }));
+
+    const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
+    await scrapePageWithTimeout('https://example.com', {}, null);
+
+    expect(closeBrowser).toHaveBeenCalled();
+  });
+
+  it('never recycles the browser for an ordinary failure - the browser itself is fine', async () => {
+    const closeBrowser = vi.fn().mockResolvedValue(undefined);
+    const ordinaryFailure = {
+      success: false,
+      error: 'Disallowed by robots.txt',
+      metadata: { sourceURL: 'https://example.com', statusCode: 999 },
+    };
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: async () => ordinaryFailure }));
+    vi.doMock('../src/services/browser.js', () => ({ closeBrowser }));
+
+    const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
+    await scrapePageWithTimeout('https://example.com', {}, null);
+
+    expect(closeBrowser).not.toHaveBeenCalled();
   });
 });
 

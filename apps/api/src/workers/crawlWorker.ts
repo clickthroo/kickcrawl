@@ -7,6 +7,7 @@ import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlS
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
 import { detectSellerSignals } from '../services/sellerSignals.js';
+import { closeBrowser } from '../services/browser.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 
@@ -97,20 +98,39 @@ export async function scrapePageWithTimeout(
   opts: Parameters<typeof scrapePage>[1],
   site: Parameters<typeof scrapePage>[2],
 ): Promise<ScrapeCoreResult> {
-  return await Promise.race([
+  let timedOut = false;
+  const result = await Promise.race([
     scrapePage(url, opts, site),
     new Promise<ScrapeCoreResult>((resolve) =>
-      setTimeout(
-        () =>
-          resolve({
-            success: false,
-            error: `Timed out after ${PAGE_TIMEOUT_MS}ms fetching this page`,
-            metadata: { sourceURL: url, statusCode: 0 },
-          }),
-        PAGE_TIMEOUT_MS,
-      ),
+      setTimeout(() => {
+        timedOut = true;
+        resolve({
+          success: false,
+          error: `Timed out after ${PAGE_TIMEOUT_MS}ms fetching this page`,
+          metadata: { sourceURL: url, statusCode: 0 },
+        });
+      }, PAGE_TIMEOUT_MS),
     ),
   ]);
+
+  // Recover the one memoized Chromium instance every browser-driven fetch
+  // shares (services/browser.ts) once we have real evidence it's broken,
+  // rather than leaving every future request on it to pay for a browser
+  // we already know is bad. Confirmed in production: several catalog
+  // pages crashed Chromium's renderer in a row ("page.goto: Page
+  // crashed") - each one returned quickly, as a normal failure, so
+  // nothing recycled the browser - and every single item page fetch
+  // afterward then hung for the full 90s timeout, one after another,
+  // against that same still-degraded instance. Two independent signals of
+  // "this browser is bad, not just this one page": our own outer timeout
+  // firing at all (nothing legitimate should still be running after 90s),
+  // or the fetch itself reporting Chromium's own fatal, page-independent
+  // failures rather than an ordinary navigation/HTTP error.
+  const browserFatal =
+    !result.success && !!result.error && /page crashed|target closed|browser has been closed/i.test(result.error);
+  if (timedOut || browserFatal) await closeBrowser().catch(() => undefined);
+
+  return result;
 }
 
 async function fireWebhook(jobId: string, status: string): Promise<void> {
