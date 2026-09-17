@@ -268,6 +268,8 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
         allowed_paths: row.allowed_paths,
         denied_paths: row.denied_paths,
         is_active: row.is_active,
+        require_pro_seller: row.require_pro_seller,
+        min_seller_feedback: row.min_seller_feedback,
       },
     );
 

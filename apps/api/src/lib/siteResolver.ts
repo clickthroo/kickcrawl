@@ -12,6 +12,8 @@ export interface SiteConfig {
   allowed_paths: string[];
   denied_paths: string[];
   is_active: boolean;
+  require_pro_seller: boolean;
+  min_seller_feedback: number | null;
 }
 
 /** Finds the configured site whose base_url hostname matches the given URL, if any. */

@@ -17,6 +17,8 @@ const siteSchema = z.object({
   allowed_paths: z.array(z.string()).optional().default([]),
   denied_paths: z.array(z.string()).optional().default([]),
   is_active: z.boolean().optional().default(true),
+  require_pro_seller: z.boolean().optional().default(false),
+  min_seller_feedback: z.number().int().positive().nullable().optional().default(null),
 });
 
 interface SiteRow {
@@ -85,8 +87,8 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { rows } = await pool.query(
         `INSERT INTO sites (name, base_url, rate_limit_rps, max_depth, use_browser_default, use_proxy,
-           default_selectors, allowed_paths, denied_paths, is_active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+           default_selectors, allowed_paths, denied_paths, is_active, require_pro_seller, min_seller_feedback)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
         [
           s.name,
           s.base_url,
@@ -98,6 +100,8 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
           s.allowed_paths,
           s.denied_paths,
           s.is_active,
+          s.require_pro_seller,
+          s.min_seller_feedback,
         ],
       );
       return reply.send({ success: true, site: rows[0] });
@@ -124,6 +128,8 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
          allowed_paths = COALESCE($9, allowed_paths),
          denied_paths = COALESCE($10, denied_paths),
          is_active = COALESCE($11, is_active),
+         require_pro_seller = COALESCE($12, require_pro_seller),
+         min_seller_feedback = $13,
          updated_at = now()
        WHERE id = $1 RETURNING *`,
       [
@@ -138,6 +144,8 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
         s.allowed_paths,
         s.denied_paths,
         s.is_active,
+        s.require_pro_seller,
+        s.min_seller_feedback,
       ],
     );
     if (!rows[0]) return reply.code(404).send({ success: false, error: 'Site not found' });

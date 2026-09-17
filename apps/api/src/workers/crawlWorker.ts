@@ -7,7 +7,9 @@ import { resolveSiteForUrl } from '../lib/siteResolver.js';
 import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlStore.js';
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { extractLinks, isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
+import { detectSellerSignals } from '../services/sellerSignals.js';
 import { config } from '../config.js';
+import type { SiteConfig } from '../lib/siteResolver.js';
 
 /**
  * Which of a page's outbound same-site links the crawl should follow next.
@@ -43,6 +45,31 @@ async function updateJobProgress(jobId: string, total: number, completed: number
     `UPDATE jobs SET status = 'running', total_pages = $2, completed_pages = $3 WHERE id = $1`,
     [jobId, total, completed],
   );
+}
+
+/**
+ * Whether a fetched item passes the site's seller-trust filters (Vinted's
+ * Pro badge + feedback count, services/sellerSignals.ts) - checked once
+ * the page's own content is available, since these signals are read from
+ * the page's rendered text, not looked up separately. A site with
+ * neither filter configured always passes (most sites have no concept of
+ * a "seller" at all). When a filter IS configured but its signal can't
+ * be found on the page, the item fails closed - a page we can't confirm
+ * passes shouldn't be kept just because we couldn't check it.
+ */
+export function passesSellerFilter(
+  markdown: string | undefined,
+  site: Pick<SiteConfig, 'require_pro_seller' | 'min_seller_feedback'>,
+): boolean {
+  if (!site.require_pro_seller && site.min_seller_feedback == null) return true;
+  if (!markdown) return false;
+
+  const { feedbackCount, isPro } = detectSellerSignals(markdown);
+  if (site.require_pro_seller && !isPro) return false;
+  if (site.min_seller_feedback != null && (feedbackCount == null || feedbackCount < site.min_seller_feedback)) {
+    return false;
+  }
+  return true;
 }
 
 async function recordPageResult(
@@ -144,8 +171,16 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       }
     } else {
       if (isItem) {
-        await recordPageResult(siteId, jobId, next.url, result);
-        completed += 1;
+        if (passesSellerFilter(result.markdown, site ?? { require_pro_seller: false, min_seller_feedback: null })) {
+          await recordPageResult(siteId, jobId, next.url, result);
+          completed += 1;
+        } else {
+          // Fetched, but doesn't meet the site's seller filter - keep
+          // the url row's own status accurate (it really was fetched)
+          // without persisting content for an item we're deliberately
+          // not keeping.
+          await markUrlFetched(siteId, next.url, result.metadata.statusCode, result.error);
+        }
       }
 
       if (next.depth < maxDepth && result.rawHtml) {

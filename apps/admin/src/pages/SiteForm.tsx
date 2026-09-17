@@ -15,6 +15,8 @@ const EMPTY: Omit<Site, 'id' | 'created_at' | 'updated_at'> = {
   allowed_paths: [],
   denied_paths: [],
   is_active: true,
+  require_pro_seller: false,
+  min_seller_feedback: null,
 };
 
 export default function SiteForm() {
@@ -181,6 +183,38 @@ export default function SiteForm() {
                 placeholder="/cart&#10;/account"
               />
             </div>
+          </div>
+        </Card>
+
+        <Card className="space-y-4">
+          <div>
+            <h2 className="text-sm font-medium text-slate-700">Seller filters</h2>
+            <p className="mt-1 text-xs text-slate-400">
+              For marketplaces where the listing's own seller matters (e.g. Vinted's "Pro" seller badge).
+              Checked once an item is fetched - an item that doesn't pass is skipped rather than kept. Leave both
+              off for sites with no such concept.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={form.require_pro_seller}
+              onChange={(e) => setForm({ ...form, require_pro_seller: e.target.checked })}
+            />
+            Only keep items from Pro sellers
+          </label>
+          <div className="sm:w-56">
+            <Input
+              label="Minimum seller feedback count"
+              type="number"
+              min="0"
+              value={form.min_seller_feedback ?? ''}
+              onChange={(e) =>
+                setForm({ ...form, min_seller_feedback: e.target.value ? Number(e.target.value) : null })
+              }
+              placeholder="e.g. 100"
+            />
           </div>
         </Card>
 
