@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { ACCEPT_HEADER, ACCEPT_LANGUAGE, randomUserAgent } from './userAgents.js';
 import { isBlockPage } from './blockDetector.js';
-import { getBrowser } from './browser.js';
+import { getBrowser, withBrowserSlot } from './browser.js';
 import { acquireSlot } from './rateLimiter.js';
 import { getCrawlDelay, isAllowedByRobots } from './robots.js';
 import { assertSafeUrl, safeFetch, UnsafeUrlError } from './urlSafety.js';
@@ -77,29 +77,31 @@ async function fetchWithBrowser(
   waitFor: number,
   proxyUrl?: string,
 ): Promise<FetchResult> {
-  const browser = await getBrowser();
-  const context = await browser.newContext({
-    userAgent,
-    locale: 'en-GB',
-    proxy: proxyUrl ? { server: proxyUrl } : undefined,
+  return withBrowserSlot(async () => {
+    const browser = await getBrowser();
+    const context = await browser.newContext({
+      userAgent,
+      locale: 'en-GB',
+      proxy: proxyUrl ? { server: proxyUrl } : undefined,
+    });
+    try {
+      const page = await context.newPage();
+      await guardNavigation(page);
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      if (waitFor > 0) await page.waitForTimeout(waitFor);
+      const html = await page.content();
+      const statusCode = response?.status() ?? 0;
+      return {
+        html,
+        statusCode,
+        usedBrowser: true,
+        finalUrl: page.url(),
+        blocked: isBlockPage(statusCode, html),
+      };
+    } finally {
+      await context.close();
+    }
   });
-  try {
-    const page = await context.newPage();
-    await guardNavigation(page);
-    const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    if (waitFor > 0) await page.waitForTimeout(waitFor);
-    const html = await page.content();
-    const statusCode = response?.status() ?? 0;
-    return {
-      html,
-      statusCode,
-      usedBrowser: true,
-      finalUrl: page.url(),
-      blocked: isBlockPage(statusCode, html),
-    };
-  } finally {
-    await context.close();
-  }
 }
 
 /**

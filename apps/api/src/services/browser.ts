@@ -46,3 +46,35 @@ export async function closeBrowser(): Promise<void> {
     browserPromise = null;
   }
 }
+
+/**
+ * Caps how many browser-driven page loads run at once, across every caller
+ * that shares this process's single memoized Chromium instance - the
+ * crawl worker (concurrency: 3), the recheck worker, and manual scrape/
+ * extract requests can all be mid-fetch simultaneously, and each one holds
+ * a full rendered page (page.content()) plus whatever a JS-heavy site's own
+ * bundle allocates. Verified in production: running Vinted's catalog page
+ * (needs a real browser - it's a JS-rendered SPA) alongside just a couple
+ * of other concurrent browser fetches repeatedly crashed the container
+ * with a V8 "JavaScript heap out of memory" FATAL ERROR - this isn't a
+ * guess at a possible problem, it's a fix for one that was already
+ * reproducing. 1 is deliberately conservative: a crash that kills every
+ * in-flight job is far worse than crawls running one page slower.
+ */
+const MAX_CONCURRENT_BROWSER_FETCHES = 1;
+let activeBrowserFetches = 0;
+const waiters: (() => void)[] = [];
+
+export async function withBrowserSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeBrowserFetches >= MAX_CONCURRENT_BROWSER_FETCHES) {
+    await new Promise<void>((resolve) => waiters.push(resolve));
+  }
+  activeBrowserFetches++;
+  try {
+    return await fn();
+  } finally {
+    activeBrowserFetches--;
+    const next = waiters.shift();
+    if (next) next();
+  }
+}
