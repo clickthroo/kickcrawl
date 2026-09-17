@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { filterTraversableLinks, isCrawlItem, passesSellerFilter } from '../src/workers/crawlWorker.js';
+import {
+  catalogIdFromUrl,
+  filterTraversableLinks,
+  isCrawlItem,
+  passesSellerFilter,
+} from '../src/workers/crawlWorker.js';
 
 describe('filterTraversableLinks', () => {
   it('drops already-visited links', () => {
@@ -36,6 +41,48 @@ describe('filterTraversableLinks', () => {
     const links = ['https://example.com/anything', 'https://example.com/whatever'];
     const result = filterTraversableLinks(links, new Set(), []);
     expect(result).toEqual(links);
+  });
+});
+
+describe('catalogIdFromUrl', () => {
+  it('reads the catalog id from a query param, the seed URL shape', () => {
+    expect(
+      catalogIdFromUrl('https://www.vinted.co.uk/catalog?search_text=&catalog[]=3267&size_ids[]=206'),
+    ).toBe('3267');
+  });
+
+  it('reads the catalog id from a category page\'s own path, the breadcrumb link shape', () => {
+    expect(catalogIdFromUrl('https://www.vinted.co.uk/catalog/3267-team-shirts-and-jerseys')).toBe('3267');
+  });
+
+  it('reads the catalog id from a brand-filtered sub-catalog path', () => {
+    expect(
+      catalogIdFromUrl('https://www.vinted.co.uk/catalog/3267-team-shirts-and-jerseys/brand/269830-arsenal'),
+    ).toBe('3267');
+  });
+
+  it('reads a different catalog id for an unrelated parent/sibling category', () => {
+    // Real examples from production: breadcrumb/nav links on a "Team
+    // shirts & jerseys" (3267) page that lead back up to much broader
+    // categories.
+    expect(catalogIdFromUrl('https://www.vinted.co.uk/catalog/5-men?referrer=item-crumbs')).toBe('5');
+    expect(catalogIdFromUrl('https://www.vinted.co.uk/catalog/2050-clothing?referrer=item-crumbs')).toBe(
+      '2050',
+    );
+    expect(catalogIdFromUrl('https://www.vinted.co.uk/catalog/30-activewear')).toBe('30');
+  });
+
+  it('returns null for a URL that is not itself a catalog listing - an item page, the homepage, a help page', () => {
+    // An item URL never encodes its category at all, so this can only
+    // ever be enforced at the catalog-page level, not by checking an
+    // item link's own URL.
+    expect(catalogIdFromUrl('https://www.vinted.co.uk/items/10033671773-adidas-condivo-22')).toBeNull();
+    expect(catalogIdFromUrl('https://www.vinted.co.uk/')).toBeNull();
+    expect(catalogIdFromUrl('https://www.vinted.co.uk/help?access_channel=vinted_guide')).toBeNull();
+  });
+
+  it('returns null rather than throwing on an unparseable URL', () => {
+    expect(catalogIdFromUrl('not a url')).toBeNull();
   });
 });
 
