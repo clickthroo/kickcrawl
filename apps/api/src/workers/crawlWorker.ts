@@ -238,7 +238,22 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
         }
       }
 
-      if (next.depth < maxDepth && result.links) {
+      // Only a catalog/listing page's own links are worth following further
+      // (matchesAllowedPaths false - it's not itself an item by URL shape).
+      // An item's own detail page has no legitimate reason to expose
+      // further crawl-worthy links: everything on it is either a
+      // breadcrumb back to a catalog page we'd reach anyway, or an
+      // unrelated recommendation widget ("Similar items", the seller's
+      // other listings). Confirmed in production: crawling a football-
+      // shirts-only catalog still turned up a completely unrelated item
+      // (a jumper) because that widget's link on some other item's own
+      // page matched allowed_paths (/items/*) just as well as a genuine
+      // shirt link would - allowed_paths checks URL shape, not category,
+      // and Vinted item URLs don't encode category at all. Not following
+      // links from an item page at all stops that item from ever being
+      // fetched in the first place, rather than fetching it and then
+      // trying to filter it back out after the fact.
+      if (!matchesAllowedPaths && next.depth < maxDepth && result.links) {
         const links = result.links.filter((l) => isSameSite(l, origin, false));
         const newLinks = filterTraversableLinks(links, visited, excludePaths);
         // Only the links that will themselves be items get recorded into
