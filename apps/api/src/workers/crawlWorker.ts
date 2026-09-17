@@ -30,6 +30,28 @@ export function filterTraversableLinks(
 }
 
 /**
+ * The catalog category id a Vinted-shaped catalog URL is scoped to, read
+ * from either form it's carried in - the query param on a search/filter
+ * URL (?catalog[]=3267) or the leading path segment on a category page
+ * (/catalog/3267-team-shirts-and-jerseys). Returns null for a URL that
+ * isn't itself a catalog listing at all (an item page, a help page, a
+ * member profile) - those aren't scoped by category the same way, so
+ * they're not something this can meaningfully compare.
+ */
+export function catalogIdFromUrl(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  const queryId = u.searchParams.get('catalog[]');
+  if (queryId) return queryId;
+  const pathMatch = u.pathname.match(/\/catalog\/(\d+)-/);
+  return pathMatch ? pathMatch[1] : null;
+}
+
+/**
  * Whether a visited page counts as a real Item - gets its content
  * persisted and shown in the Items list - rather than just a stepping
  * stone the crawl passed through to discover further links. An empty
@@ -190,6 +212,12 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
   const { jobId, siteId, url, limit, maxDepth, includePaths, excludePaths, scrapeOptions } =
     job.data;
   const origin = new URL(url).origin;
+  // A crawl seeded from a category-scoped catalog URL (e.g.
+  // catalog[]=3267 for "Team shirts & jerseys") should stay within that
+  // category - null when the seed itself isn't catalog-shaped (a direct
+  // item seed, or a non-Vinted site), in which case no such scoping
+  // applies at all and every traversable link is treated as before.
+  const seedCatalogId = catalogIdFromUrl(url);
 
   const visited = new Set<string>();
   const queue: { url: string; depth: number }[] = [{ url: new URL(url).toString(), depth: 0 }];
@@ -314,7 +342,23 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       // trying to filter it back out after the fact.
       if (!matchesAllowedPaths && next.depth < maxDepth && result.links) {
         const links = result.links.filter((l) => isSameSite(l, origin, false));
-        const newLinks = filterTraversableLinks(links, visited, excludePaths);
+        // A catalog-shaped link (its own /catalog/... URL) belonging to a
+        // DIFFERENT category than the seed is never followed - confirmed in
+        // production: crawling a "Team shirts & jerseys" catalog (seed
+        // catalog[]=3267) still wandered into entirely unrelated pages
+        // (/catalog/5-men, /catalog/2050-clothing, /catalog/30-activewear -
+        // the site's own breadcrumb/nav trail back up to broader parent
+        // categories) and discovered whatever unrelated items live inside
+        // them (jumpers, jeans, jackets, socks). An item link itself never
+        // carries a category id at all (see catalogIdFromUrl's doc comment),
+        // so this can only be enforced at the catalog-page level - cutting
+        // off the whole branch before it's ever visited, rather than trying
+        // to filter its item links back out by category after the fact.
+        const inScope = (l: string) => {
+          const linkCatalogId = catalogIdFromUrl(l);
+          return !seedCatalogId || linkCatalogId === null || linkCatalogId === seedCatalogId;
+        };
+        const newLinks = filterTraversableLinks(links, visited, excludePaths).filter(inScope);
         // Only the links that will themselves be items get recorded into
         // the Items list - stepping-stone links (e.g. more category
         // pages) still get queued and traversed below, just not shown.
