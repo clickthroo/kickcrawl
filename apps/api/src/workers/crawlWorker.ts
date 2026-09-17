@@ -255,6 +255,17 @@ export function startCrawlWorker(): Worker<CrawlJobData> {
       // there's nothing left to resurrect a job our own sweep already
       // buried.
       maxStalledCount: 0,
+      // BullMQ's own default lockDuration (30s) is shorter than
+      // PAGE_TIMEOUT_MS (90s) - the deliberately generous ceiling this file
+      // already gives a single slow-but-legitimate page fetch. Confirmed in
+      // production: a real Vinted catalog fetch got killed by BullMQ's
+      // stall watchdog ("job stalled more than allowable limit") after
+      // ~70s, well short of PAGE_TIMEOUT_MS ever getting a chance to
+      // apply - maxStalledCount: 0 then made that premature kill
+      // permanent instead of retried. Set comfortably above
+      // PAGE_TIMEOUT_MS so BullMQ's own stall detection can never preempt
+      // the timeout this file was already designed around.
+      lockDuration: PAGE_TIMEOUT_MS + 30_000,
     },
   );
   worker.on('failed', (job, err) => {
