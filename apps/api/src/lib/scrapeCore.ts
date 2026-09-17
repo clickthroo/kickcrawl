@@ -29,6 +29,17 @@ export interface ScrapeCoreResult {
   rawHtml?: string;
 }
 
+// A JS-rendered SPA's real content - search results, product data - is
+// commonly still loading (via its own client-side XHR/fetch, after
+// domcontentloaded already fired) when a browser-driven scrape captures
+// the page. Vinted's catalog is the motivating case: without this, the
+// page gets captured before its filtered search results have replaced
+// whatever the page shows first, and every link on it - including
+// unrelated recommendation/nav links - gets extracted as if it were a
+// real result. A caller-supplied waitFor always wins; this is only the
+// floor applied when nothing else asked for a specific one.
+const DEFAULT_BROWSER_WAIT_MS = 2_000;
+
 export async function scrapePage(
   url: string,
   opts: ScrapeOptions,
@@ -36,10 +47,11 @@ export async function scrapePage(
 ): Promise<ScrapeCoreResult> {
   const formats = opts.formats ?? ['markdown'];
   const useBrowser = opts.useBrowser ?? site?.use_browser_default ?? false;
+  const waitFor = opts.waitFor ?? (useBrowser ? DEFAULT_BROWSER_WAIT_MS : 0);
 
   const result = await fetchPage(url, {
     useBrowser,
-    waitFor: opts.waitFor,
+    waitFor,
     proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
     rateLimitRps: site?.rate_limit_rps,
   });
@@ -57,7 +69,7 @@ export async function scrapePage(
   if (result.blocked && !result.usedBrowser) {
     finalResult = await fetchPage(url, {
       useBrowser: true,
-      waitFor: opts.waitFor,
+      waitFor: opts.waitFor ?? DEFAULT_BROWSER_WAIT_MS,
       proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
       rateLimitRps: site?.rate_limit_rps,
     });
