@@ -1,12 +1,11 @@
 import { Worker, type Job } from 'bullmq';
-import * as cheerio from 'cheerio';
 import { redisConnection, type CrawlJobData } from '../queue.js';
 import { pool } from '../db.js';
-import { scrapePage, type ScrapeCoreResult } from '../lib/scrapeCore.js';
+import { scrapePage, type ScrapeCoreResult, type ScrapeFormat } from '../lib/scrapeCore.js';
 import { resolveSiteForUrl } from '../lib/siteResolver.js';
 import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlStore.js';
 import { persistScrapeResult } from '../lib/persistResult.js';
-import { extractLinks, isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
+import { isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
 import { detectSellerSignals } from '../services/sellerSignals.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
@@ -159,9 +158,24 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     console.log(
       `[crawlWorker] job ${jobId} fetching ${next.url} (depth ${next.depth}, ${completed}/${limit} done, ${queue.length} queued)`,
     );
+    // 'links' is always requested (in addition to whatever formats were
+    // asked for) so scrapePage() computes them itself from the single
+    // CheerioAPI it already parses internally (services/scrapeCore.ts) -
+    // the alternative was this file re-parsing the same page's raw HTML a
+    // second time with its own separate cheerio.load() call below, purely
+    // because 'links' wasn't in the requested formats. That extra parse,
+    // repeated on every single page of a crawl, was a real contributor to
+    // a production V8 heap-exhaustion crash on Vinted (confirmed via
+    // Railway logs: the crash tracked with cumulative pages processed,
+    // not any one page's size - each page's HTML here measured a
+    // perfectly ordinary 1.6-7.6MB).
+    const requestedFormats = scrapeOptions.formats ?? ['markdown'];
+    const formats: ScrapeFormat[] = requestedFormats.includes('links')
+      ? requestedFormats
+      : [...requestedFormats, 'links'];
     const result = await scrapePageWithTimeout(
       next.url,
-      { formats: scrapeOptions.formats ?? ['markdown'], onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser: scrapeOptions.useBrowser },
+      { formats, onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser: scrapeOptions.useBrowser },
       site,
     );
     if (!result.success) {
@@ -193,9 +207,8 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
         }
       }
 
-      if (next.depth < maxDepth && result.rawHtml) {
-        const $ = cheerio.load(result.rawHtml);
-        const links = extractLinks($, next.url).filter((l) => isSameSite(l, origin, false));
+      if (next.depth < maxDepth && result.links) {
+        const links = result.links.filter((l) => isSameSite(l, origin, false));
         const newLinks = filterTraversableLinks(links, visited, excludePaths);
         // Only the links that will themselves be items get recorded into
         // the Items list - stepping-stone links (e.g. more category
