@@ -1,3 +1,4 @@
+import * as cheerio from 'cheerio';
 import { describe, expect, it } from 'vitest';
 import { extractBySelectors } from '../src/services/extractor.js';
 
@@ -11,25 +12,25 @@ describe('extractBySelectors', () => {
   `;
 
   it('extracts text content by CSS selector', () => {
-    const result = extractBySelectors(html, { title: 'h1.title', price: '.price' });
+    const result = extractBySelectors(cheerio.load(html), { title: 'h1.title', price: '.price' });
     expect(result.title).toBe('1990-91 Manchester United Home Shirt');
     expect(result.price).toBe('£49.99');
   });
 
   it('reads meta tag content attribute when the selector points at a meta tag', () => {
-    const result = extractBySelectors(html, { size: 'meta[name="size"]' });
+    const result = extractBySelectors(cheerio.load(html), { size: 'meta[name="size"]' });
     expect(result.size).toBe('L');
   });
 
   it('skips fields whose selector matches nothing', () => {
-    const result = extractBySelectors(html, { missing: '.does-not-exist' });
+    const result = extractBySelectors(cheerio.load(html), { missing: '.does-not-exist' });
     expect(result.missing).toBeUndefined();
   });
 
   it('reads an <img> selector by its src attribute, resolved to an absolute URL', () => {
     const imgHtml = '<html><body><img class="photo" src="/images/shirt.jpg" /></body></html>';
     const result = extractBySelectors(
-      imgHtml,
+      cheerio.load(imgHtml),
       { photo: 'img.photo' },
       'https://shop.example.com/product/1',
     );
@@ -38,13 +39,13 @@ describe('extractBySelectors', () => {
 
   it('falls back to data-src for lazy-loaded images', () => {
     const imgHtml = '<html><body><img class="photo" data-src="/lazy.jpg" /></body></html>';
-    const result = extractBySelectors(imgHtml, { photo: 'img.photo' }, 'https://example.com/');
+    const result = extractBySelectors(cheerio.load(imgHtml), { photo: 'img.photo' }, 'https://example.com/');
     expect(result.photo).toBe('https://example.com/lazy.jpg');
   });
 
   it('keeps an already-absolute image URL unresolved when no baseUrl is given', () => {
     const imgHtml = '<html><body><img class="photo" src="https://cdn.example.com/x.jpg" /></body></html>';
-    const result = extractBySelectors(imgHtml, { photo: 'img.photo' });
+    const result = extractBySelectors(cheerio.load(imgHtml), { photo: 'img.photo' });
     expect(result.photo).toBe('https://cdn.example.com/x.jpg');
   });
 });

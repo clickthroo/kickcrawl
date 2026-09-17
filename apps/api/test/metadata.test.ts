@@ -1,3 +1,4 @@
+import * as cheerio from 'cheerio';
 import { describe, expect, it } from 'vitest';
 import { extractMetadata } from '../src/services/metadata.js';
 
@@ -13,7 +14,7 @@ describe('extractMetadata', () => {
         <body></body>
       </html>
     `;
-    const meta = extractMetadata(html, 'https://shop.example.com/product/1', 200);
+    const meta = extractMetadata(cheerio.load(html), 'https://shop.example.com/product/1', 200);
     expect(meta.title).toBe('1990-91 Manchester United Home Shirt');
     expect(meta.description).toBe('A classic shirt');
     expect(meta.language).toBe('en');
@@ -24,12 +25,12 @@ describe('extractMetadata', () => {
 
   it('falls back to twitter:image when og:image is missing', () => {
     const html = '<html><head><meta name="twitter:image" content="https://cdn.example.com/x.jpg" /></head></html>';
-    const meta = extractMetadata(html, 'https://example.com/', 200);
+    const meta = extractMetadata(cheerio.load(html), 'https://example.com/', 200);
     expect(meta.image).toBe('https://cdn.example.com/x.jpg');
   });
 
   it('leaves image undefined when no image meta tag is present', () => {
-    const meta = extractMetadata('<html><head></head></html>', 'https://example.com/', 200);
+    const meta = extractMetadata(cheerio.load('<html><head></head></html>'), 'https://example.com/', 200);
     expect(meta.image).toBeUndefined();
   });
 });
