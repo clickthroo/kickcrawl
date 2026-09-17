@@ -162,6 +162,30 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ success: true });
   });
 
+  // Clears every discovered/fetched URL for a site (their scrape_results
+  // and any sales rows cascade automatically - both reference urls.id
+  // ON DELETE CASCADE) so a fresh crawl starts from a genuinely blank
+  // slate instead of mixing new results in with old rows a prior crawl
+  // already wrote - useful after a parsing fix, to see only correctly-
+  // mapped items rather than a pile of stale ones alongside them. The
+  // site's own config (allowed_paths, seller filters, etc.) and its job
+  // run history are untouched - only the urls table (and what cascades
+  // from it) is affected.
+  app.delete('/api/admin/sites/:id/urls', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query('SELECT id FROM sites WHERE id = $1', [id]);
+    if (!rows[0]) return reply.code(404).send({ success: false, error: 'Site not found' });
+
+    if (await hasActiveCrawl(id)) {
+      return reply
+        .code(409)
+        .send({ success: false, error: 'Cancel or wait for the active crawl to finish before clearing items' });
+    }
+
+    const { rowCount } = await pool.query('DELETE FROM urls WHERE site_id = $1', [id]);
+    return reply.send({ success: true, deleted: rowCount ?? 0 });
+  });
+
   app.post('/api/admin/sites/:id/map', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { rows } = await pool.query('SELECT * FROM sites WHERE id = $1', [id]);

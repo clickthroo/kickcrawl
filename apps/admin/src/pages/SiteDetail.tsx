@@ -26,6 +26,7 @@ export default function SiteDetail() {
   const [page, setPage] = useState(1);
   const [mapping, setMapping] = useState(false);
   const [crawling, setCrawling] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [rescraping, setRescraping] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,6 +90,30 @@ export default function SiteDetail() {
     }
   }
 
+  async function clearItems() {
+    if (!site) return;
+    if (
+      !window.confirm(
+        `Delete all ${total} discovered/fetched URL(s) for ${site.name}? This can't be undone - the site's own settings and job history are kept, but every item and its stock/sales history will be gone.`,
+      )
+    ) {
+      return;
+    }
+    setClearing(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await api.delete<{ success: boolean; deleted: number }>(`/admin/sites/${site.id}/urls`);
+      setMessage(`Cleared ${res.deleted} item(s).`);
+      setPage(1);
+      loadUrls();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Clearing items failed');
+    } finally {
+      setClearing(false);
+    }
+  }
+
   async function rescrape(urlId: string) {
     setRescraping(urlId);
     setError(null);
@@ -134,6 +159,15 @@ export default function SiteDetail() {
               title="Discover URLs and fetch each page's content as it's found"
             >
               {crawling ? 'Starting…' : 'Run crawl'}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={clearItems}
+              disabled={clearing || total === 0}
+              className="flex-1 sm:flex-initial"
+              title="Delete every discovered/fetched URL for this site so the next crawl starts from a blank slate"
+            >
+              {clearing ? 'Clearing…' : 'Clear items'}
             </Button>
           </>
         }
