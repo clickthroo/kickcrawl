@@ -87,30 +87,42 @@ export async function scrapePage(
   // strips) - so it keeps its own separate, disposable parse.
   const $ = cheerio.load(finalResult.html);
   const metadata = extractMetadata($, finalResult.finalUrl, finalResult.statusCode);
-  const contentHtml = getContentHtml(finalResult.html, opts.onlyMainContent ?? true);
 
   const out: ScrapeCoreResult = { success: true, metadata, rawHtml: finalResult.html };
 
-  if (formats.includes('markdown')) out.markdown = htmlToMarkdown(contentHtml);
-  if (formats.includes('html')) out.html = finalResult.html;
   if (formats.includes('links')) out.links = extractLinks($, finalResult.finalUrl);
 
-  const selectors = { ...(site?.default_selectors ?? {}), ...(opts.selectors ?? {}) };
-  const extracted =
-    Object.keys(selectors).length > 0 ? extractBySelectors($, selectors, finalResult.finalUrl) : {};
+  // The rest of this pipeline - isolating "main content", converting it to
+  // markdown, running selectors, reading structured product data - is real
+  // work (and real memory: getContentHtml does its own separate parse, on
+  // top of Turndown's own DOM walk) that only ever matters for a page whose
+  // markdown/html/extracted fields someone actually reads. A crawl's own
+  // link-discovery pages (Vinted's catalog/search listings, which are
+  // never themselves items) only ever request 'links' - running this for
+  // them was pure waste, and confirmed in production as the real cost that
+  // was pushing the V8 heap over its limit while re-crawling Vinted.
+  if (formats.includes('markdown') || formats.includes('html')) {
+    const contentHtml = getContentHtml(finalResult.html, opts.onlyMainContent ?? true);
+    if (formats.includes('markdown')) out.markdown = htmlToMarkdown(contentHtml);
+    if (formats.includes('html')) out.html = finalResult.html;
 
-  // A site-configured selector always wins (it was picked for a reason), but
-  // most sites won't have one - schema.org JSON-LD is the standard
-  // e-commerce SEO markup (Shopify, WooCommerce, Magento all emit it by
-  // default), so it fills price/currency/stock with real data instead of
-  // leaving every listing blank until someone hand-writes a CSS selector.
-  const structured = extractStructuredProductData($);
-  if (structured.price && !extracted.price) extracted.price = structured.price;
-  if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
-  if (structured.availability && !extracted.availability) extracted.availability = structured.availability;
-  if (structured.sku && !extracted.sku) extracted.sku = structured.sku;
+    const selectors = { ...(site?.default_selectors ?? {}), ...(opts.selectors ?? {}) };
+    const extracted =
+      Object.keys(selectors).length > 0 ? extractBySelectors($, selectors, finalResult.finalUrl) : {};
 
-  if (Object.keys(extracted).length > 0) out.extracted = extracted;
+    // A site-configured selector always wins (it was picked for a reason),
+    // but most sites won't have one - schema.org JSON-LD is the standard
+    // e-commerce SEO markup (Shopify, WooCommerce, Magento all emit it by
+    // default), so it fills price/currency/stock with real data instead of
+    // leaving every listing blank until someone hand-writes a CSS selector.
+    const structured = extractStructuredProductData($);
+    if (structured.price && !extracted.price) extracted.price = structured.price;
+    if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
+    if (structured.availability && !extracted.availability) extracted.availability = structured.availability;
+    if (structured.sku && !extracted.sku) extracted.sku = structured.sku;
+
+    if (Object.keys(extracted).length > 0) out.extracted = extracted;
+  }
 
   return out;
 }

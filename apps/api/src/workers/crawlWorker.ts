@@ -158,21 +158,22 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     console.log(
       `[crawlWorker] job ${jobId} fetching ${next.url} (depth ${next.depth}, ${completed}/${limit} done, ${queue.length} queued)`,
     );
-    // 'links' is always requested (in addition to whatever formats were
-    // asked for) so scrapePage() computes them itself from the single
-    // CheerioAPI it already parses internally (services/scrapeCore.ts) -
-    // the alternative was this file re-parsing the same page's raw HTML a
-    // second time with its own separate cheerio.load() call below, purely
-    // because 'links' wasn't in the requested formats. That extra parse,
-    // repeated on every single page of a crawl, was a real contributor to
-    // a production V8 heap-exhaustion crash on Vinted (confirmed via
-    // Railway logs: the crash tracked with cumulative pages processed,
-    // not any one page's size - each page's HTML here measured a
-    // perfectly ordinary 1.6-7.6MB).
-    const requestedFormats = scrapeOptions.formats ?? ['markdown'];
-    const formats: ScrapeFormat[] = requestedFormats.includes('links')
-      ? requestedFormats
-      : [...requestedFormats, 'links'];
+    // A non-item page's markdown/extracted content is never read anywhere
+    // below - it only exists here to have its links followed - so it has
+    // no reason to request 'markdown' at all. That's not a micro-
+    // optimization: confirmed via Railway's own heap logging, Node's heap
+    // actually *drops* between ordinary pages (GC is doing its job fine),
+    // and the real cost is scrapePage()'s markdown/extraction pipeline
+    // running in full on Vinted's own catalog/search listing pages -
+    // heavy, JS-hydrated pages that are never items themselves (they
+    // don't match allowed_paths) yet were getting fully processed anyway
+    // on every fetch. 'links' is always requested (in addition to
+    // whatever formats an item page needs) so scrapePage() computes them
+    // itself from the single CheerioAPI it already parses internally
+    // (services/scrapeCore.ts), instead of this file re-parsing the same
+    // raw HTML a second time.
+    const baseFormats: ScrapeFormat[] = isItem ? scrapeOptions.formats ?? ['markdown'] : [];
+    const formats: ScrapeFormat[] = baseFormats.includes('links') ? baseFormats : [...baseFormats, 'links'];
     const result = await scrapePageWithTimeout(
       next.url,
       { formats, onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser: scrapeOptions.useBrowser },
