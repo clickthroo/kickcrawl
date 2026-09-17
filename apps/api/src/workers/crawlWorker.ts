@@ -107,7 +107,7 @@ export async function scrapePageWithTimeout(
         resolve({
           success: false,
           error: `Timed out after ${PAGE_TIMEOUT_MS}ms fetching this page`,
-          metadata: { sourceURL: url, statusCode: 0 },
+          metadata: { sourceURL: url, statusCode: 0, images: [] },
         });
       }, PAGE_TIMEOUT_MS),
     ),

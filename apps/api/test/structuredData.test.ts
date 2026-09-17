@@ -30,6 +30,7 @@ describe('extractStructuredProductData', () => {
       currency: 'GBP',
       availability: 'https://schema.org/InStock',
       sku: 'MUFC-9091-H',
+      images: [],
     });
   });
 
@@ -67,6 +68,7 @@ describe('extractStructuredProductData', () => {
       currency: null,
       availability: null,
       sku: null,
+      images: [],
     });
   });
 
@@ -81,6 +83,7 @@ describe('extractStructuredProductData', () => {
       currency: null,
       availability: null,
       sku: null,
+      images: [],
     });
   });
 
@@ -119,6 +122,52 @@ describe('extractStructuredProductData', () => {
       currency: null,
       availability: null,
       sku: null,
+      images: [],
+    });
+  });
+
+  describe('images', () => {
+    it('reads a single image URL string', () => {
+      const html = pageWithJsonLd({ '@type': 'Product', image: 'https://example.com/shirt.jpg' });
+      expect(extractStructuredProductData(cheerio.load(html)).images).toEqual(['https://example.com/shirt.jpg']);
+    });
+
+    it('reads an array of image URL strings, in order', () => {
+      const html = pageWithJsonLd({
+        '@type': 'Product',
+        image: ['https://example.com/1.jpg', 'https://example.com/2.jpg'],
+      });
+      expect(extractStructuredProductData(cheerio.load(html)).images).toEqual([
+        'https://example.com/1.jpg',
+        'https://example.com/2.jpg',
+      ]);
+    });
+
+    it('reads the url field of ImageObject entries', () => {
+      const html = pageWithJsonLd({
+        '@type': 'Product',
+        image: [{ '@type': 'ImageObject', url: 'https://example.com/1.jpg' }, 'https://example.com/2.jpg'],
+      });
+      expect(extractStructuredProductData(cheerio.load(html)).images).toEqual([
+        'https://example.com/1.jpg',
+        'https://example.com/2.jpg',
+      ]);
+    });
+
+    it('collects images even from a Product node with no price at all', () => {
+      // Images and price are independent signals - a page can have a full
+      // photo set in its JSON-LD without ever stating a price there (e.g.
+      // Vinted's own item pages, where price only ever shows up as plain
+      // page text, never in structured data).
+      const html = pageWithJsonLd({ '@type': 'Product', image: 'https://example.com/shirt.jpg' });
+      const result = extractStructuredProductData(cheerio.load(html));
+      expect(result.price).toBeNull();
+      expect(result.images).toEqual(['https://example.com/shirt.jpg']);
+    });
+
+    it('is empty when the Product node has no image field', () => {
+      const html = pageWithJsonLd({ '@type': 'Product', offers: { price: '10.00' } });
+      expect(extractStructuredProductData(cheerio.load(html)).images).toEqual([]);
     });
   });
 });

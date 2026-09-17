@@ -32,5 +32,23 @@ describe('extractMetadata', () => {
   it('leaves image undefined when no image meta tag is present', () => {
     const meta = extractMetadata(cheerio.load('<html><head></head></html>'), 'https://example.com/', 200);
     expect(meta.image).toBeUndefined();
+    expect(meta.images).toEqual([]);
+  });
+
+  it('collects every og:image tag, not just the first - a gallery page can legitimately repeat the tag once per photo', () => {
+    const html = `
+      <html><head>
+        <meta property="og:image" content="/1.jpg" />
+        <meta property="og:image" content="/2.jpg" />
+        <meta property="og:image" content="/3.jpg" />
+      </head></html>
+    `;
+    const meta = extractMetadata(cheerio.load(html), 'https://shop.example.com/product/1', 200);
+    expect(meta.images).toEqual([
+      'https://shop.example.com/1.jpg',
+      'https://shop.example.com/2.jpg',
+      'https://shop.example.com/3.jpg',
+    ]);
+    expect(meta.image).toBe('https://shop.example.com/1.jpg');
   });
 });

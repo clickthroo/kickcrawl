@@ -51,6 +51,7 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
          latest.fetched_at,
          m.content ->> 'title' AS title,
          m.content ->> 'image' AS image,
+         m.content -> 'images' AS images,
          e.content AS extracted,
          md.content AS markdown
        FROM (SELECT DISTINCT url_id FROM scrape_results WHERE job_id = $1) du
@@ -90,7 +91,9 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
         url: p.url,
         title: p.title,
         description: p.markdown?.slice(0, 4000) ?? null,
-        images: [p.image],
+        // images is only absent for rows scraped before this field existed
+        // - fall back to the single image they do have.
+        images: p.images ?? [p.image],
         extracted: p.extracted,
         scrapedAt: p.fetched_at,
         currencyRates,

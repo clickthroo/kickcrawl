@@ -60,7 +60,7 @@ export async function scrapePage(
     return {
       success: false,
       error: result.error,
-      metadata: { sourceURL: url, statusCode: result.statusCode },
+      metadata: { sourceURL: url, statusCode: result.statusCode, images: [] },
     };
   }
 
@@ -120,6 +120,15 @@ export async function scrapePage(
     if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
     if (structured.availability && !extracted.availability) extracted.availability = structured.availability;
     if (structured.sku && !extracted.sku) extracted.sku = structured.sku;
+
+    // Merge in whatever schema.org's Product.image gave us on top of the
+    // og:image tags extractMetadata already found - a page can carry its
+    // full photo gallery in either place (or split across both), and
+    // neither source alone is guaranteed to have every photo.
+    if (structured.images.length > 0) {
+      metadata.images = [...new Set([...metadata.images, ...structured.images])];
+      metadata.image = metadata.image ?? metadata.images[0];
+    }
 
     if (Object.keys(extracted).length > 0) out.extracted = extracted;
   }

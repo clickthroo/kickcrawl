@@ -425,6 +425,14 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\b(As New|Near Mint|Very Good|Brand New|Excellent|Good|Fair|Poor|New|Used|Mint)\b/gi, '')
     .replace(/\b(Mens|Womens|Women'?s|Men'?s|Kids|Youth|Boys|Girls|Junior|Adult)\b/gi, '')
     .replace(/\bSize\b/gi, '')
+    // Spelled-out sizes ("Small mens", "Medium", "Large") are as common in
+    // real listing titles as the abbreviated forms right below - Vinted's
+    // own titles use them (e.g. "... 20/21. Small mens"), and left
+    // unstripped they get pulled into the team guess as if they were part
+    // of the name, exactly the way an unstripped "XL" would be.
+    .replace(/\bExtra[- ]?Small\b/gi, '')
+    .replace(/\bExtra[- ]?Large\b/gi, '')
+    .replace(/\b(Small|Medium|Large)\b/gi, '')
     .replace(/\b(XXXL|XXL|XL|XS|2XL|3XL|4XL|5XL|X-?Large|XX-?Large)\b/gi, '')
     // Tournament words are never part of a national team's own name (the
     // team itself, e.g. "France", should survive - only the tournament
@@ -901,7 +909,9 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   const haystack = `${title} ${description}`.trim();
   const extracted = input.extracted ?? null;
 
-  const images = (input.images ?? []).filter((i): i is string => !!i && i.trim().length > 0);
+  const images = [
+    ...new Set((input.images ?? []).filter((i): i is string => !!i && i.trim().length > 0)),
+  ];
   const hostname = retailerHostname(input.url);
 
   const confidence: Record<string, Confidence> = {};

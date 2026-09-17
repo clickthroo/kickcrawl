@@ -5,9 +5,13 @@ export interface StructuredProductData {
   currency: string | null;
   availability: string | null;
   sku: string | null;
+  /** Every image found across all Product nodes, in document order - schema.org's Product.image can be a single URL, an ImageObject, or an array of either. */
+  images: string[];
 }
 
-const EMPTY: StructuredProductData = { price: null, currency: null, availability: null, sku: null };
+type OfferData = Omit<StructuredProductData, 'images'>;
+
+const EMPTY_OFFER: OfferData = { price: null, currency: null, availability: null, sku: null };
 
 /**
  * A single JSON-LD node, loosely typed - schema.org's Product/Offer shapes
@@ -52,15 +56,28 @@ function asString(value: unknown): string | null {
  * but some sites emit just the bare token - kept as-is either way, since
  * kickioProfile's detectStockStatus already matches both forms.
  */
-function readOfferData(node: JsonLdNode): StructuredProductData {
+function readOfferData(node: JsonLdNode): OfferData {
   const offer = firstOffer(node);
-  if (!offer) return EMPTY;
+  if (!offer) return EMPTY_OFFER;
   return {
     price: asString(offer.price ?? offer.lowPrice),
     currency: asString(offer.priceCurrency),
     availability: asString(offer.availability),
     sku: asString(node.sku ?? offer.sku),
   };
+}
+
+/** schema.org's Product.image is a single URL string, an ImageObject ({ url: ... }), or an array of either. */
+function readImages(node: JsonLdNode): string[] {
+  const raw = node.image;
+  if (!raw) return [];
+  const toUrl = (v: unknown): string | null => {
+    if (typeof v === 'string') return asString(v);
+    if (v && typeof v === 'object' && 'url' in v) return asString((v as JsonLdNode).url);
+    return null;
+  };
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list.map(toUrl).filter((v): v is string => !!v);
 }
 
 /**
@@ -77,6 +94,9 @@ function readOfferData(node: JsonLdNode): StructuredProductData {
  * share one parse instead of each re-parsing the same HTML independently.
  */
 export function extractStructuredProductData($: CheerioAPI): StructuredProductData {
+  let offer: OfferData = EMPTY_OFFER;
+  const images: string[] = [];
+
   for (const script of $('script[type="application/ld+json"]').toArray()) {
     const raw = $(script).contents().text();
     if (!raw.trim()) continue;
@@ -86,26 +106,35 @@ export function extractStructuredProductData($: CheerioAPI): StructuredProductDa
     } catch {
       continue;
     }
+    // Every Product node's images are worth keeping (a page can legitimately
+    // list more than one), but only the first node that actually has a
+    // price wins for the offer fields - the same "first real value, not
+    // every value" rule the rest of this file already follows for price.
     for (const product of findProductNodes(parsed)) {
-      const data = readOfferData(product);
-      if (data.price) return data;
+      images.push(...readImages(product));
+      if (offer.price === null) {
+        const data = readOfferData(product);
+        if (data.price) offer = data;
+      }
     }
   }
 
-  const metaPrice =
-    $('meta[property="product:price:amount"]').attr('content') ??
-    $('meta[itemprop="price"]').attr('content');
-  if (metaPrice) {
-    return {
-      price: asString(metaPrice),
-      currency:
-        $('meta[property="product:price:currency"]').attr('content') ??
-        $('meta[itemprop="priceCurrency"]').attr('content') ??
-        null,
-      availability: $('meta[itemprop="availability"]').attr('content') ?? null,
-      sku: $('meta[itemprop="sku"]').attr('content') ?? null,
-    };
+  if (offer.price === null) {
+    const metaPrice =
+      $('meta[property="product:price:amount"]').attr('content') ??
+      $('meta[itemprop="price"]').attr('content');
+    if (metaPrice) {
+      offer = {
+        price: asString(metaPrice),
+        currency:
+          $('meta[property="product:price:currency"]').attr('content') ??
+          $('meta[itemprop="priceCurrency"]').attr('content') ??
+          null,
+        availability: $('meta[itemprop="availability"]').attr('content') ?? null,
+        sku: $('meta[itemprop="sku"]').attr('content') ?? null,
+      };
+    }
   }
 
-  return EMPTY;
+  return { ...offer, images };
 }
