@@ -470,29 +470,75 @@ export function guessTeamFromTitle(title: string): string {
 // Player name + number (Part 2 "Player name" / "Shirt number")
 // =========================================================================
 
+// A single-word (possibly accented, hyphenated, or apostrophised) surname
+// immediately followed by a shirt number at the very end of the text, with
+// or without a "#" - the common back-print shape a seller types out
+// verbatim ("Beckham 7", "Müller 25"), as distinct from the "#"-delimited
+// pattern below for a full multi-word name lifted from a more structured
+// (e.g. eBay-style) title. Shared by extractPlayerNumber() and
+// extractPlayerNameFromTitle() so both halves of the same real listing
+// stay consistent with each other instead of silently drifting apart -
+// previously extractPlayerNumber()'s own copy of this excluded accented
+// letters entirely (À-ÿ), so a name like "Müller" broke the match before
+// ever reaching the number, and extractPlayerNameFromTitle() had no
+// matching fallback for this shape at all.
+const TRAILING_NAME_NUMBER = /([A-Za-z][A-Za-zÀ-ÿ'’.-]+)\s+#?(\d{1,2})$/;
+const TRAILING_NAME_NUMBER_STOPWORDS = new Set(['shirt', 'jersey', 'kit', 'size', 'version']);
+
+function stripTrailingSizeCode(text: string): string {
+  return text.replace(/\s*\([A-Z0-9]{1,4}\)\s*$/i, '').trimEnd();
+}
+
 export function extractPlayerNumber(text: string): string | null {
   const hashMatch = text.match(/#(\d+)/);
   if (hashMatch) return hashMatch[1];
-  const stripped = text.replace(/\s*\([A-Z0-9]{1,4}\)\s*$/i, '').trimEnd();
-  const tail = stripped.match(/([A-Za-z][A-Za-z'’.-]+)\s+#?(\d{1,2})$/);
-  if (!tail) return null;
-  const prev = tail[1].toLowerCase();
-  if (['shirt', 'jersey', 'kit', 'size', 'version'].includes(prev)) return null;
+  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
+  if (!tail || TRAILING_NAME_NUMBER_STOPWORDS.has(tail[1].toLowerCase())) return null;
   return tail[2];
 }
 
-export function extractPlayerNameFromTitle(text: string): string | null {
-  const m = text.match(/((?:[A-Za-zÀ-ÿ]+\s+){0,3}[A-Za-zÀ-ÿ]+)\s*#\d+/);
-  if (!m) return null;
-  const cleaned = m[1]
-    .trim()
-    .replace(
-      /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special)\b/gi,
-      '',
-    )
-    .trim();
+const PLAYER_NAME_NOISE_WORDS =
+  /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special)\b/gi;
+
+function cleanPlayerNameCandidate(raw: string): string | null {
+  const cleaned = raw.trim().replace(PLAYER_NAME_NOISE_WORDS, '').trim();
   if (!cleaned || !/[A-Za-zÀ-ÿ]/.test(cleaned)) return null;
   return cleaned;
+}
+
+export function extractPlayerNameFromTitle(text: string): string | null {
+  const hashMatch = text.match(/((?:[A-Za-zÀ-ÿ]+\s+){0,3}[A-Za-zÀ-ÿ]+)\s*#\d+/);
+  if (hashMatch) {
+    const cleaned = cleanPlayerNameCandidate(hashMatch[1]);
+    if (cleaned) return cleaned;
+  }
+
+  // Vinted's own listing style almost never uses "#10" - a bare trailing
+  // "Name Number" with no delimiter at all is the far more common way a
+  // single-surname back print gets typed out (e.g. "Man Utd Away Shirt
+  // Beckham 7"). extractPlayerNumber() already accepted this shape for
+  // the number half; without this, the name half of that same listing
+  // was silently dropped even though the number was found fine.
+  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
+  if (tail && !TRAILING_NAME_NUMBER_STOPWORDS.has(tail[1].toLowerCase())) {
+    return cleanPlayerNameCandidate(tail[1]);
+  }
+
+  return null;
+}
+
+/**
+ * The back of a shirt is printed in all-caps ("BECKHAM") - a seller
+ * copying that straight into a listing is the normal case, not an edge
+ * case worth ignoring, so it's worth normalizing on the way out rather
+ * than surfacing shouted text as if it were the actual product name.
+ * Already mixed-case input (an explicit field, or a name that genuinely
+ * includes a mid-word capital like "McTominay") is left untouched rather
+ * than force-reformatted, since re-casing it could easily get it wrong.
+ */
+function properCaseName(name: string): string {
+  if (!/[A-Za-z]/.test(name) || name !== name.toUpperCase()) return name;
+  return name.replace(/\b\w+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 }
 
 export function normalizePlayerName(team: string | null, player: string | null): string | null {
@@ -501,14 +547,18 @@ export function normalizePlayerName(team: string | null, player: string | null):
   if (!p) return null;
   if (/^(unknown|n\/?a|none|null|-)$/i.test(p)) return null;
   if (!/[A-Za-zÀ-ÿ]/.test(p)) return null;
-  if (!team) return p;
+  if (!team) return properCaseName(p);
   const t = team.replace(/\s+/g, ' ').trim();
-  if (!t) return p;
-  if (p.toLowerCase().startsWith(t.toLowerCase() + ' ')) return p.slice(t.length).trim() || null;
+  if (!t) return properCaseName(p);
+  if (p.toLowerCase().startsWith(t.toLowerCase() + ' ')) {
+    const rest = p.slice(t.length).trim();
+    return rest ? properCaseName(rest) : null;
+  }
   const teamTokens = new Set(t.toLowerCase().split(/\s+/));
   const words = p.split(/\s+/);
   while (words.length > 1 && teamTokens.has(words[0].toLowerCase())) words.shift();
-  return words.join(' ').trim() || null;
+  const rest = words.join(' ').trim();
+  return rest ? properCaseName(rest) : null;
 }
 
 export function stripManufacturerFromPlayer(player: string | null, manufacturer: string | null): string | null {

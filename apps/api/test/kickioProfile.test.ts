@@ -4,11 +4,14 @@ import {
   detectColours,
   detectShirtType,
   detectStockStatus,
+  extractPlayerNameFromTitle,
+  extractPlayerNumber,
   extractSeason,
   extractSeasonSpan,
   extractSizeFromTitle,
   gradeConditionText,
   guessTeamFromTitle,
+  normalizePlayerName,
   retailerHostname,
   RETAILER_CONDITION_OVERRIDES,
 } from '../src/services/kickioProfile.js';
@@ -133,6 +136,65 @@ describe('guessTeamFromTitle', () => {
     // it survived as "Arsenal Pink" the same way an unstripped size word
     // used to leak through before that was fixed above.
     expect(guessTeamFromTitle('Arsenal Pink Third Shirt 22/23 Small')).toBe('Arsenal');
+  });
+});
+
+describe('extractPlayerNumber', () => {
+  it('reads a "#10"-style number', () => {
+    expect(extractPlayerNumber('Man Utd Away Shirt Rooney #10')).toBe('10');
+  });
+
+  it('reads a bare trailing "Name Number" with no "#" at all - the common Vinted shape', () => {
+    expect(extractPlayerNumber('Man Utd Away Shirt Beckham 7')).toBe('7');
+  });
+
+  it('reads a number after an accented surname - previously broke the match entirely', () => {
+    // The trailing-name regex used to exclude accented letters (À-ÿ)
+    // outright, so a name like "Müller" broke the match before ever
+    // reaching the number after it, not just its own extraction.
+    expect(extractPlayerNumber('Bayern Home Shirt Müller 25')).toBe('25');
+  });
+
+  it('does not mistake a trailing size/noise word for a player name', () => {
+    expect(extractPlayerNumber('Man Utd Away Shirt 10')).toBeNull();
+  });
+});
+
+describe('extractPlayerNameFromTitle', () => {
+  it('reads a multi-word name from a "#10"-style title', () => {
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt Cristiano Ronaldo #7')).toBe('Cristiano Ronaldo');
+  });
+
+  it('reads a bare trailing "Name Number" with no "#" at all - the common Vinted shape', () => {
+    // Previously only the "#" pattern was supported, so this exact real-
+    // world shape - a plain single-surname back print typed straight into
+    // the title - found the number (extractPlayerNumber already accepted
+    // it) but silently dropped the name half of the same listing.
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt Beckham 7')).toBe('Beckham');
+  });
+
+  it('reads an accented surname from the bare trailing shape', () => {
+    expect(extractPlayerNameFromTitle('Bayern Home Shirt Müller 25')).toBe('Müller');
+  });
+
+  it('returns null rather than a trailing size/noise word', () => {
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt 10')).toBeNull();
+  });
+});
+
+describe('normalizePlayerName', () => {
+  it('title-cases an all-caps name, the normal case for a shirt back print copied verbatim', () => {
+    expect(normalizePlayerName('Man Utd', 'BECKHAM')).toBe('Beckham');
+    expect(normalizePlayerName(null, 'CRISTIANO RONALDO')).toBe('Cristiano Ronaldo');
+  });
+
+  it('leaves already mixed-case input untouched rather than re-casing it', () => {
+    expect(normalizePlayerName(null, 'van Dijk')).toBe('van Dijk');
+    expect(normalizePlayerName(null, 'McTominay')).toBe('McTominay');
+  });
+
+  it('still strips a leading team-name mention before applying case normalization', () => {
+    expect(normalizePlayerName('Manchester United', 'MANCHESTER UNITED BECKHAM')).toBe('Beckham');
   });
 });
 
@@ -349,6 +411,20 @@ describe('buildKickioProfile', () => {
     expect(profile.confidence.team).toBe('certain');
     expect(profile.confidence.season).toBe('certain');
     expect(profile.needs_review).toBe(false);
+  });
+
+  it('reads a player name and number from a Vinted-style title - all-caps back print, no "#"', () => {
+    // The two things wrong with this exact shape before this fix: the
+    // bare "Name Number" tail (no "#") was never checked for a name at
+    // all, and even if it had been, "BECKHAM" would have surfaced as
+    // shouted text instead of the normal way a person writes a name.
+    const profile = buildKickioProfile({
+      url: 'https://www.vinted.co.uk/items/1-man-utd-away-shirt-beckham-7',
+      title: 'Man Utd Away Shirt Size L BECKHAM 7',
+      extracted: { team: 'Manchester United' },
+    });
+    expect(profile.identity.player).toBe('Beckham');
+    expect(profile.identity.number).toBe('7');
   });
 
   it('maps a jacket example with the jacket-shaped identity (no shirt_type/issue/sleeves/player/number)', () => {
