@@ -21,6 +21,27 @@ describe('detectSellerSignals', () => {
     expect(detectSellerSignals(text)).toEqual({ feedbackCount: 138, isPro: false });
   });
 
+  it('reads the feedback count from the scraper\'s real markdown, where it is a link to the seller\'s profile', () => {
+    // Real production example: a Sheffield Wednesday item from seller
+    // "juliewhittaker" - the name and count are both markdown links to
+    // the same profile URL, not bare text, and the badge underneath is
+    // "Frequent Uploads" rather than "Pro".
+    const text = [
+      '[juliewhittaker](https://www.vinted.co.uk/member/96669517)',
+      '[86](https://www.vinted.co.uk/member/96669517)',
+      'Frequent Uploads',
+      'Regularly lists 5 or more items.',
+    ].join('\n');
+    expect(detectSellerSignals(text)).toEqual({ feedbackCount: 86, isPro: false });
+  });
+
+  it('reads a Pro seller\'s card the same way when their count is also a markdown link', () => {
+    const text = ['[RB Shirts](https://www.vinted.co.uk/member/12345)', '[2263](https://www.vinted.co.uk/member/12345)', 'Pro'].join(
+      '\n',
+    );
+    expect(detectSellerSignals(text)).toEqual({ feedbackCount: 2263, isPro: true });
+  });
+
   it('does not mistake a stray "Pro" elsewhere on the page for the seller badge when no feedback count precedes it', () => {
     // e.g. an item description mentioning "pro-style" replica, or
     // unrelated page chrome - only a "Pro" directly after a bare-digit
