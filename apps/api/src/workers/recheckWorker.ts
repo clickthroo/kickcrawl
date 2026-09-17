@@ -9,7 +9,7 @@ import { getCurrencyRates } from '../lib/currencyRates.js';
 import { buildKickioProfile } from '../services/kickioProfile.js';
 import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
-import { PAGE_TIMEOUT_MS } from './crawlWorker.js';
+import { PAGE_TIMEOUT_MS, passesSellerFilter } from './crawlWorker.js';
 
 export const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -30,7 +30,7 @@ interface RecheckableUrl {
   stock_status: string | null;
 }
 
-async function recheckSite(
+export async function recheckSite(
   site: SiteConfig,
   jobId: string,
   currencyRates: Record<string, number>,
@@ -51,6 +51,22 @@ async function recheckSite(
   for (const item of items) {
     try {
       const result = await scrapePage(item.url, { formats: ['markdown'], onlyMainContent: true }, site);
+
+      // A site's seller filters (require_pro_seller, min_seller_feedback)
+      // can be turned on, or tightened, after an item was already
+      // recorded - confirmed in production: a non-Pro seller's item kept
+      // being refreshed by every recheck indefinitely even with "Pro
+      // only" selected, because a recheck only ever updated stock/price,
+      // never re-validated the seller. Drop it here instead, the same
+      // way a fresh crawl would never have recorded it in the first
+      // place - cascades to its scrape_results/sales rows too.
+      if (result.success && !passesSellerFilter(result.markdown, site)) {
+        await pool.query(`DELETE FROM urls WHERE id = $1`, [item.id]);
+        progress.checked += 1;
+        await pool.query(`UPDATE jobs SET completed_pages = $2 WHERE id = $1`, [jobId, progress.checked]);
+        continue;
+      }
+
       const urlId = await markUrlFetched(site.id, item.url, result.metadata.statusCode, result.error);
       await persistScrapeResult(urlId, jobId, result);
 
