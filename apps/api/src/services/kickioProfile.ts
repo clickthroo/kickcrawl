@@ -953,7 +953,22 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     season = r.season || null;
     extraSeasons = r.extraSeasons;
   } else {
-    const r = extractSeasonSpan(haystack);
+    // Try the title alone first, and only fall back to the full haystack
+    // (title + up to 4000 chars of the page's own markdown) when the title
+    // itself has nothing. Confirmed against a real Vinted item: its page
+    // markdown's boilerplate legal footer contains standard UK legislation
+    // citation URLs (".../2013/3134/regulation/29",
+    // ".../2015/15/contents/enacted") that this same regex reads as two
+    // DIFFERENT "YYYY-YY" season ranges - the "more than one distinct
+    // season" ambiguity guard then correctly bails to blank, just on
+    // garbage nowhere near the actual listing, before ever reaching the
+    // real "22/23" sitting right there in the title. Since the season is
+    // almost always in the title when it's anywhere at all, checking it in
+    // isolation first keeps the ambiguity guard meaningful instead of
+    // firing on unrelated page furniture (nav breadcrumbs, "similar
+    // items", legal disclaimers).
+    const fromTitle = extractSeasonSpan(title);
+    const r = fromTitle.season ? fromTitle : extractSeasonSpan(haystack);
     season = r.season || null;
     extraSeasons = r.extraSeasons;
   }

@@ -384,6 +384,31 @@ describe('buildKickioProfile', () => {
     expect(profile.identity.extra_seasons).toEqual(['1999-00']);
   });
 
+  it('finds the season in the title even when the page markdown\'s own boilerplate looks like a conflicting one', () => {
+    // Real bug, from a real Vinted item: the description passed in here is
+    // the actual page's own boilerplate legal footer (present on every
+    // Vinted item page). Its two legislation citation URLs -
+    // ".../regulation/29)" preceded by "2013" and "/3134", and
+    // ".../2015/15/contents/enacted" - each look like a "YYYY-YY" season
+    // range to the same regex used on titles, and normalize to two
+    // DIFFERENT base seasons ("2013-14" and "2015-16"). Scanning the whole
+    // haystack in one pass treated that as a genuine multi-season
+    // conflict and bailed to blank, even though the title's own "22/23"
+    // was completely unambiguous on its own.
+    const description = `Arsenal Pink Third Shirt 22/23 Small · Very good
+Consumer Contracts (Information, Cancellation and Additional Charges) Regulations 2013 (section 29(1) of the Consumer Contracts (Information, Cancellation and Additional Charges) Regulations 2013)
+right to reject (section 20 of the Consumer Rights Act) does not apply, see https://www.legislation.gov.uk/uksi/2013/3134/regulation/29
+Consumer Rights Act 2015, see https://www.legislation.gov.uk/ukpga/2015/15/contents/enacted`;
+    const profile = buildKickioProfile({
+      url: 'https://www.vinted.co.uk/items/10033708688-arsenal-pink-third-shirt-2223-small',
+      title: 'Arsenal Pink Third Shirt 22/23 Small | Vinted',
+      description,
+      extracted: null,
+    });
+    expect(profile.identity.season).toBe('2022-23');
+    expect(profile.confidence.season).toBe('certain');
+  });
+
   it('detects the main two colours from free text when no explicit colour field is given', () => {
     const profile = buildKickioProfile({
       url: 'https://example.com/item/colours',
