@@ -684,6 +684,32 @@ export function gradeConditionText(raw: string | null | undefined, hostname?: st
 }
 
 // =========================================================================
+// Price (text fallback - only used when neither an explicit price field
+// nor structured product data (services/structuredData.ts) yielded one.
+// Motivating case: JS-rendered marketplaces like Vinted, whose price never
+// lands in a JSON-LD block or meta tag at all, but is always shown as
+// plain text on the page itself. Currency detection is symbol/code based,
+// not site-specific - this is the same class of generic pattern-matching
+// as extractSeason/detectColours above, not a guessed value.
+// =========================================================================
+
+const CURRENCY_SYMBOLS: Record<string, string> = { '£': 'GBP', $: 'USD', '€': 'EUR' };
+
+export function extractPriceFromText(text: string): { price: number; currency: string } | null {
+  const symbolMatch = text.match(/([£$€])\s*(\d{1,6}(?:[.,]\d{2})?)\b/);
+  if (symbolMatch) {
+    const amount = parseFloat(symbolMatch[2].replace(',', '.'));
+    if (Number.isFinite(amount)) return { price: amount, currency: CURRENCY_SYMBOLS[symbolMatch[1]] };
+  }
+  const codeMatch = text.match(/\b(\d{1,6}(?:[.,]\d{2})?)\s*(GBP|USD|EUR)\b/i);
+  if (codeMatch) {
+    const amount = parseFloat(codeMatch[1].replace(',', '.'));
+    if (Number.isFinite(amount)) return { price: amount, currency: codeMatch[2].toUpperCase() };
+  }
+  return null;
+}
+
+// =========================================================================
 // Other field canonicalizers (Part 2 - direct to their final enum value;
 // each falls back to the documented default, never a guess)
 // =========================================================================
@@ -1023,13 +1049,24 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     : extractSizeFromTitle(title);
 
   // ---- Price / currency / quantity ----
-  const rawPrice = input.price ?? (() => {
+  const explicitPrice = input.price ?? (() => {
     const raw = caseInsensitiveGet(extracted, 'price');
     if (!raw) return null;
     const n = Number(raw.replace(/[^0-9.]/g, ''));
     return Number.isFinite(n) ? n : null;
   })();
-  const rawCurrency = (input.currency ?? caseInsensitiveGet(extracted, 'currency') ?? 'GBP').toUpperCase();
+
+  let rawPrice = explicitPrice;
+  let rawCurrency = (input.currency ?? caseInsensitiveGet(extracted, 'currency') ?? 'GBP').toUpperCase();
+  if (rawPrice == null) {
+    const textPrice = extractPriceFromText(haystack);
+    if (textPrice) {
+      rawPrice = textPrice.price;
+      rawCurrency = textPrice.currency;
+      confidence.price = 'inferred';
+      reviewReasons.push('price read from page text - no explicit price field or structured product data was found');
+    }
+  }
 
   // Kickio is a GBP-denominated UK marketplace - a listing priced in
   // another currency gets converted using an admin-maintained approximate

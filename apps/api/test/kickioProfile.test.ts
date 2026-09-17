@@ -541,4 +541,56 @@ describe('buildKickioProfile', () => {
       expect(profile.listing.currency).toBe('GBP');
     });
   });
+
+  describe('price text fallback', () => {
+    // The motivating case: a JS-rendered marketplace (Vinted) whose price
+    // never lands in a JSON-LD block or meta tag, only in the page's own
+    // visible text - so this is the last resort, tried only once both an
+    // explicit price field and structured product data have come up empty.
+    it('reads a £-prefixed price from the description when nothing else provided one', () => {
+      const profile = buildKickioProfile({
+        url: 'https://vinted.co.uk/items/1',
+        title: 'Man City home shirt 2020/21 - Nike, size L',
+        description: 'Great condition\n£25.00\nSize: L',
+      });
+      expect(profile.listing.price).toBe(25);
+      expect(profile.listing.currency).toBe('GBP');
+      expect(profile.confidence.price).toBe('inferred');
+      expect(profile.needs_review).toBe(true);
+      expect(profile.review_reason).toMatch(/price read from page text/);
+    });
+
+    it('reads a $-prefixed price and a currency-code price', () => {
+      expect(
+        buildKickioProfile({ url: 'https://example.com/1', description: 'Selling for $30' }).listing.price,
+      ).toBe(30);
+      expect(
+        buildKickioProfile({ url: 'https://example.com/1', description: 'Selling for $30' }).listing.currency,
+      ).toBe('USD');
+      const eur = buildKickioProfile({ url: 'https://example.com/2', description: '25.00 EUR shipped' });
+      expect(eur.listing.price).toBe(25);
+      expect(eur.listing.currency).toBe('EUR');
+    });
+
+    it('never overrides an explicit price or structured product data with the text fallback', () => {
+      const profile = buildKickioProfile({
+        url: 'https://example.com/item',
+        description: 'Was £50, now £25.00',
+        price: 44.99,
+        currency: 'GBP',
+      });
+      expect(profile.listing.price).toBe(44.99);
+      expect(profile.confidence.price).toBeUndefined();
+    });
+
+    it('leaves price null, without flagging price for review, when no price text is found anywhere', () => {
+      const profile = buildKickioProfile({
+        url: 'https://example.com/item',
+        title: 'Some Team 2020-21 Home Shirt',
+        extracted: { team: 'Some Team' },
+      });
+      expect(profile.listing.price).toBeNull();
+      expect(profile.needs_review).toBe(false);
+    });
+  });
 });
