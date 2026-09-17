@@ -158,6 +158,25 @@ describe('extractPlayerNumber', () => {
   it('does not mistake a trailing size/noise word for a player name', () => {
     expect(extractPlayerNumber('Man Utd Away Shirt 10')).toBeNull();
   });
+
+  it('reads "No.10", "No 10", and "Number 10" as the same marker as "#10"', () => {
+    expect(extractPlayerNumber('Man Utd Away Shirt Rooney No.10')).toBe('10');
+    expect(extractPlayerNumber('Man Utd Away Shirt Rooney No 10')).toBe('10');
+    expect(extractPlayerNumber('Man Utd Away Shirt Rooney Number 10')).toBe('10');
+    expect(extractPlayerNumber('Man Utd Away Shirt Rooney Squad Number 10')).toBe('10');
+  });
+
+  it('finds a marked number anywhere in the title, not just at the very end', () => {
+    // Unlike the bare/unmarked shape, an explicit marker ("#", "No.",
+    // "Number") is unambiguous enough to search for anywhere, not just
+    // require it be the literal last thing in the title.
+    expect(extractPlayerNumber('Rooney #10 Man Utd Away Shirt Size L')).toBe('10');
+  });
+
+  it('does not mistake a marketplace trust badge ("No.1 seller") for a squad number', () => {
+    expect(extractPlayerNumber('No.1 seller! Man Utd Away Shirt')).toBeNull();
+    expect(extractPlayerNumber('Number 1 rated seller - Arsenal Home Shirt')).toBeNull();
+  });
 });
 
 describe('extractPlayerNameFromTitle', () => {
@@ -180,6 +199,27 @@ describe('extractPlayerNameFromTitle', () => {
   it('returns null rather than a trailing size/noise word', () => {
     expect(extractPlayerNameFromTitle('Man Utd Away Shirt 10')).toBeNull();
   });
+
+  it('reads a multi-word name before "No.10"/"Number 10"/"Squad Number 10" the same as "#10"', () => {
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt Del Piero No.10')).toBe('Del Piero');
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt Del Piero Number 10')).toBe('Del Piero');
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt Del Piero Squad Number 10')).toBe('Del Piero');
+  });
+
+  it('finds the name before a marked number anywhere in the title, not just at the very end', () => {
+    expect(extractPlayerNameFromTitle('Rooney #10 Man Utd Away Shirt Size L')).toBe('Rooney');
+  });
+
+  it('returns null for a marked number with no real name before it, rather than a leftover club-suffix word', () => {
+    // "Utd" isn't a player name - it's what's left of the team mention
+    // immediately before the marker when there's no actual player name
+    // in the title at all (a blank/number-only shirt).
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt #7')).toBeNull();
+  });
+
+  it('does not mistake a marketplace trust badge ("No.1 seller") for a player name', () => {
+    expect(extractPlayerNameFromTitle('No.1 seller! Man Utd Away Shirt')).toBeNull();
+  });
 });
 
 describe('normalizePlayerName', () => {
@@ -195,6 +235,15 @@ describe('normalizePlayerName', () => {
 
   it('still strips a leading team-name mention before applying case normalization', () => {
     expect(normalizePlayerName('Manchester United', 'MANCHESTER UNITED BECKHAM')).toBe('Beckham');
+  });
+
+  it('returns null rather than a leftover team-name fragment when the candidate is entirely team tokens', () => {
+    // Regression: the team-token strip used to stop as soon as one word
+    // was left, even if that one word was ALSO a team token - so a
+    // captured "Man Utd" (no real player name at all) resolved to the
+    // leftover "Utd" instead of correctly being recognized as no name.
+    expect(normalizePlayerName('Man Utd', 'Man Utd')).toBeNull();
+    expect(normalizePlayerName('Man Utd', 'Utd')).toBeNull();
   });
 });
 
@@ -425,6 +474,22 @@ describe('buildKickioProfile', () => {
     });
     expect(profile.identity.player).toBe('Beckham');
     expect(profile.identity.number).toBe('7');
+  });
+
+  it('falls back to the description for player name/number when the title alone has nothing', () => {
+    // Same "title first, then widen only on a miss" strategy already
+    // used for season parsing - a player name/number is almost always in
+    // the title when it's anywhere at all, so the description (the
+    // page's own markdown, not a clean product description) is only
+    // ever consulted once the title has genuinely come up empty.
+    const profile = buildKickioProfile({
+      url: 'https://www.vinted.co.uk/items/1-man-utd-away-shirt',
+      title: 'Man Utd Away Shirt Size L',
+      description: 'Great shirt! Rooney #10 printed on the back. No flaws.',
+      extracted: { team: 'Manchester United' },
+    });
+    expect(profile.identity.player).toBe('Rooney');
+    expect(profile.identity.number).toBe('10');
   });
 
   it('maps a jacket example with the jacket-shaped identity (no shirt_type/issue/sleeves/player/number)', () => {
