@@ -126,6 +126,14 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('Liverpool Home Shirt Medium')).toBe('Liverpool');
     expect(guessTeamFromTitle('Arsenal Away Shirt Large')).toBe('Arsenal');
   });
+
+  it('strips a colour word sitting between the team name and the kit type', () => {
+    // The real title from a live Vinted listing: "Pink" is a colour
+    // qualifier, not part of the team name, but nothing was stripping it -
+    // it survived as "Arsenal Pink" the same way an unstripped size word
+    // used to leak through before that was fixed above.
+    expect(guessTeamFromTitle('Arsenal Pink Third Shirt 22/23 Small')).toBe('Arsenal');
+  });
 });
 
 describe('extractSizeFromTitle', () => {
