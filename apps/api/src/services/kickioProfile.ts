@@ -415,6 +415,13 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}(?![\d/-])/g, '')
     .replace(/\b\d{4}\b/g, '')
     .replace(/\b(Home|Away|Third|Fourth|Goalkeeper|GK|Training|Pre[- ]?Match)\b/gi, '')
+    // A colour word is a qualifier between the team name and the kit-type
+    // word ("Arsenal Pink Third Shirt"), not part of the team name itself
+    // - left unstripped it gets pulled into the guess the same way an
+    // unstripped size word would. Reuses COLOUR_WORDS (the same list
+    // detectColours matches against elsewhere in this file) rather than a
+    // separate list that could drift out of sync with it.
+    .replace(new RegExp(`\\b(${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`, 'gi'), '')
     .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
