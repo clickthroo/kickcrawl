@@ -470,35 +470,40 @@ export function guessTeamFromTitle(title: string): string {
 // Player name + number (Part 2 "Player name" / "Shirt number")
 // =========================================================================
 
+// One name-shaped word - letters (incl. accented), plus an apostrophe or
+// hyphen that can appear inside a real surname ("O'Grady", "N'Golo",
+// "Alaba-Adeyemi"). Never starts with a digit, so a number can't itself
+// be mistaken for "part of a name".
+const NAME_WORD = "[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.-]*";
+const NAME_WORDS_TAIL = new RegExp(`(?:${NAME_WORD}\\s+){0,2}${NAME_WORD}$`);
+
 // A single-word (possibly accented, hyphenated, or apostrophised) surname
 // immediately followed by a shirt number at the very end of the text, with
 // or without a "#" - the common back-print shape a seller types out
-// verbatim ("Beckham 7", "Müller 25"), as distinct from the "#"-delimited
-// pattern below for a full multi-word name lifted from a more structured
-// (e.g. eBay-style) title. Shared by extractPlayerNumber() and
-// extractPlayerNameFromTitle() so both halves of the same real listing
-// stay consistent with each other instead of silently drifting apart -
-// previously extractPlayerNumber()'s own copy of this excluded accented
-// letters entirely (À-ÿ), so a name like "Müller" broke the match before
-// ever reaching the number, and extractPlayerNameFromTitle() had no
-// matching fallback for this shape at all.
-const TRAILING_NAME_NUMBER = /([A-Za-z][A-Za-zÀ-ÿ'’.-]+)\s+#?(\d{1,2})$/;
-const TRAILING_NAME_NUMBER_STOPWORDS = new Set(['shirt', 'jersey', 'kit', 'size', 'version']);
+// verbatim with no explicit marker at all ("Beckham 7", "Müller 25").
+// Deliberately anchored to the very end and limited to one word, unlike
+// the marker-based match below: an unmarked bare number floating anywhere
+// in a title is genuinely ambiguous with a season, size or price, so this
+// stays conservative rather than risk absorbing unrelated preceding words
+// (a team abbreviation, a kit-type word) into a false "name".
+const TRAILING_NAME_NUMBER = new RegExp(`(${NAME_WORD})\\s+#?(\\d{1,2})$`);
 
 function stripTrailingSizeCode(text: string): string {
   return text.replace(/\s*\([A-Z0-9]{1,4}\)\s*$/i, '').trimEnd();
 }
 
-export function extractPlayerNumber(text: string): string | null {
-  const hashMatch = text.match(/#(\d+)/);
-  if (hashMatch) return hashMatch[1];
-  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
-  if (!tail || TRAILING_NAME_NUMBER_STOPWORDS.has(tail[1].toLowerCase())) return null;
-  return tail[2];
-}
-
+// Includes generic club-name suffixes (Utd, FC, AFC, CF) alongside the
+// kit/type noise words - these are structural regardless of which
+// specific club it is (Man Utd, Newcastle Utd, Leeds Utd; Barcelona FC,
+// Chelsea FC), so they're as safe to strip as "Shirt"/"Jersey" rather
+// than something that needs the actual team name to recognize. This
+// matters specifically for a marked-number match with no real player
+// name anywhere near it (a blank/number-only shirt) - without it, the
+// team-name word immediately preceding the marker could otherwise
+// survive as a false "player name" whenever team detection didn't happen
+// to use the exact same abbreviated form as the title.
 const PLAYER_NAME_NOISE_WORDS =
-  /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special)\b/gi;
+  /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC)\b/gi;
 
 function cleanPlayerNameCandidate(raw: string): string | null {
   const cleaned = raw.trim().replace(PLAYER_NAME_NOISE_WORDS, '').trim();
@@ -506,22 +511,72 @@ function cleanPlayerNameCandidate(raw: string): string | null {
   return cleaned;
 }
 
+// An explicit, unambiguous marker ("#", "No.", "No", "Number", "Squad
+// Number") immediately before a shirt number - unlike a bare floating
+// number, this is a strong enough signal to search for anywhere in the
+// text (not just at the very end), and to accept a name on either side of
+// it ("Ronaldo #7" or "#7 Ronaldo" both read the same way in practice).
+const MARKED_NUMBER = /(?:#|\bno\.?\s*|\bnumber\s*|\bsquad\s*number\s*)(\d{1,2})\b/gi;
+
+// Common marketplace phrases ("No.1 seller", "Number 1 rated") that would
+// otherwise false-positive on the marker pattern above - a seller's own
+// trust badge, not a squad number. Checked against the word immediately
+// following the match rather than baked into the marker regex itself, so
+// a genuine "#7 Seller's Choice"-style edge case (vanishingly rare) isn't
+// what's being guarded against - this specific, common phrase shape is.
+const MARKED_NUMBER_FALSE_POSITIVE_FOLLOWERS = new Set([
+  'seller', 'sellers', 'feedback', 'rated', 'rating', 'ratings',
+  'review', 'reviews', 'star', 'stars', 'follower', 'followers',
+]);
+
+interface MarkedNumberMatch {
+  index: number;
+  length: number;
+  digits: string;
+}
+
+function findMarkedNumber(text: string): MarkedNumberMatch | null {
+  const re = new RegExp(MARKED_NUMBER);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const after = text.slice(m.index + m[0].length).match(/^\s*([A-Za-zÀ-ÿ]+)/);
+    if (after && MARKED_NUMBER_FALSE_POSITIVE_FOLLOWERS.has(after[1].toLowerCase())) continue;
+    return { index: m.index, length: m[0].length, digits: m[1] };
+  }
+  return null;
+}
+
+export function extractPlayerNumber(text: string): string | null {
+  const marked = findMarkedNumber(text);
+  if (marked) return marked.digits;
+  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
+  if (!tail || !cleanPlayerNameCandidate(tail[1])) return null;
+  return tail[2];
+}
+
 export function extractPlayerNameFromTitle(text: string): string | null {
-  const hashMatch = text.match(/((?:[A-Za-zÀ-ÿ]+\s+){0,3}[A-Za-zÀ-ÿ]+)\s*#\d+/);
-  if (hashMatch) {
-    const cleaned = cleanPlayerNameCandidate(hashMatch[1]);
-    if (cleaned) return cleaned;
+  // A name is read off the words immediately BEFORE a marked number only -
+  // "Rooney #10" / "Ronaldo No.7", the well-established convention this
+  // already handled correctly for "#". A name written AFTER the number
+  // ("#10 Rooney") is deliberately not matched: without real evidence
+  // that sellers actually write it that way, guessing at it risks
+  // preferring an unrelated word before the marker (a team abbreviation
+  // like "Utd") over ever checking after it for the real name.
+  const marked = findMarkedNumber(text);
+  if (marked) {
+    const before = text.slice(0, marked.index).trim().match(NAME_WORDS_TAIL);
+    if (before) {
+      const cleaned = cleanPlayerNameCandidate(before[0]);
+      if (cleaned) return cleaned;
+    }
   }
 
-  // Vinted's own listing style almost never uses "#10" - a bare trailing
-  // "Name Number" with no delimiter at all is the far more common way a
-  // single-surname back print gets typed out (e.g. "Man Utd Away Shirt
-  // Beckham 7"). extractPlayerNumber() already accepted this shape for
-  // the number half; without this, the name half of that same listing
-  // was silently dropped even though the number was found fine.
+  // No usable name before a marker - fall back to the conservative, end-
+  // anchored bare pattern (see TRAILING_NAME_NUMBER above).
   const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
-  if (tail && !TRAILING_NAME_NUMBER_STOPWORDS.has(tail[1].toLowerCase())) {
-    return cleanPlayerNameCandidate(tail[1]);
+  if (tail) {
+    const cleaned = cleanPlayerNameCandidate(tail[1]);
+    if (cleaned) return cleaned;
   }
 
   return null;
@@ -556,7 +611,13 @@ export function normalizePlayerName(team: string | null, player: string | null):
   }
   const teamTokens = new Set(t.toLowerCase().split(/\s+/));
   const words = p.split(/\s+/);
-  while (words.length > 1 && teamTokens.has(words[0].toLowerCase())) words.shift();
+  // Strip every leading team-name token, not just down to one remaining
+  // word - a candidate that's ENTIRELY made of team-name tokens (e.g. a
+  // captured "Man Utd" leftover fragment from a title like "Man Utd Away
+  // Shirt #7" that has no real player name in it at all) has no real name
+  // left once they're all gone, and should resolve to null rather than
+  // surface a fragment like "Utd" as if it were a genuine player.
+  while (words.length > 0 && teamTokens.has(words[0].toLowerCase())) words.shift();
   const rest = words.join(' ').trim();
   return rest ? properCaseName(rest) : null;
 }
@@ -1069,12 +1130,22 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   if (!isJacket) {
     const explicitPlayer = caseInsensitiveGet(extracted, 'player', 'playerName');
     const explicitNumber = caseInsensitiveGet(extracted, 'number', 'playerNumber', 'shirtNumber');
-    let rawPlayer = explicitPlayer ?? extractPlayerNameFromTitle(title);
+    // Title first, description only as a fallback when the title itself
+    // has nothing - the same "narrowest scope that could plausibly have
+    // it, widen only on a miss" strategy already used for season parsing.
+    // A player name/number is almost always in the title when it's
+    // anywhere at all, and description is the page's own markdown (up to
+    // 4000 chars of nav breadcrumbs, "similar items", legal boilerplate),
+    // not a clean product description - scanning it unconditionally would
+    // risk the exact kind of false match season parsing already hit once.
+    let rawPlayer = explicitPlayer ?? extractPlayerNameFromTitle(title) ?? extractPlayerNameFromTitle(description);
     rawPlayer = normalizePlayerName(team, rawPlayer);
     const manufacturerForStrip = caseInsensitiveGet(extracted, 'manufacturer', 'brand') ?? detectManufacturer(haystack);
     rawPlayer = stripManufacturerFromPlayer(rawPlayer, manufacturerForStrip);
     player = rawPlayer;
-    number = sanitizeShirtNumber(explicitNumber ?? extractPlayerNumber(title));
+    number = sanitizeShirtNumber(
+      explicitNumber ?? extractPlayerNumber(title) ?? extractPlayerNumber(description),
+    );
   }
 
   // ---- Manufacturer ----
