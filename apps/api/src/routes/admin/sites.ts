@@ -38,8 +38,12 @@ interface SiteRow {
 // turns sharing the same one-request-per-interval budget, making every
 // one of them look stuck.
 async function hasActiveCrawl(siteId: string): Promise<boolean> {
+  // 'paused' counts as active too - it's still occupying this site's one-
+  // active-crawl slot, just not doing any fetching right now. Letting a
+  // second crawl start while the first sits paused would defeat the whole
+  // point of pausing instead of cancelling.
   const { rows } = await pool.query(
-    `SELECT 1 FROM jobs WHERE site_id = $1 AND type = 'crawl' AND status IN ('queued', 'running') LIMIT 1`,
+    `SELECT 1 FROM jobs WHERE site_id = $1 AND type = 'crawl' AND status IN ('queued', 'running', 'paused') LIMIT 1`,
     [siteId],
   );
   return rows.length > 0;

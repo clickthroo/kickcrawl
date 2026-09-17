@@ -41,10 +41,49 @@ export function isCrawlItem(path: string, includePaths: string[]): boolean {
 }
 
 async function updateJobProgress(jobId: string, total: number, completed: number): Promise<void> {
+  // Guarded so this can never clobber a 'paused'/'cancelled' status an
+  // admin set while this iteration's own page fetch was already in
+  // flight - without the guard, this unconditional write would flip the
+  // row straight back to 'running' right after, and the next loop
+  // iteration's own status check (which runs before this is called again)
+  // would then see 'running' and keep going, defeating the pause/cancel
+  // the admin just clicked.
   await pool.query(
-    `UPDATE jobs SET status = 'running', total_pages = $2, completed_pages = $3 WHERE id = $1`,
+    `UPDATE jobs SET status = 'running', total_pages = $2, completed_pages = $3
+     WHERE id = $1 AND status NOT IN ('paused', 'cancelled')`,
     [jobId, total, completed],
   );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getJobStatus(jobId: string): Promise<string | undefined> {
+  const { rows } = await pool.query<{ status: string }>('SELECT status FROM jobs WHERE id = $1', [jobId]);
+  return rows[0]?.status;
+}
+
+// How often a paused crawl re-checks whether an admin has resumed or
+// cancelled it. BullMQ renews this job's own lock automatically as long as
+// the worker function hasn't returned, so sitting in this loop for a long
+// time (an admin could leave a crawl paused for hours) doesn't risk BullMQ
+// treating it as stalled the way an unattended fetch would.
+const PAUSE_POLL_INTERVAL_MS = 3_000;
+
+/**
+ * Blocks while a job's status is 'paused', re-checking on an interval.
+ * Returns the status that ended the wait - either 'cancelled' (the caller
+ * should stop the crawl entirely) or whatever non-'paused' status it saw
+ * (normally 'running', once an admin hits Resume).
+ */
+async function waitWhilePaused(jobId: string): Promise<string | undefined> {
+  let status = await getJobStatus(jobId);
+  while (status === 'paused') {
+    await sleep(PAUSE_POLL_INTERVAL_MS);
+    status = await getJobStatus(jobId);
+  }
+  return status;
 }
 
 /**
@@ -156,10 +195,30 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
   const queue: { url: string; depth: number }[] = [{ url: new URL(url).toString(), depth: 0 }];
   let completed = 0;
   const errors: string[] = [];
+  let cancelled = false;
+
+  // Cancelling a job that's still 'queued' (BullMQ hasn't picked it up
+  // yet) or already 'paused' when this worker function starts is handled
+  // the same way as a mid-run cancel below - just before any work happens
+  // instead of after some of it already has.
+  if ((await getJobStatus(jobId)) === 'cancelled') return;
 
   await updateJobProgress(jobId, Math.min(limit, 1), 0);
 
   while (queue.length > 0 && visited.size < limit) {
+    const status = await getJobStatus(jobId);
+    if (status === 'cancelled') {
+      cancelled = true;
+      break;
+    }
+    if (status === 'paused') {
+      const afterPause = await waitWhilePaused(jobId);
+      if (afterPause === 'cancelled') {
+        cancelled = true;
+        break;
+      }
+    }
+
     const next = queue.shift()!;
     if (visited.has(next.url)) continue;
     visited.add(next.url);
@@ -282,13 +341,14 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     );
   }
 
+  const finalStatus = cancelled ? 'cancelled' : 'completed';
   await pool.query(
-    `UPDATE jobs SET status = 'completed', total_pages = $2, completed_pages = $3,
+    `UPDATE jobs SET status = $6, total_pages = $2, completed_pages = $3,
        error_count = $4, errors = $5::jsonb, finished_at = now() WHERE id = $1`,
-    [jobId, visited.size, completed, errors.length, JSON.stringify(errors.map((e) => ({ message: e })))],
+    [jobId, visited.size, completed, errors.length, JSON.stringify(errors.map((e) => ({ message: e }))), finalStatus],
   );
 
-  await fireWebhook(jobId, 'completed');
+  await fireWebhook(jobId, finalStatus);
 }
 
 export function startCrawlWorker(): Worker<CrawlJobData> {

@@ -131,4 +131,43 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.send({ success: true, jobId: newJobId });
   });
+
+  // Pause/resume/cancel are cooperative: they only flip the status column,
+  // and it's the crawl worker's own loop (workers/crawlWorker.ts) that
+  // notices the change and acts on it between page fetches, not an
+  // immediate kill. A row already in a terminal state (or, for pause,
+  // already paused) is left alone rather than silently no-oping, so the
+  // admin UI can tell a stale click from a real state change.
+  app.post('/api/admin/jobs/:id/pause', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query(
+      `UPDATE jobs SET status = 'paused' WHERE id = $1 AND status = 'running' RETURNING id`,
+      [id],
+    );
+    if (!rows[0]) return reply.code(400).send({ success: false, error: 'Job is not running' });
+    return reply.send({ success: true });
+  });
+
+  app.post('/api/admin/jobs/:id/resume', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query(
+      `UPDATE jobs SET status = 'running' WHERE id = $1 AND status = 'paused' RETURNING id`,
+      [id],
+    );
+    if (!rows[0]) return reply.code(400).send({ success: false, error: 'Job is not paused' });
+    return reply.send({ success: true });
+  });
+
+  app.post('/api/admin/jobs/:id/cancel', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query(
+      `UPDATE jobs SET status = 'cancelled', finished_at = now()
+       WHERE id = $1 AND status IN ('queued', 'running', 'paused') RETURNING id`,
+      [id],
+    );
+    if (!rows[0]) {
+      return reply.code(400).send({ success: false, error: 'Job cannot be cancelled from its current state' });
+    }
+    return reply.send({ success: true });
+  });
 }
