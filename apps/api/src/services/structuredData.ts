@@ -1,4 +1,4 @@
-import * as cheerio from 'cheerio';
+import type { CheerioAPI } from 'cheerio';
 
 export interface StructuredProductData {
   price: string | null;
@@ -70,11 +70,13 @@ function readOfferData(node: JsonLdNode): StructuredProductData {
  * needing a hand-picked CSS selector configured per site. Falls back to the
  * Shopify/Open Graph product meta tags, then schema.org microdata, when no
  * JSON-LD Product block is present. Must run against the *full* page HTML -
- * <script>/<meta> tags are stripped before markdown conversion.
+ * <script>/<meta> tags are stripped before markdown conversion - so the
+ * CheerioAPI passed in must be parsed from that full HTML, not the
+ * main-content-only subset. Takes an already-parsed CheerioAPI - see
+ * metadata.ts's extractMetadata for why this and its sibling extractors
+ * share one parse instead of each re-parsing the same HTML independently.
  */
-export function extractStructuredProductData(html: string): StructuredProductData {
-  const $ = cheerio.load(html);
-
+export function extractStructuredProductData($: CheerioAPI): StructuredProductData {
   for (const script of $('script[type="application/ld+json"]').toArray()) {
     const raw = $(script).contents().text();
     if (!raw.trim()) continue;

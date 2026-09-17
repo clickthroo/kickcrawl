@@ -75,9 +75,19 @@ export async function scrapePage(
     });
   }
 
-  const metadata = extractMetadata(finalResult.html, finalResult.finalUrl, finalResult.statusCode);
-  const contentHtml = getContentHtml(finalResult.html, opts.onlyMainContent ?? true);
+  // Parsed once and shared by every reader below (extractMetadata,
+  // extractLinks, extractBySelectors, extractStructuredProductData) instead
+  // of each independently re-parsing the same HTML - a large JS-rendered
+  // page's HTML can be sizeable enough that 4-5x'ing the in-memory DOM tree
+  // was a real contributor to a production V8 heap-exhaustion crash on
+  // Vinted's catalog page. getContentHtml is the one exception: it removes
+  // nav/header/footer/script/style elements to isolate "main content",
+  // which would corrupt this shared, read-only $ for every reader after
+  // it (structuredData's JSON-LD lives in a <script> tag getContentHtml
+  // strips) - so it keeps its own separate, disposable parse.
   const $ = cheerio.load(finalResult.html);
+  const metadata = extractMetadata($, finalResult.finalUrl, finalResult.statusCode);
+  const contentHtml = getContentHtml(finalResult.html, opts.onlyMainContent ?? true);
 
   const out: ScrapeCoreResult = { success: true, metadata, rawHtml: finalResult.html };
 
@@ -87,14 +97,14 @@ export async function scrapePage(
 
   const selectors = { ...(site?.default_selectors ?? {}), ...(opts.selectors ?? {}) };
   const extracted =
-    Object.keys(selectors).length > 0 ? extractBySelectors(finalResult.html, selectors, finalResult.finalUrl) : {};
+    Object.keys(selectors).length > 0 ? extractBySelectors($, selectors, finalResult.finalUrl) : {};
 
   // A site-configured selector always wins (it was picked for a reason), but
   // most sites won't have one - schema.org JSON-LD is the standard
   // e-commerce SEO markup (Shopify, WooCommerce, Magento all emit it by
   // default), so it fills price/currency/stock with real data instead of
   // leaving every listing blank until someone hand-writes a CSS selector.
-  const structured = extractStructuredProductData(finalResult.html);
+  const structured = extractStructuredProductData($);
   if (structured.price && !extracted.price) extracted.price = structured.price;
   if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
   if (structured.availability && !extracted.availability) extracted.availability = structured.availability;

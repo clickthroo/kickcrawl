@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import type { CheerioAPI } from 'cheerio';
 import { config } from '../config.js';
 
 export type SelectorMap = Record<string, string>;
@@ -8,13 +9,16 @@ export type SelectorMap = Record<string, string>;
  * by field name. A selector matching an <img> reads its src (resolved to an
  * absolute URL against baseUrl, when given) instead of its text content, so
  * a "photo" field can point straight at a selector like `img.product-photo`.
+ *
+ * Takes an already-parsed CheerioAPI - see metadata.ts's extractMetadata for
+ * why this and its sibling extractors share one parse instead of each
+ * re-parsing the same HTML independently.
  */
 export function extractBySelectors(
-  html: string,
+  $: CheerioAPI,
   selectors: SelectorMap,
   baseUrl?: string,
 ): Record<string, string> {
-  const $ = cheerio.load(html);
   const out: Record<string, string> = {};
   for (const [field, selector] of Object.entries(selectors)) {
     try {

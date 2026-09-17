@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createHash } from 'node:crypto';
+import * as cheerio from 'cheerio';
 import { z } from 'zod';
 import { pool } from '../db.js';
 import { fetchPage } from '../services/fetcher.js';
@@ -48,7 +49,7 @@ export async function extractRoutes(app: FastifyInstance): Promise<void> {
     let json: Record<string, unknown> = {};
     const selectors = site?.default_selectors ?? {};
     if (Object.keys(selectors).length > 0) {
-      json = extractBySelectors(result.html, selectors, result.finalUrl);
+      json = extractBySelectors(cheerio.load(result.html), selectors, result.finalUrl);
     }
 
     const missingFields = Object.keys(schema).filter((f) => json[f] === undefined);

@@ -1,3 +1,4 @@
+import * as cheerio from 'cheerio';
 import { describe, expect, it } from 'vitest';
 import { extractStructuredProductData } from '../src/services/structuredData.js';
 
@@ -23,7 +24,7 @@ describe('extractStructuredProductData', () => {
       },
     });
 
-    const result = extractStructuredProductData(html);
+    const result = extractStructuredProductData(cheerio.load(html));
     expect(result).toEqual({
       price: '49.99',
       currency: 'GBP',
@@ -41,7 +42,7 @@ describe('extractStructuredProductData', () => {
       ],
     });
 
-    const result = extractStructuredProductData(html);
+    const result = extractStructuredProductData(cheerio.load(html));
     expect(result.price).toBe('45.00');
   });
 
@@ -54,14 +55,14 @@ describe('extractStructuredProductData', () => {
       ],
     });
 
-    const result = extractStructuredProductData(html);
+    const result = extractStructuredProductData(cheerio.load(html));
     expect(result.price).toBe('32.50');
     expect(result.currency).toBe('USD');
   });
 
   it('skips a JSON-LD block that is valid JSON but not a Product (e.g. BreadcrumbList)', () => {
     const html = pageWithJsonLd({ '@type': 'BreadcrumbList', itemListElement: [] });
-    expect(extractStructuredProductData(html)).toEqual({
+    expect(extractStructuredProductData(cheerio.load(html))).toEqual({
       price: null,
       currency: null,
       availability: null,
@@ -75,7 +76,7 @@ describe('extractStructuredProductData', () => {
         <script type="application/ld+json">{ this is not valid json }</script>
       </head><body></body></html>
     `;
-    expect(extractStructuredProductData(html)).toEqual({
+    expect(extractStructuredProductData(cheerio.load(html))).toEqual({
       price: null,
       currency: null,
       availability: null,
@@ -90,7 +91,7 @@ describe('extractStructuredProductData', () => {
         <meta property="product:price:currency" content="GBP" />
       </head><body></body></html>
     `;
-    const result = extractStructuredProductData(html);
+    const result = extractStructuredProductData(cheerio.load(html));
     expect(result.price).toBe('59.99');
     expect(result.currency).toBe('GBP');
   });
@@ -105,7 +106,7 @@ describe('extractStructuredProductData', () => {
         </div>
       </body></html>
     `;
-    const result = extractStructuredProductData(html);
+    const result = extractStructuredProductData(cheerio.load(html));
     expect(result.price).toBe('25.00');
     expect(result.currency).toBe('EUR');
     expect(result.availability).toBe('https://schema.org/OutOfStock');
@@ -113,7 +114,7 @@ describe('extractStructuredProductData', () => {
 
   it('returns all-null when the page has no structured product data at all', () => {
     const html = '<html><body><h1>Just a plain page</h1></body></html>';
-    expect(extractStructuredProductData(html)).toEqual({
+    expect(extractStructuredProductData(cheerio.load(html))).toEqual({
       price: null,
       currency: null,
       availability: null,
