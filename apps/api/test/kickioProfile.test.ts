@@ -111,6 +111,21 @@ describe('guessTeamFromTitle', () => {
   it('returns empty rather than a bare size code when nothing real is left', () => {
     expect(guessTeamFromTitle('2020-21 Home Shirt Size L')).toBe('');
   });
+
+  it('strips a spelled-out size word, and the stray punctuation left behind by removing it', () => {
+    // The real title from a live Vinted listing (via Re-scrape): the
+    // season and the size are separated by a period, not a space, so once
+    // "20/21" is stripped the leftover "." was sitting right in front of
+    // "Small" - previously surviving as "Ajax . Small" because only the
+    // abbreviated size forms (XS/XL/etc) were stripped, never the spelled-
+    // out ones a real seller actually typed.
+    expect(guessTeamFromTitle('Adidas Ajax away top 20/21. Small mens')).toBe('Ajax');
+  });
+
+  it('strips Medium and Large the same way', () => {
+    expect(guessTeamFromTitle('Liverpool Home Shirt Medium')).toBe('Liverpool');
+    expect(guessTeamFromTitle('Arsenal Away Shirt Large')).toBe('Arsenal');
+  });
 });
 
 describe('extractSizeFromTitle', () => {

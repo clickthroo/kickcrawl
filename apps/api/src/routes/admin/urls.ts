@@ -111,6 +111,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
     const { rows } = await pool.query(
       `SELECT u.*, s.name AS site_name,
               m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
+              m.content->'images' AS preview_images,
               e.content AS preview_extracted, md.content AS preview_markdown
        FROM urls u
        JOIN sites s ON s.id = u.site_id
@@ -155,7 +156,9 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
                 url: u.url,
                 title: u.preview_title,
                 description: u.preview_markdown?.slice(0, 4000) ?? null,
-                images: [u.preview_image],
+                // preview_images is only absent for rows scraped before this
+                // field existed - fall back to the single image they do have.
+                images: u.preview_images ?? [u.preview_image],
                 extracted: u.preview_extracted,
                 scrapedAt: u.last_fetched_at,
                 currencyRates,
@@ -193,6 +196,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       `SELECT u.*, m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
+              m.content->'images' AS preview_images,
               e.content AS preview_extracted, md.content AS preview_markdown
        FROM urls u
        LEFT JOIN LATERAL (
@@ -233,7 +237,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
               url: u.url,
               title: u.preview_title,
               description: u.preview_markdown?.slice(0, 4000) ?? null,
-              images: [u.preview_image],
+              images: u.preview_images ?? [u.preview_image],
               extracted: u.preview_extracted,
               scrapedAt: u.last_fetched_at,
               currencyRates,

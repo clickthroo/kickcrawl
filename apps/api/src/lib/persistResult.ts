@@ -23,6 +23,7 @@ export async function persistScrapeResult(
           title: result.metadata.title,
           description: result.metadata.description,
           image: result.metadata.image,
+          images: result.metadata.images,
         }),
         statusCode,
       ],

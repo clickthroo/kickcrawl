@@ -107,6 +107,7 @@ describe('scrapePage - skips the markdown/extraction pipeline when nothing needs
       currency: null,
       availability: null,
       sku: null,
+      images: [],
     }));
     vi.doMock('../src/services/mainContent.js', () => ({ getContentHtml }));
     vi.doMock('../src/services/markdown.js', () => ({ htmlToMarkdown }));
