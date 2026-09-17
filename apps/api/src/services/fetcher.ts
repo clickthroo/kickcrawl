@@ -112,6 +112,11 @@ async function fetchWithBrowser(
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       if (waitFor > 0) await page.waitForTimeout(waitFor);
       const html = await page.content();
+      // Diagnostic for the repeated Vinted OOM crash - concurrency capping,
+      // media blocking and single-parsing (all already shipped) haven't
+      // stopped it, so before guessing a fourth time this pins down
+      // whether the raw HTML itself is the thing that's actually huge.
+      console.log(`[fetcher] browser-rendered ${url}: ${(html.length / 1_048_576).toFixed(2)}MB HTML`);
       const statusCode = response?.status() ?? 0;
       return {
         html,
