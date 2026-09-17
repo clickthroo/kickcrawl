@@ -222,6 +222,18 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     }
 
     await updateJobProgress(jobId, Math.min(limit, visited.size + queue.length), completed);
+
+    // Diagnostic for the still-unexplained Vinted OOM: the crash tracks
+    // with cumulative pages processed in this same job (page sizes alone
+    // are ordinary, and de-duplicating the HTML parse per page - the
+    // previous fix - didn't move where it happens), so something is
+    // accumulating across iterations of this loop that isn't being
+    // released. Logging Node's own heap after every page shows the real
+    // growth curve instead of guessing at another cause blind.
+    const mem = process.memoryUsage();
+    console.log(
+      `[crawlWorker] job ${jobId} heap after ${next.url}: heapUsed=${(mem.heapUsed / 1_048_576).toFixed(1)}MB rss=${(mem.rss / 1_048_576).toFixed(1)}MB external=${(mem.external / 1_048_576).toFixed(1)}MB`,
+    );
   }
 
   await pool.query(
