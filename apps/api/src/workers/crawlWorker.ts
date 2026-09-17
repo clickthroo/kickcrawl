@@ -151,7 +151,6 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
   const { jobId, siteId, url, limit, maxDepth, includePaths, excludePaths, scrapeOptions } =
     job.data;
   const origin = new URL(url).origin;
-  const site = await resolveSiteForUrl(url);
 
   const visited = new Set<string>();
   const queue: { url: string; depth: number }[] = [{ url: new URL(url).toString(), depth: 0 }];
@@ -172,6 +171,17 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     const path = new URL(next.url).pathname;
     const matchesAllowedPaths = isCrawlItem(path, includePaths);
     const isItem = next.depth === 0 || matchesAllowedPaths;
+
+    // Re-read fresh every iteration rather than once before the loop -
+    // confirmed in production: a site's seller filters (require_pro_seller,
+    // min_seller_feedback) are meant to be editable from the admin UI at
+    // any time, but a crawl can run for a very long time (up to `limit`
+    // pages), and holding one site config object for that whole duration
+    // meant an item fetched hours into a job was still being filtered
+    // against whatever the settings were when the job STARTED, not what
+    // they actually are now. The sites table is small and admin-managed,
+    // so a query per page is negligible next to the page fetch itself.
+    const site = await resolveSiteForUrl(next.url);
 
     if (isItem) await markUrlQueued(siteId, next.url);
 
