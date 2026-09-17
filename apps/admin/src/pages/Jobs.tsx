@@ -39,6 +39,7 @@ export default function Jobs() {
             <option value="">All statuses</option>
             <option value="queued">Queued</option>
             <option value="running">Running</option>
+            <option value="paused">Paused</option>
             <option value="completed">Completed</option>
             <option value="failed">Failed</option>
             <option value="cancelled">Cancelled</option>

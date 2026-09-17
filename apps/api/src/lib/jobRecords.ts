@@ -2,7 +2,7 @@ import { pool } from '../db.js';
 import { crawlQueue } from '../queue.js';
 
 export type JobType = 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck';
-export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type JobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export async function createJob(
   type: JobType,
@@ -39,22 +39,26 @@ export async function failJob(jobId: string, error: string): Promise<void> {
 }
 
 /**
- * Marks any job still showing 'running' as 'failed', at server boot. A
- * freshly starting process hasn't touched any job's status itself yet, so
- * a row still 'running' at that point can only have been abandoned by a
- * previous process instance that's gone - a crash, or a redeploy that
- * killed it mid-job (this app runs as a single instance, so there's no
- * other live process it could belong to). Without this, an interrupted
- * job sits "Running" in the Jobs list forever: nothing else ever updates
- * it again, since the in-memory execution that was tracking its progress
- * no longer exists.
+ * Marks any job still showing 'running' or 'paused' as 'failed', at server
+ * boot. A freshly starting process hasn't touched any job's status itself
+ * yet, so a row still in either state at that point can only have been
+ * abandoned by a previous process instance that's gone - a crash, or a
+ * redeploy that killed it mid-job (this app runs as a single instance, so
+ * there's no other live process it could belong to). A 'paused' job is
+ * included for the same reason as 'running': its in-process poll loop
+ * (crawlWorker.ts, waiting to see the row flip back to 'running' or
+ * 'cancelled') dies with the process exactly the same way an active fetch
+ * would, so there's nothing left that could ever resume it either. Without
+ * this, an interrupted job sits "Running"/"Paused" in the Jobs list
+ * forever: nothing else ever updates it again, since the in-memory
+ * execution that was tracking its progress no longer exists.
  */
 export async function recoverOrphanedJobs(): Promise<number> {
   const { rowCount } = await pool.query(
     `UPDATE jobs SET status = 'failed', error_count = error_count + 1,
        errors = errors || '[{"message":"Job was interrupted by a server restart and could not resume"}]'::jsonb,
        finished_at = now()
-     WHERE status = 'running'`,
+     WHERE status IN ('running', 'paused')`,
   );
   return rowCount ?? 0;
 }

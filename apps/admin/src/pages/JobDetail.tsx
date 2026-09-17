@@ -20,6 +20,7 @@ export default function JobDetail() {
   const [pages, setPages] = useState<JobPageItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
+  const [action, setAction] = useState<'pause' | 'resume' | 'cancel' | null>(null);
 
   function load() {
     if (!id) return;
@@ -34,7 +35,7 @@ export default function JobDetail() {
   useEffect(load, [id]);
 
   useEffect(() => {
-    if (job && (job.status === 'queued' || job.status === 'running')) {
+    if (job && (job.status === 'queued' || job.status === 'running' || job.status === 'paused')) {
       const t = setInterval(load, 3000);
       return () => clearInterval(t);
     }
@@ -51,6 +52,21 @@ export default function JobDetail() {
       setError(err instanceof ApiError ? err.message : 'Re-run failed');
     } finally {
       setRerunning(false);
+    }
+  }
+
+  async function runAction(kind: 'pause' | 'resume' | 'cancel') {
+    if (!id) return;
+    setAction(kind);
+    setError(null);
+    try {
+      await api.post(`/admin/jobs/${id}/${kind}`);
+      load();
+    } catch (err) {
+      const fallback = { pause: 'Pause', resume: 'Resume', cancel: 'Cancel' }[kind];
+      setError(err instanceof ApiError ? err.message : `${fallback} failed`);
+    } finally {
+      setAction(null);
     }
   }
 
@@ -72,9 +88,38 @@ export default function JobDetail() {
         }
         actions={
           job.type === 'crawl' && (
-            <Button onClick={rerun} disabled={rerunning} className="w-full sm:w-auto">
-              {rerunning ? 'Queuing…' : 'Re-run'}
-            </Button>
+            <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+              {job.status === 'running' && (
+                <>
+                  <Button variant="secondary" onClick={() => runAction('pause')} disabled={action !== null}>
+                    {action === 'pause' ? 'Pausing…' : 'Pause'}
+                  </Button>
+                  <Button variant="danger" onClick={() => runAction('cancel')} disabled={action !== null}>
+                    {action === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                  </Button>
+                </>
+              )}
+              {job.status === 'paused' && (
+                <>
+                  <Button onClick={() => runAction('resume')} disabled={action !== null}>
+                    {action === 'resume' ? 'Resuming…' : 'Resume'}
+                  </Button>
+                  <Button variant="danger" onClick={() => runAction('cancel')} disabled={action !== null}>
+                    {action === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                  </Button>
+                </>
+              )}
+              {job.status === 'queued' && (
+                <Button variant="danger" onClick={() => runAction('cancel')} disabled={action !== null}>
+                  {action === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                </Button>
+              )}
+              {(job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') && (
+                <Button onClick={rerun} disabled={rerunning} className="w-full sm:w-auto">
+                  {rerunning ? 'Queuing…' : 'Re-run'}
+                </Button>
+              )}
+            </div>
           )
         }
       />

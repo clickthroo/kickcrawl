@@ -99,7 +99,7 @@ export interface Job {
   site_id: string | null;
   site_name: string | null;
   type: 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck';
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
   payload: Record<string, unknown>;
   total_pages: number;
   completed_pages: number;

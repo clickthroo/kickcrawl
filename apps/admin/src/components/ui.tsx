@@ -93,6 +93,7 @@ const STATUS_STYLES: Record<string, string> = {
   completed: 'bg-green-100 text-green-700',
   fetched: 'bg-green-100 text-green-700',
   running: 'bg-blue-100 text-blue-700',
+  paused: 'bg-amber-100 text-amber-700',
   queued: 'bg-slate-100 text-slate-600',
   discovered: 'bg-slate-100 text-slate-600',
   failed: 'bg-red-100 text-red-700',
