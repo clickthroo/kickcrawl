@@ -49,16 +49,38 @@ async function fetchWithHttp(url: string, userAgent: string, proxyUrl?: string):
   };
 }
 
+export interface GuardNavigationOptions {
+  /**
+   * Drop image/media/font requests outright instead of letting Chromium
+   * fetch and decode them. A scrape only ever reads the DOM/text and
+   * whatever URLs a page's own meta tags carry (e.g. og:image) - it never
+   * needs the actual rendered pixels - so for scraping this is pure
+   * memory/bandwidth cost with no upside, and it's the single biggest
+   * driver on an image-grid page like a marketplace catalog (dozens of
+   * listing thumbnails). Screenshots (routes/screenshot.ts) are the one
+   * real exception - they need the actual images rendered - so this
+   * defaults to false and is only turned on for the scraping path.
+   */
+  blockMedia?: boolean;
+}
+
+const BLOCKED_RESOURCE_TYPES = new Set(['image', 'media', 'font']);
+
 /**
  * Blocks navigation (including server-side redirects Chromium follows on
  * its own) to anything but a validated public http(s) URL - `page.goto`
  * alone would happily follow a redirect chain into a private address even
  * when the original URL was safe.
  */
-export async function guardNavigation(page: Page): Promise<void> {
+export async function guardNavigation(page: Page, opts: GuardNavigationOptions = {}): Promise<void> {
   await page.route('**/*', async (route) => {
     const request = route.request();
-    if (request.resourceType() !== 'document') {
+    const resourceType = request.resourceType();
+    if (opts.blockMedia && BLOCKED_RESOURCE_TYPES.has(resourceType)) {
+      await route.abort();
+      return;
+    }
+    if (resourceType !== 'document') {
       await route.continue();
       return;
     }
@@ -86,7 +108,7 @@ async function fetchWithBrowser(
     });
     try {
       const page = await context.newPage();
-      await guardNavigation(page);
+      await guardNavigation(page, { blockMedia: true });
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       if (waitFor > 0) await page.waitForTimeout(waitFor);
       const html = await page.content();
