@@ -151,7 +151,8 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     // (e.g. a category/collection listing) still gets fetched below and
     // has its links followed, it just isn't recorded as an Item itself.
     const path = new URL(next.url).pathname;
-    const isItem = next.depth === 0 || isCrawlItem(path, includePaths);
+    const matchesAllowedPaths = isCrawlItem(path, includePaths);
+    const isItem = next.depth === 0 || matchesAllowedPaths;
 
     if (isItem) await markUrlQueued(siteId, next.url);
 
@@ -171,7 +172,16 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       }
     } else {
       if (isItem) {
-        if (passesSellerFilter(result.markdown, site ?? { require_pro_seller: false, min_seller_feedback: null })) {
+        // The seller filter only makes sense for a page that's genuinely
+        // an item by its own path - a catalog/search seed forced into
+        // isItem purely by being depth 0 has no single seller to check
+        // at all (it's a listing of many items, each with their own),
+        // so scanning its whole page would just catch whichever
+        // unrelated item happens to appear first, not a real signal.
+        const passesFilter =
+          !matchesAllowedPaths ||
+          passesSellerFilter(result.markdown, site ?? { require_pro_seller: false, min_seller_feedback: null });
+        if (passesFilter) {
           await recordPageResult(siteId, jobId, next.url, result);
           completed += 1;
         } else {
