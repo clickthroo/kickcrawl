@@ -130,6 +130,18 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('Arsenal Away Shirt Large')).toBe('Arsenal');
   });
 
+  it('strips a quoted special-edition aside rather than leaking it into the team', () => {
+    // Confirmed against a real vintagefootballshirts.com listing - the
+    // quoted trophy name was surviving verbatim (plus a stray SKU-shaped
+    // number split off the site's own product code) leaving
+    // "Sevilla 'Antonio Puerta Trophy' 83" where only "Sevilla" is real.
+    expect(guessTeamFromTitle("2019 Sevilla Nike 'Antonio Puerta Trophy' Home Shirt")).toBe('Sevilla');
+  });
+
+  it('leaves an apostrophe inside a real word alone (not mistaken for a quoted span)', () => {
+    expect(guessTeamFromTitle("N'Golo's 2018 France Home Shirt")).toBe("N'Golo's France");
+  });
+
   it('strips a colour word sitting between the team name and the kit type', () => {
     // The real title from a live Vinted listing: "Pink" is a colour
     // qualifier, not part of the team name, but nothing was stripping it -

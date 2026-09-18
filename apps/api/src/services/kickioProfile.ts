@@ -445,7 +445,15 @@ export function guessTeamFromTitle(title: string): string {
     // team itself, e.g. "France", should survive - only the tournament
     // label should go).
     .replace(/\b(World\s*Cup|FIFA|Olympics?|Euro'?s?|Copa\s+America|Africa\s+Cup|AFCON|Nations\s+League|Confederations\s+Cup)\b/gi, '')
-    .replace(/\([^)]*\)/g, '');
+    .replace(/\([^)]*\)/g, '')
+    // A quoted aside ("2019 Sevilla Nike 'Antonio Puerta Trophy' Home
+    // Shirt") names a special edition/commemoration, not the team - same
+    // reasoning as the parenthetical strip just above, just with quotes
+    // instead of parens. Anchored to whitespace on both sides so a
+    // genuine apostrophe inside a word (a contraction, a name like
+    // "N'Golo") is never mistaken for the start/end of a quoted span.
+    .replace(/(^|\s)'[^']+'(?=\s|$)/g, '$1')
+    .replace(/(^|\s)"[^"]+"(?=\s|$)/g, '$1');
   for (const m of MANUFACTURERS) {
     c = c.replace(new RegExp(`\\b${escapeRegex(m)}\\b`, 'gi'), '');
   }
