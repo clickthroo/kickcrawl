@@ -12,6 +12,7 @@ const siteSchema = z.object({
   rate_limit_rps: z.number().positive().optional().default(1),
   max_depth: z.number().int().min(0).optional().default(2),
   use_browser_default: z.boolean().optional().default(false),
+  skip_browser_for_items: z.boolean().optional().default(false),
   use_proxy: z.boolean().optional().default(false),
   default_selectors: z.record(z.string()).optional().default({}),
   allowed_paths: z.array(z.string()).optional().default([]),
@@ -90,15 +91,16 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     const s = parsed.data;
     try {
       const { rows } = await pool.query(
-        `INSERT INTO sites (name, base_url, rate_limit_rps, max_depth, use_browser_default, use_proxy,
-           default_selectors, allowed_paths, denied_paths, is_active, require_pro_seller, min_seller_feedback)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        `INSERT INTO sites (name, base_url, rate_limit_rps, max_depth, use_browser_default, skip_browser_for_items,
+           use_proxy, default_selectors, allowed_paths, denied_paths, is_active, require_pro_seller, min_seller_feedback)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
         [
           s.name,
           s.base_url,
           s.rate_limit_rps,
           s.max_depth,
           s.use_browser_default,
+          s.skip_browser_for_items,
           s.use_proxy,
           JSON.stringify(s.default_selectors),
           s.allowed_paths,
@@ -127,13 +129,14 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
          rate_limit_rps = COALESCE($4, rate_limit_rps),
          max_depth = COALESCE($5, max_depth),
          use_browser_default = COALESCE($6, use_browser_default),
-         use_proxy = COALESCE($7, use_proxy),
-         default_selectors = COALESCE($8, default_selectors),
-         allowed_paths = COALESCE($9, allowed_paths),
-         denied_paths = COALESCE($10, denied_paths),
-         is_active = COALESCE($11, is_active),
-         require_pro_seller = COALESCE($12, require_pro_seller),
-         min_seller_feedback = $13,
+         skip_browser_for_items = COALESCE($7, skip_browser_for_items),
+         use_proxy = COALESCE($8, use_proxy),
+         default_selectors = COALESCE($9, default_selectors),
+         allowed_paths = COALESCE($10, allowed_paths),
+         denied_paths = COALESCE($11, denied_paths),
+         is_active = COALESCE($12, is_active),
+         require_pro_seller = COALESCE($13, require_pro_seller),
+         min_seller_feedback = $14,
          updated_at = now()
        WHERE id = $1 RETURNING *`,
       [
@@ -143,6 +146,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
         s.rate_limit_rps,
         s.max_depth,
         s.use_browser_default,
+        s.skip_browser_for_items,
         s.use_proxy,
         s.default_selectors ? JSON.stringify(s.default_selectors) : null,
         s.allowed_paths,

@@ -51,6 +51,7 @@ describe('recheckSite', () => {
     rate_limit_rps: 1,
     max_depth: 3,
     use_browser_default: false,
+    skip_browser_for_items: false,
     use_proxy: false,
     default_selectors: {},
     allowed_paths: ['/items/*'],

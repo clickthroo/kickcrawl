@@ -7,6 +7,8 @@ export interface SiteConfig {
   rate_limit_rps: number;
   max_depth: number;
   use_browser_default: boolean;
+  /** Skip browser rendering for pages recognized as items (allowed_paths-matched) even when use_browser_default is on - see 009_skip_browser_for_items.sql. */
+  skip_browser_for_items: boolean;
   use_proxy: boolean;
   default_selectors: Record<string, string>;
   allowed_paths: string[];

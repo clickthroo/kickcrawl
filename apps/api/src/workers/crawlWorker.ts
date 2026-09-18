@@ -62,6 +62,28 @@ export function isCrawlItem(path: string, includePaths: string[]): boolean {
   return includePaths.some((p) => matchesPathPattern(path, p));
 }
 
+/**
+ * Whether this specific page fetch should render via a real browser.
+ * Browser rendering only ever matters for a page's own LINKS - an item
+ * page's links are never followed at all (see the "not matchesAllowedPaths"
+ * guard around the traversal code below) - so a site that's confirmed its
+ * item pages' own content (title, price, stock) renders fine over plain
+ * HTTP even when its nav doesn't (skip_browser_for_items) can skip
+ * Playwright, and the single global browser slot every browser-driven
+ * fetch across the whole app serializes through (services/browser.ts),
+ * for exactly the pages that don't need it. A non-item (nav/category)
+ * page always keeps the job's own setting, since THAT'S the page whose
+ * links actually get traversed.
+ */
+export function resolveUseBrowser(
+  matchesAllowedPaths: boolean,
+  jobUseBrowser: boolean | undefined,
+  site: Pick<SiteConfig, 'skip_browser_for_items'> | null | undefined,
+): boolean | undefined {
+  if (matchesAllowedPaths && site?.skip_browser_for_items) return false;
+  return jobUseBrowser;
+}
+
 async function updateJobProgress(jobId: string, total: number, completed: number): Promise<void> {
   // Guarded so this can never clobber a 'paused'/'cancelled' status an
   // admin set while this iteration's own page fetch was already in
@@ -291,9 +313,10 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     // raw HTML a second time.
     const baseFormats: ScrapeFormat[] = isItem ? scrapeOptions.formats ?? ['markdown'] : [];
     const formats: ScrapeFormat[] = baseFormats.includes('links') ? baseFormats : [...baseFormats, 'links'];
+    const useBrowser = resolveUseBrowser(matchesAllowedPaths, scrapeOptions.useBrowser, site);
     const result = await scrapePageWithTimeout(
       next.url,
-      { formats, onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser: scrapeOptions.useBrowser },
+      { formats, onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser },
       site,
     );
     if (!result.success) {

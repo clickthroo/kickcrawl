@@ -4,6 +4,7 @@ import {
   filterTraversableLinks,
   isCrawlItem,
   passesSellerFilter,
+  resolveUseBrowser,
 } from '../src/workers/crawlWorker.js';
 
 describe('filterTraversableLinks', () => {
@@ -103,6 +104,25 @@ describe('isCrawlItem', () => {
   it('an exact allowed_paths entry with no wildcard only matches that exact path', () => {
     expect(isCrawlItem('/products', ['/products'])).toBe(true);
     expect(isCrawlItem('/products/some-shirt', ['/products'])).toBe(false);
+  });
+});
+
+describe('resolveUseBrowser', () => {
+  it('skips the browser for a recognized item page when the site has confirmed it can', () => {
+    expect(resolveUseBrowser(true, true, { skip_browser_for_items: true })).toBe(false);
+  });
+
+  it('still uses the browser for a non-item (nav/category) page - that is the page whose links get traversed', () => {
+    expect(resolveUseBrowser(false, true, { skip_browser_for_items: true })).toBe(true);
+  });
+
+  it('leaves the job setting alone when the site has not opted in', () => {
+    expect(resolveUseBrowser(true, true, { skip_browser_for_items: false })).toBe(true);
+  });
+
+  it('leaves the job setting alone when there is no resolved site at all', () => {
+    expect(resolveUseBrowser(true, true, null)).toBe(true);
+    expect(resolveUseBrowser(true, undefined, undefined)).toBe(undefined);
   });
 });
 
