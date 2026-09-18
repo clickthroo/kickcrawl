@@ -85,6 +85,58 @@ describe('scrapePage - default waitFor for browser-rendered pages', () => {
   });
 });
 
+describe('scrapePage - retries a blocked fetch through a fresh browser session', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('retries even when the first attempt already used the browser - the real Vinted case: use_browser_default is already true, so a Cloudflare interstitial served to Playwright itself used to never get retried at all', async () => {
+    const fetchPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        html: '<html><title>Just a moment...</title></html>',
+        statusCode: 403,
+        usedBrowser: true,
+        finalUrl: 'https://example.com/',
+        blocked: true,
+      })
+      .mockResolvedValueOnce({
+        html: SIMPLE_HTML,
+        statusCode: 200,
+        usedBrowser: true,
+        finalUrl: 'https://example.com/',
+        blocked: false,
+      });
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage('https://example.com/', { useBrowser: true }, null);
+
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(true);
+  });
+
+  it('reports a failure instead of silently persisting the interstitial as if it succeeded, when still blocked after the retry', async () => {
+    const fetchPage = vi.fn().mockResolvedValue({
+      html: '<html><title>Just a moment...</title></html>',
+      statusCode: 403,
+      usedBrowser: true,
+      finalUrl: 'https://example.com/',
+      blocked: true,
+    });
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage('https://example.com/', { useBrowser: true }, null);
+
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/blocked/i);
+    expect(result.markdown).toBeUndefined();
+  });
+});
+
 describe('scrapePage - skips the markdown/extraction pipeline when nothing needs it', () => {
   beforeEach(() => {
     vi.resetModules();
