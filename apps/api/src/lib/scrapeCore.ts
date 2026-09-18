@@ -64,15 +64,36 @@ export async function scrapePage(
     };
   }
 
-  // One retry through the browser if the fast path came back blocked.
+  // One retry through a fresh browser session if blocked - not only when
+  // the first attempt was the plain-HTTP fast path. Confirmed in
+  // production on a site with use_browser_default already true: the
+  // first attempt already used Playwright, so the old `!result.usedBrowser`
+  // guard never retried a Cloudflare interstitial ("Just a moment...",
+  // 403) served to Playwright itself - it just got parsed as if it were
+  // the real page, with no seller card or item content to find, silently
+  // corrupting results instead of surfacing as a failure. A fresh
+  // fetchPage call opens a brand new browser context, giving the retry an
+  // actual chance at a different outcome rather than repeating the same
+  // blocked request.
   let finalResult = result;
-  if (result.blocked && !result.usedBrowser) {
+  if (result.blocked) {
     finalResult = await fetchPage(url, {
       useBrowser: true,
       waitFor: opts.waitFor ?? DEFAULT_BROWSER_WAIT_MS,
       proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
       rateLimitRps: site?.rate_limit_rps,
     });
+  }
+
+  // Still blocked after the retry - report it as the failure it is rather
+  // than silently persisting the interstitial's own junk content as if
+  // the scrape had succeeded.
+  if (finalResult.blocked) {
+    return {
+      success: false,
+      error: `Blocked by anti-bot protection (status ${finalResult.statusCode})`,
+      metadata: { sourceURL: url, statusCode: finalResult.statusCode, images: [] },
+    };
   }
 
   // Parsed once and shared by every reader below (extractMetadata,
