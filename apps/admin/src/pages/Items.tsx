@@ -276,7 +276,15 @@ export default function Items() {
                 </div>
                 <div className="flex shrink-0 items-center justify-between gap-3 text-xs text-slate-400 sm:flex-col sm:items-end sm:text-right">
                   <div>
-                    <div>{u.last_fetched_at ? new Date(u.last_fetched_at).toLocaleString() : '—'}</div>
+                    {u.last_fetched_at ? (
+                      <div>Last crawled {new Date(u.last_fetched_at).toLocaleString()}</div>
+                    ) : (
+                      // Discovered but never actually fetched yet (still
+                      // queued, or waiting its turn) - there's no crawl date
+                      // to show, but showing nothing at all here reads as
+                      // broken rather than "not fetched yet".
+                      <div>Discovered {new Date(u.discovered_at).toLocaleString()}</div>
+                    )}
                     <div>Code {u.last_status_code ?? '—'}</div>
                   </div>
                   <Button
