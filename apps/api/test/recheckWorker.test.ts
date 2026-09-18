@@ -97,6 +97,43 @@ describe('recheckSite', () => {
     expect(progress.errors).toEqual([]);
   });
 
+  it('records the full Kickio profile on a sale, not just title/price/currency', async () => {
+    // No seller filter configured (unlike baseSite) - this exercises a
+    // plain retailer, not a marketplace where a seller's own Pro/feedback
+    // signal would also need to be present in the markdown to pass.
+    const siteWithoutSellerFilter: SiteConfig = { ...baseSite, require_pro_seller: false, min_seller_feedback: null };
+    const soldItem = { ...recheckableItem, stock_status: 'In Stock' };
+    const query = vi.fn().mockResolvedValue({ rows: [soldItem] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => ({
+        success: true,
+        markdown: '£25 Sold out',
+        metadata: { sourceURL: soldItem.url, statusCode: 200, title: '1998 France Home Shirt', image: null },
+        extracted: {},
+      }),
+    }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(soldItem.id) }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, errors: [] as string[] };
+    await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
+
+    expect(progress.sales).toBe(1);
+    const saleCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO sales'));
+    expect(saleCall).toBeDefined();
+    const [, params] = saleCall!;
+    expect(params[0]).toBe(soldItem.id);
+    expect(params[1]).toBe(siteWithoutSellerFilter.id);
+    expect(params[2]).toBe('1998 France Home Shirt');
+    expect(params[3]).toBe(25);
+    expect(params[4]).toBe('GBP');
+    const profile = JSON.parse(params[5]);
+    expect(profile.identity.team).toBe('France');
+    expect(profile.listing.stock_status).toBe('Out of Stock');
+  });
+
   it('keeps refreshing an item that still passes the seller filter, same as before', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [recheckableItem] });
     vi.doMock('../src/db.js', () => ({ pool: { query } }));

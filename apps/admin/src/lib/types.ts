@@ -127,6 +127,8 @@ export interface Sale {
   title: string | null;
   price: number | null;
   currency: string | null;
+  /** Full Kickio profile as it was at the moment the sale was detected - null for a sale recorded before this was added. */
+  profile: KickioProfile | null;
   detected_at: string;
 }
 

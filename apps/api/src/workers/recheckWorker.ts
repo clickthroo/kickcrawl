@@ -82,9 +82,13 @@ export async function recheckSite(
         const newStatus = profile.listing.stock_status;
 
         if (isNewSale(item.stock_status, newStatus)) {
+          // The full profile - not just title/price/currency - so the Sales
+          // page can show every feature we knew about the item (team,
+          // season, condition, images, ...) exactly as it was at the moment
+          // it sold, the same way the Items list shows it for an active one.
           await pool.query(
-            `INSERT INTO sales (url_id, site_id, title, price, currency) VALUES ($1, $2, $3, $4, $5)`,
-            [urlId, site.id, result.metadata.title, profile.listing.price, profile.listing.currency],
+            `INSERT INTO sales (url_id, site_id, title, price, currency, profile) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [urlId, site.id, result.metadata.title, profile.listing.price, profile.listing.currency, JSON.stringify(profile)],
           );
           progress.sales += 1;
         }

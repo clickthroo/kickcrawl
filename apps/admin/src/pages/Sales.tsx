@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { Sale, Site } from '../lib/types';
-import { Button, Card, PageHeader, Select, Spinner } from '../components/ui';
+import { Button, Card, KickioProfilePanel, PageHeader, Select, Spinner, Thumbnail } from '../components/ui';
 
 export default function Sales() {
   const [sites, setSites] = useState<Site[] | null>(null);
@@ -68,12 +68,12 @@ export default function Sales() {
       )}
 
       {sales && sales.length > 0 && (
-        <>
-          {/* Mobile: card list */}
-          <div className="space-y-3 md:hidden">
-            {sales.map((s) => (
-              <Card key={s.id} className="space-y-1.5">
-                <div className="flex items-start justify-between gap-2">
+        <div className="space-y-3">
+          {sales.map((s) => (
+            <Card key={s.id} className="space-y-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <Thumbnail src={s.profile?.listing.images[0] ?? null} alt={s.title ?? s.url} size={44} />
                   <div className="min-w-0">
                     <div className="truncate font-medium text-slate-800" title={s.title ?? undefined}>
                       {s.title ?? s.url}
@@ -87,57 +87,30 @@ export default function Sales() {
                     >
                       {s.url}
                     </a>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                        {s.site_name}
+                      </span>
+                    </div>
                   </div>
-                  <div className="shrink-0 text-right font-medium text-slate-800">
+                </div>
+                <div className="shrink-0 text-right text-xs text-slate-400 sm:text-right">
+                  <div className="text-sm font-medium text-slate-800">
                     {s.price != null ? `${s.currency ?? ''} ${s.price}`.trim() : '—'}
                   </div>
+                  <div>{new Date(s.detected_at).toLocaleString()}</div>
                 </div>
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>{s.site_name}</span>
-                  <span>{new Date(s.detected_at).toLocaleString()}</span>
-                </div>
-              </Card>
-            ))}
-          </div>
+              </div>
 
-          {/* Desktop: table */}
-          <Card className="hidden p-0 md:block">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left text-slate-400">
-                    <th className="px-4 py-3">Item</th>
-                    <th className="px-4 py-3">Site</th>
-                    <th className="px-4 py-3">Price</th>
-                    <th className="px-4 py-3">Detected</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sales.map((s) => (
-                    <tr key={s.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                      <td className="max-w-sm px-4 py-3">
-                        <a
-                          href={s.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block truncate font-medium text-brand-700 hover:underline"
-                          title={s.title ?? s.url}
-                        >
-                          {s.title ?? s.url}
-                        </a>
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">{s.site_name}</td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {s.price != null ? `${s.currency ?? ''} ${s.price}`.trim() : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-500">{new Date(s.detected_at).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </>
+              {/* Every feature known about the item at the moment it sold -
+                  same panel the Items list uses for an active one, so a sold
+                  item is just as browsable/filterable-by-eye as a live one.
+                  Older sales recorded before this snapshot existed have no
+                  profile to show. */}
+              <KickioProfilePanel profile={s.profile} />
+            </Card>
+          ))}
+        </div>
       )}
 
       {total > pageSize && (
