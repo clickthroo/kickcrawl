@@ -142,6 +142,18 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle("N'Golo's 2018 France Home Shirt")).toBe("N'Golo's France");
   });
 
+  it('strips a trailing stock/reference code, and the size letter it displaced from the end', () => {
+    // The real title from a live vintagefootballshirts.com listing - "S"
+    // used to survive as part of the guess because the site's own 6-digit
+    // stock code came after it, pushing "S" away from the very end where
+    // the bare-size-letter cleanup only ever looked.
+    expect(guessTeamFromTitle('2003-05 Barcelona Nike Training Shirt S 112587')).toBe('Barcelona');
+  });
+
+  it('leaves a real, short club number alone - only a long stock-code-shaped number is stripped', () => {
+    expect(guessTeamFromTitle('Hannover 96 Home Shirt 2019-20')).toBe('Hannover 96');
+  });
+
   it('strips a colour word sitting between the team name and the kit type', () => {
     // The real title from a live Vinted listing: "Pink" is a colour
     // qualifier, not part of the team name, but nothing was stripping it -

@@ -460,9 +460,18 @@ export function guessTeamFromTitle(title: string): string {
   c = c.replace(/\s*[-–—]\s*$/g, '').replace(/^\s*[-–—]\s*/g, '');
   c = c.replace(/\.\s*$/, '').replace(/\s+/g, ' ').trim();
   c = c.replace(/\bHolland\b/gi, 'Netherlands');
+  // A trailing 5+ digit code is the retailer's own stock/reference number,
+  // not part of the team - confirmed on a real vintagefootballshirts.com
+  // listing ("2003-05 Barcelona Nike Training Shirt S 112587" was
+  // surviving as "Barcelona S 112587"). No club, competition or kit
+  // descriptor is ever a number that long - unlike a real club number
+  // (Hannover 96, Bayer 04 Leverkusen), which is always 4 digits or fewer
+  // and deliberately left alone.
+  c = c.replace(/\s+\d{5,}$/, '').trim();
   // A leftover bare single-letter size code at the very end (e.g. "Size M"
-  // became just " M" once "Size" was stripped) is safe to drop - unlike a
-  // bare letter anywhere else in the string, which is left alone since it
+  // became just " M" once "Size" was stripped, or "S" once a trailing
+  // stock code was stripped off after it) is safe to drop - unlike a bare
+  // letter anywhere else in the string, which is left alone since it
   // could be part of a genuine one-word team name.
   c = c.replace(/\s+(XXS|XS|S|M|L|XL|XXL|XXXL)$/i, '').trim();
   // Guard against leftover junk (a bare size code, or anything too short to
