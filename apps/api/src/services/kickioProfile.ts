@@ -437,6 +437,12 @@ export function guessTeamFromTitle(title: string): string {
     .replace(new RegExp(`\\b(${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`, 'gi'), '')
     .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
+    // "*w/tags*"/"w/o tags" is a condition note (this retailer's own
+    // shorthand for BNWT/BNWOT), not part of the team - confirmed on real
+    // listings surviving as "Leeds w/tags" and "Ukraine w/tags JZ4622".
+    // The asterisks wrapping it are already gone by this point (stripped
+    // above), leaving the bare "w/tags" token to catch here.
+    .replace(/\bw\/o?\s*tags?\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
     .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
     .replace(/\b\d+\s*(?:st|nd|rd|th)\b/gi, '')
@@ -481,6 +487,16 @@ export function guessTeamFromTitle(title: string): string {
   // (Hannover 96, Bayer 04 Leverkusen), which is always 4 digits or fewer
   // and deliberately left alone.
   c = c.replace(/\s+\d{5,}$/, '').trim();
+  // A trailing alphanumeric stock/reference code - a couple of letters
+  // fused directly onto 3-6 digits with no space ("HA8318", "JZ4622") - is
+  // this retailer's own SKU, not part of the team, even with no size word
+  // in front of it to anchor on (the earlier size+code strip above only
+  // fires when one is). Confirmed on a real listing that survived as
+  // "Ukraine w/tags JZ4622" with nothing between the code and the rest of
+  // the (already-stripped) title. No genuine team, club-number or kit
+  // descriptor ever fuses letters straight onto digits like this - a real
+  // club number (Hannover 96, Bayer 04) always has a space before it.
+  c = c.replace(/\s+[A-Za-z]{1,3}\d{3,6}$/, '').trim();
   // A leftover bare single-letter size code at the very end (e.g. "Size M"
   // became just " M" once "Size" was stripped, or "S" once a trailing
   // stock code was stripped off after it) is safe to drop - unlike a bare

@@ -180,6 +180,33 @@ describe('guessTeamFromTitle', () => {
     // used to leak through before that was fixed above.
     expect(guessTeamFromTitle('Arsenal Pink Third Shirt 22/23 Small')).toBe('Arsenal');
   });
+
+  it('strips this retailer\'s "*w/tags*" condition note rather than leaking it into the team', () => {
+    // Real title from a live vintagefootballshirts.com listing: "Team:
+    // Leeds w/tags" was leaking through - the asterisks around it were
+    // already stripped, but nothing recognised the bare "w/tags" token
+    // itself as a condition note (this retailer's own shorthand for
+    // BNWT/BNWOT) rather than part of the team name.
+    expect(guessTeamFromTitle('2013-14 Leeds Macron Home Shirt *w/tags*')).toBe('Leeds');
+  });
+
+  it('strips a trailing alphanumeric stock code even with no size word in front of it to anchor on', () => {
+    // Real title from a live listing: "Team: Ukraine w/tags JZ4622" -
+    // unlike the earlier "Celtic M HA8318" case, there's no size word
+    // between the condition note and the code for the size+code strip
+    // above to anchor on, and the code isn't purely numeric either, so
+    // neither existing stock-code strip could catch it.
+    expect(guessTeamFromTitle('2026 Ukraine adidas Home Shirt *w/tags* JZ4622')).toBe('Ukraine');
+  });
+
+  it('leaves a real club name ending in a number alone - the new alphanumeric-code strip only matches letters fused directly onto digits', () => {
+    // Guards the new stock-code strip against being too broad: it only
+    // matches a couple of LETTERS immediately fused onto digits with no
+    // space ("HA8318", "JZ4622"), so a genuine trailing club number - which
+    // is always separated by a space, never fused onto the preceding word -
+    // is never mistaken for one.
+    expect(guessTeamFromTitle('Hannover 96 Away Shirt 2019-20')).toBe('Hannover 96');
+  });
 });
 
 describe('extractPlayerNumber', () => {
