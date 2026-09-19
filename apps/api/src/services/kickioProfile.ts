@@ -404,6 +404,19 @@ export function guessTeamFromTitle(title: string): string {
 
   let c = withoutSubtitle
     .replace(/\*+/g, '')
+    // This retailer always puts its own stock/reference code as the very
+    // last token, immediately after the size (e.g. "... Shirt S 112587",
+    // "... Shirt M HA8318", "... Shirt XL 47") - stripped as a pair here,
+    // anchored to both the end of the title AND an actual size word right
+    // before it. That size anchor is what makes this safe even for a
+    // short, alphanumeric, or otherwise-ambiguous code (a bare "47", a
+    // mixed "HA8318") that neither a digit-length threshold nor a
+    // bare-trailing-size check alone could safely catch - each of those
+    // only fires when its own target sits at the very end, and the size
+    // word sitting between the team name and the code was blocking both.
+    // A real club number (Hannover 96, Bayer 04 Leverkusen) is never
+    // preceded by a size word like this, so it's untouched.
+    .replace(/\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\s+[A-Za-z0-9]+$/i, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
     // the front of the title - that separator is what stops this unbounded

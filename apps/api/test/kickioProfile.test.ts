@@ -154,6 +154,25 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('Hannover 96 Home Shirt 2019-20')).toBe('Hannover 96');
   });
 
+  it('strips a short trailing stock code that a digit-length threshold alone could never safely catch', () => {
+    // Real title from a live listing: "Team: Celtic 47" was leaking
+    // through - the digit-length-based strip above requires 5+ digits
+    // specifically so it can never mistake a real club number
+    // (Hannover 96) for a stock code, but that same restraint meant a
+    // short code like this bare "47" survived untouched. Anchoring to
+    // the size word immediately before it (present in the real title)
+    // is what makes this one safe to strip despite being just 2 digits.
+    expect(guessTeamFromTitle('2012-13 Celtic Nike Home Shirt XL 47')).toBe('Celtic');
+  });
+
+  it('strips an alphanumeric trailing stock code the same way', () => {
+    // Real title from a live listing: "Team: Celtic M HA8318" - "M" isn't
+    // in the abbreviated XL/XXL/... list stripped early, so it survived
+    // all the way to the end, and the purely-numeric stock-code strip
+    // above can't match a letter-prefixed code like this at all.
+    expect(guessTeamFromTitle('2022-23 Celtic adidas Third Shirt M HA8318')).toBe('Celtic');
+  });
+
   it('strips a colour word sitting between the team name and the kit type', () => {
     // The real title from a live Vinted listing: "Pink" is a colour
     // qualifier, not part of the team name, but nothing was stripping it -
