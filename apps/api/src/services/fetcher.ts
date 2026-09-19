@@ -109,6 +109,15 @@ export async function guardNavigation(page: Page, opts: GuardNavigationOptions =
 // the one shared browser slot is stuck forever.
 const BROWSER_FETCH_TIMEOUT_MS = 45_000;
 
+// Two independent signals that the shared Chromium instance itself is
+// broken, not just this one page: a real renderer crash ("Page crashed!"),
+// or a navigation that failed because the browser/context was already
+// gone ("Target closed"/"Target page, context or browser has been
+// closed"). Kept as a single source of truth here so the recycling
+// decision below and crawlWorker.ts's test for the same failure agree on
+// what counts as fatal.
+const BROWSER_FATAL_PATTERN = /page crashed|target closed|browser has been closed/i;
+
 export async function fetchWithBrowser(
   url: string,
   userAgent: string,
@@ -162,22 +171,46 @@ export async function fetchWithBrowser(
       return result;
     })();
 
-    return await Promise.race([
-      attempt,
-      new Promise<FetchResult>((_, reject) =>
-        setTimeout(() => {
-          // Treated as broken outright rather than trusted to recover on
-          // its own - resets the memoized browser (services/browser.ts) so
-          // the NEXT fetch gets a fresh instance instead of piling up
-          // behind this same wedged one. The orphaned attempt above keeps
-          // running in the background (nothing can truly cancel it), but
-          // that no longer matters: this race settling is what lets
-          // withBrowserSlot's own finally run and free the slot.
-          closeBrowser().catch(() => undefined);
-          reject(new Error(`Browser fetch timed out after ${BROWSER_FETCH_TIMEOUT_MS}ms fetching ${url}`));
-        }, BROWSER_FETCH_TIMEOUT_MS),
-      ),
-    ]);
+    try {
+      return await Promise.race([
+        attempt,
+        new Promise<FetchResult>((_, reject) =>
+          setTimeout(() => {
+            // Treated as broken outright rather than trusted to recover on
+            // its own - resets the memoized browser (services/browser.ts)
+            // so the NEXT fetch gets a fresh instance instead of piling up
+            // behind this same wedged one. The orphaned attempt above keeps
+            // running in the background (nothing can truly cancel it), but
+            // that no longer matters: this race settling is what lets
+            // withBrowserSlot's own finally run and free the slot.
+            closeBrowser().catch(() => undefined);
+            reject(new Error(`Browser fetch timed out after ${BROWSER_FETCH_TIMEOUT_MS}ms fetching ${url}`));
+          }, BROWSER_FETCH_TIMEOUT_MS),
+        ),
+      ]);
+    } catch (err) {
+      // A real Chromium crash ("Page crashed!") rejects `attempt` directly,
+      // well before the timeout branch above ever gets a chance to fire -
+      // that case still needs the same recycling, just via a different
+      // path. This used to live in crawlWorker.ts, checked AFTER
+      // scrapePage() had already returned - by then withBrowserSlot's slot
+      // below had already been released, so a different concurrently
+      // running job (concurrency: 3) could already be mid-fetch on a brand
+      // new browser instance by the time that stale check ran, and its
+      // closeBrowser() call would tear that job's healthy browser out from
+      // under it. That victim's own fetch would then fail with the exact
+      // same "browser has been closed" message, which matched the same
+      // fatal-error check and made IT recycle too - a self-sustaining storm
+      // from one initial crash. Doing it here instead is safe: this whole
+      // function runs inside withBrowserSlot, which allows only one
+      // browser-driven fetch app-wide at a time, so there is no other job's
+      // browser this close() could possibly be closing out from under.
+      const message = err instanceof Error ? err.message : String(err);
+      if (BROWSER_FATAL_PATTERN.test(message)) {
+        await closeBrowser().catch(() => undefined);
+      }
+      throw err;
+    }
   });
 }
 

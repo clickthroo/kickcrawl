@@ -171,27 +171,20 @@ describe('scrapePageWithTimeout', () => {
     expect(PAGE_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
   });
 
-  // The real-world case: several catalog pages crashed Chromium's renderer
-  // in a row in production, and every item page fetched afterward hung for
-  // the full timeout against that same still-broken, memoized browser
-  // instance (services/browser.ts) - nothing ever recycled it. These prove
-  // the recovery path fires on the two signals that actually showed up:
-  // our own timeout catching a genuine hang, and Chromium's own fatal,
-  // page-independent failures.
-  it('recycles the shared browser after a genuine hang (our own timeout firing)', async () => {
-    const closeBrowser = vi.fn().mockResolvedValue(undefined);
-    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: () => new Promise(() => {}) }));
-    vi.doMock('../src/services/browser.js', () => ({ closeBrowser }));
-
-    const { scrapePageWithTimeout, PAGE_TIMEOUT_MS } = await import('../src/workers/crawlWorker.js');
-    const promise = scrapePageWithTimeout('https://example.com/stuck', {}, null);
-    await vi.advanceTimersByTimeAsync(PAGE_TIMEOUT_MS);
-    await promise;
-
-    expect(closeBrowser).toHaveBeenCalled();
-  });
-
-  it('recycles the shared browser when Chromium itself reports a fatal, page-independent failure', async () => {
+  // Recycling the shared browser (services/browser.ts) on a fatal browser
+  // error used to happen here too, checked AFTER scrapePage() had already
+  // returned - by which point withBrowserSlot (services/browser.ts) had
+  // already released its single app-wide slot, so a different concurrent
+  // job (concurrency: 3) could already be mid-fetch on a brand new browser
+  // instance that this stale, context-unaware check would then tear down,
+  // producing the exact same fatal-looking error and making THAT job
+  // recycle too - a self-sustaining storm from one initial crash. That
+  // recycling decision now lives solely in fetcher.ts's fetchWithBrowser(),
+  // covered by fetcher.test.ts, where it happens while still holding
+  // withBrowserSlot's single slot - so it can never race a different job's
+  // browser fetch. This test just confirms scrapePageWithTimeout no longer
+  // reaches into browser.ts at all.
+  it('never touches the shared browser itself - that recycling now lives entirely in fetcher.ts, safely inside its single browser slot', async () => {
     const closeBrowser = vi.fn().mockResolvedValue(undefined);
     const crashedResult = {
       success: false,
@@ -199,22 +192,6 @@ describe('scrapePageWithTimeout', () => {
       metadata: { sourceURL: 'https://example.com', statusCode: 0 },
     };
     vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: async () => crashedResult }));
-    vi.doMock('../src/services/browser.js', () => ({ closeBrowser }));
-
-    const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
-    await scrapePageWithTimeout('https://example.com', {}, null);
-
-    expect(closeBrowser).toHaveBeenCalled();
-  });
-
-  it('never recycles the browser for an ordinary failure - the browser itself is fine', async () => {
-    const closeBrowser = vi.fn().mockResolvedValue(undefined);
-    const ordinaryFailure = {
-      success: false,
-      error: 'Disallowed by robots.txt',
-      metadata: { sourceURL: 'https://example.com', statusCode: 999 },
-    };
-    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: async () => ordinaryFailure }));
     vi.doMock('../src/services/browser.js', () => ({ closeBrowser }));
 
     const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
