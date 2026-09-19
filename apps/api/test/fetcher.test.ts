@@ -159,4 +159,43 @@ describe('fetchWithBrowser', () => {
     await expect(second).resolves.toBe('second-ran');
     expect(secondSlotAcquired).toHaveBeenCalledTimes(1);
   });
+
+  it('reports success even when context.close() throws afterward - a close-time failure must never overwrite a result that already succeeded', async () => {
+    // Confirmed in production: a page that navigated and rendered
+    // perfectly fine was still being reported as a failed fetch the
+    // instant context.close() threw ("Protocol error: Failed to find
+    // context", "Target page, context or browser has been closed") -
+    // `finally { await context.close(); }` with no try/catch of its own
+    // let that close-time error silently replace the successful `return`
+    // from the try block above it. Worse, that second message also
+    // matches scrapePageWithTimeout's browserFatal detection
+    // (crawlWorker.ts), so it triggered an unnecessary full browser
+    // restart on what was actually a perfectly good page.
+    const page = {
+      route: vi.fn((_pattern: string, handler: (route: unknown) => Promise<void>) => {
+        void handler;
+        return Promise.resolve();
+      }),
+      goto: vi.fn(() => Promise.resolve({ status: () => 200 })),
+      waitForTimeout: vi.fn(() => Promise.resolve()),
+      content: vi.fn(() => Promise.resolve('<html>ok</html>')),
+      url: vi.fn(() => 'https://example.com/ok'),
+    };
+    const context = {
+      newPage: vi.fn(() => Promise.resolve(page)),
+      close: vi.fn(() => Promise.reject(new Error('Target page, context or browser has been closed'))),
+    };
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() => Promise.resolve({ newContext: vi.fn(() => Promise.resolve(context)) })),
+      },
+    }));
+
+    const { fetchWithBrowser } = await import('../src/services/fetcher.js');
+    const result = await fetchWithBrowser('https://example.com/ok', 'UA', 0);
+
+    expect(result.html).toBe('<html>ok</html>');
+    expect(result.statusCode).toBe(200);
+    expect(context.close).toHaveBeenCalledTimes(1);
+  });
 });

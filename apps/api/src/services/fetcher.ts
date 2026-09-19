@@ -123,6 +123,7 @@ export async function fetchWithBrowser(
         locale: 'en-GB',
         proxy: proxyUrl ? { server: proxyUrl } : undefined,
       });
+      let result: FetchResult;
       try {
         const page = await context.newPage();
         await guardNavigation(page, { blockMedia: true });
@@ -135,7 +136,7 @@ export async function fetchWithBrowser(
         // whether the raw HTML itself is the thing that's actually huge.
         console.log(`[fetcher] browser-rendered ${url}: ${(html.length / 1_048_576).toFixed(2)}MB HTML`);
         const statusCode = response?.status() ?? 0;
-        return {
+        result = {
           html,
           statusCode,
           usedBrowser: true,
@@ -143,8 +144,22 @@ export async function fetchWithBrowser(
           blocked: isBlockPage(statusCode, html),
         };
       } finally {
-        await context.close();
+        // A close-time failure (the context/browser already gone - common
+        // right after a recycle, or when the underlying browser process
+        // hiccups) must never overwrite an already-successful result above
+        // with a failure. Confirmed in production: with `return` inside the
+        // try block, a page that had genuinely fetched and rendered fine
+        // was still reported as failed the instant context.close() threw
+        // "Protocol error: Failed to find context" or "Target page, context
+        // or browser has been closed" - and since that second message also
+        // matches scrapePageWithTimeout's browserFatal detection
+        // (crawlWorker.ts), it triggered an unnecessary full browser
+        // restart on nearly every single page, which then cascaded into
+        // the NEXT page's own close() failing against the now-torn-down
+        // browser too.
+        await context.close().catch(() => undefined);
       }
+      return result;
     })();
 
     return await Promise.race([
