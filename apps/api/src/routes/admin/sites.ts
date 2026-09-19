@@ -50,10 +50,16 @@ async function hasActiveCrawl(siteId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+// A large site's real catalog can run well past a few thousand pages once
+// category/nav pages are counted alongside actual items - 2000 was cutting
+// a crawl off mid-catalog for a site that size well before it ever ran out
+// of real links to follow.
+const MAX_CRAWL_PAGES = 50_000;
+
 function crawlPayloadForSite(site: SiteRow) {
   return {
     url: site.base_url,
-    limit: 2000,
+    limit: MAX_CRAWL_PAGES,
     maxDepth: site.max_depth,
     includePaths: site.allowed_paths ?? [],
     excludePaths: site.denied_paths ?? [],

@@ -321,8 +321,16 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     );
     if (!result.success) {
       console.log(`[crawlWorker] job ${jobId} failed ${next.url}: ${result.error}`);
+      // Recorded regardless of isItem - previously a failed fetch on a
+      // non-item (nav/category) page was completely silent: no error, no
+      // retry, nothing in the job's error count, just a page that
+      // contributed zero links to the queue as if it had never existed.
+      // That made a crawl that was quietly failing on most of its
+      // category pages look identical to "0 errors" in the UI, with no
+      // way to tell a genuinely small site apart from one where discovery
+      // was silently dying page after page.
+      errors.push(`${next.url}${isItem ? '' : ' (nav/category page - not counted as an item)'}: ${result.error}`);
       if (isItem) {
-        errors.push(`${next.url}: ${result.error}`);
         await recordPageResult(siteId, jobId, next.url, result);
       }
     } else {
