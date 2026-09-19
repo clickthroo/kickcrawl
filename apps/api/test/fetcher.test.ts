@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * A fake enough of Playwright's Page.route() to exercise guardNavigation's
@@ -95,5 +95,68 @@ describe('guardNavigation', () => {
     const route = await dispatch('document', 'http://169.254.169.254/');
     expect(assertSafeUrl).toHaveBeenCalledWith('http://169.254.169.254/');
     expect(route.abort).toHaveBeenCalled();
+  });
+});
+
+describe('fetchWithBrowser', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('gives up and releases the shared browser slot instead of hanging forever when browser.newContext() never settles', async () => {
+    // The real-world case: browser.newContext() (and context.newPage(),
+    // page.content(), context.close()) have no timeout of their own,
+    // unlike page.goto()'s 30s one - a wedged-but-not-crashed browser
+    // process hanging on any of them used to leave withBrowserSlot's
+    // single global slot (services/browser.ts) held forever, silently
+    // deadlocking every future browser-driven fetch across the whole app,
+    // not just this one page.
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() =>
+          Promise.resolve({
+            newContext: vi.fn(() => new Promise(() => {})), // never resolves
+            close: vi.fn(() => Promise.resolve()),
+          }),
+        ),
+      },
+    }));
+
+    const { fetchWithBrowser } = await import('../src/services/fetcher.js');
+    const { withBrowserSlot } = await import('../src/services/browser.js');
+
+    const stuck = fetchWithBrowser('https://example.com/stuck', 'UA', 0);
+    // Attached in the same tick the promise is created, so Node never sees
+    // it as briefly "unhandled" once fake-timer advancement lets it settle
+    // further down - the actual assertion still only resolves once awaited.
+    const stuckAssertion = expect(stuck).rejects.toThrow(/timed out after 45000ms/i);
+
+    // Let the microtask queue drain so the call is genuinely inside
+    // withBrowserSlot (holding the slot) before advancing the clock.
+    await vi.advanceTimersByTimeAsync(0);
+
+    const secondSlotAcquired = vi.fn();
+    const second = withBrowserSlot(async () => {
+      secondSlotAcquired();
+      return 'second-ran';
+    });
+
+    // Still stuck - the slot must not be free before the timeout fires.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(secondSlotAcquired).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    await stuckAssertion;
+    // The slot was actually released - a call queued behind the stuck one
+    // gets to run instead of waiting forever behind it too.
+    await expect(second).resolves.toBe('second-ran');
+    expect(secondSlotAcquired).toHaveBeenCalledTimes(1);
   });
 });

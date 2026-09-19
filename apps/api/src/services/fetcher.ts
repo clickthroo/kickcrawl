@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { ACCEPT_HEADER, ACCEPT_LANGUAGE, randomUserAgent } from './userAgents.js';
 import { isBlockPage } from './blockDetector.js';
-import { getBrowser, withBrowserSlot } from './browser.js';
+import { closeBrowser, getBrowser, withBrowserSlot } from './browser.js';
 import { acquireSlot } from './rateLimiter.js';
 import { getCrawlDelay, isAllowedByRobots } from './robots.js';
 import { assertSafeUrl, safeFetch, UnsafeUrlError } from './urlSafety.js';
@@ -93,41 +93,76 @@ export async function guardNavigation(page: Page, opts: GuardNavigationOptions =
   });
 }
 
-async function fetchWithBrowser(
+// page.goto() has its own 30s timeout, but browser.newContext(),
+// context.newPage(), page.content() and context.close() do not - any one
+// of them hanging against a wedged-but-not-crashed browser process (one
+// that doesn't trip browser.ts's "page crashed"/"target closed" detection)
+// left this whole function unable to ever settle. That's fatal beyond just
+// this one page: withBrowserSlot's own accounting (services/browser.ts)
+// only releases its single global slot once the callback passed to it
+// settles, so a fetch that never settles here permanently deadlocks EVERY
+// future browser-driven fetch across the whole app - every other crawl
+// job, the recheck worker, manual scrapes - not just this one job. This
+// was the real cause of a crawl repeatedly stalling at almost exactly the
+// same page count regardless of max_depth, page limit or anything else
+// touching how MANY pages there were to fetch - none of that matters once
+// the one shared browser slot is stuck forever.
+const BROWSER_FETCH_TIMEOUT_MS = 45_000;
+
+export async function fetchWithBrowser(
   url: string,
   userAgent: string,
   waitFor: number,
   proxyUrl?: string,
 ): Promise<FetchResult> {
   return withBrowserSlot(async () => {
-    const browser = await getBrowser();
-    const context = await browser.newContext({
-      userAgent,
-      locale: 'en-GB',
-      proxy: proxyUrl ? { server: proxyUrl } : undefined,
-    });
-    try {
-      const page = await context.newPage();
-      await guardNavigation(page, { blockMedia: true });
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-      if (waitFor > 0) await page.waitForTimeout(waitFor);
-      const html = await page.content();
-      // Diagnostic for the repeated Vinted OOM crash - concurrency capping,
-      // media blocking and single-parsing (all already shipped) haven't
-      // stopped it, so before guessing a fourth time this pins down
-      // whether the raw HTML itself is the thing that's actually huge.
-      console.log(`[fetcher] browser-rendered ${url}: ${(html.length / 1_048_576).toFixed(2)}MB HTML`);
-      const statusCode = response?.status() ?? 0;
-      return {
-        html,
-        statusCode,
-        usedBrowser: true,
-        finalUrl: page.url(),
-        blocked: isBlockPage(statusCode, html),
-      };
-    } finally {
-      await context.close();
-    }
+    const attempt = (async (): Promise<FetchResult> => {
+      const browser = await getBrowser();
+      const context = await browser.newContext({
+        userAgent,
+        locale: 'en-GB',
+        proxy: proxyUrl ? { server: proxyUrl } : undefined,
+      });
+      try {
+        const page = await context.newPage();
+        await guardNavigation(page, { blockMedia: true });
+        const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        if (waitFor > 0) await page.waitForTimeout(waitFor);
+        const html = await page.content();
+        // Diagnostic for the repeated Vinted OOM crash - concurrency capping,
+        // media blocking and single-parsing (all already shipped) haven't
+        // stopped it, so before guessing a fourth time this pins down
+        // whether the raw HTML itself is the thing that's actually huge.
+        console.log(`[fetcher] browser-rendered ${url}: ${(html.length / 1_048_576).toFixed(2)}MB HTML`);
+        const statusCode = response?.status() ?? 0;
+        return {
+          html,
+          statusCode,
+          usedBrowser: true,
+          finalUrl: page.url(),
+          blocked: isBlockPage(statusCode, html),
+        };
+      } finally {
+        await context.close();
+      }
+    })();
+
+    return await Promise.race([
+      attempt,
+      new Promise<FetchResult>((_, reject) =>
+        setTimeout(() => {
+          // Treated as broken outright rather than trusted to recover on
+          // its own - resets the memoized browser (services/browser.ts) so
+          // the NEXT fetch gets a fresh instance instead of piling up
+          // behind this same wedged one. The orphaned attempt above keeps
+          // running in the background (nothing can truly cancel it), but
+          // that no longer matters: this race settling is what lets
+          // withBrowserSlot's own finally run and free the slot.
+          closeBrowser().catch(() => undefined);
+          reject(new Error(`Browser fetch timed out after ${BROWSER_FETCH_TIMEOUT_MS}ms fetching ${url}`));
+        }, BROWSER_FETCH_TIMEOUT_MS),
+      ),
+    ]);
   });
 }
 
