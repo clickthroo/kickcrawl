@@ -1107,10 +1107,26 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   }
 
   // ---- Shirt type / jacket has no shirt_type ----
+  // Scoped to the title alone (not haystack) for this and every other
+  // keyword-matched field below that has a "default when nothing found"
+  // (Home, Standard Retail Version, Not Signed, ...) - confirmed in
+  // production on vintagefootballshirts.com: nearly every item was coming
+  // back "Authentic/Player Version" and a plain away shirt showed as
+  // "Fourth", because getContentHtml() (services/mainContent.ts) only
+  // strips literal <nav>/<header>/<footer> tags, and this retailer's theme
+  // (like many Shopify themes) wraps its real nav/footer in plain <div>s
+  // instead - so a sitewide "Shop by Player" link or a stray "cuarta"
+  // in hidden locale-switcher markup survived into every page's haystack
+  // and silently overrode the correct default. The title is always
+  // seller-authored and specific to this one listing - and this retailer's
+  // own titles already spell out "Player Issue", "Away", etc. explicitly
+  // when true (e.g. "2023-24 England Nike Player Issue Pre-Match Shirt") -
+  // so there's no legitimate signal being given up by not also trawling
+  // the rest of the page for these particular fields.
   let shirtType: string | null = null;
   if (!isJacket) {
     const explicitType = caseInsensitiveGet(extracted, 'type', 'shirtType', 'kitType');
-    const r = detectShirtType(explicitType ?? haystack);
+    const r = detectShirtType(explicitType ?? title);
     shirtType = r.type;
     if (r.informationalOnly) {
       reviewReasons.push('title indicates a Training/Pre-Match kit - Kickio has no dedicated Type value for this');
@@ -1122,7 +1138,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
 
   // ---- Gender ----
   const explicitGender = caseInsensitiveGet(extracted, 'gender', 'department');
-  const gender = canonicalGender(explicitGender && /\b(kids|women)/i.test(explicitGender) ? explicitGender : haystack);
+  const gender = canonicalGender(explicitGender && /\b(kids|women)/i.test(explicitGender) ? explicitGender : title);
 
   // ---- Issue / Special edition / Signed / Boxed (shirts only) ----
   let issue: string | null = null;
@@ -1130,16 +1146,16 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   let signed: string | null = null;
   let boxed: string | null = null;
   if (!isJacket) {
-    issue = canonicalIssue(caseInsensitiveGet(extracted, 'issue') ?? haystack);
-    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? haystack);
+    issue = canonicalIssue(caseInsensitiveGet(extracted, 'issue') ?? title);
+    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? title);
   } else {
-    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? haystack);
+    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? title);
   }
-  specialEdition = canonicalSpecialEdition(caseInsensitiveGet(extracted, 'specialEdition', 'edition') ?? haystack);
-  boxed = canonicalBoxed(caseInsensitiveGet(extracted, 'boxedEdition', 'boxed') ?? haystack);
+  specialEdition = canonicalSpecialEdition(caseInsensitiveGet(extracted, 'specialEdition', 'edition') ?? title);
+  boxed = canonicalBoxed(caseInsensitiveGet(extracted, 'boxedEdition', 'boxed') ?? title);
 
   // ---- Sleeves (shirts only) ----
-  const sleeves = isJacket ? null : canonicalSleeves(caseInsensitiveGet(extracted, 'sleeves') ?? haystack);
+  const sleeves = isJacket ? null : canonicalSleeves(caseInsensitiveGet(extracted, 'sleeves') ?? title);
 
   // ---- Player + number (shirts only) ----
   let player: string | null = null;
@@ -1157,7 +1173,8 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // risk the exact kind of false match season parsing already hit once.
     let rawPlayer = explicitPlayer ?? extractPlayerNameFromTitle(title) ?? extractPlayerNameFromTitle(description);
     rawPlayer = normalizePlayerName(team, rawPlayer);
-    const manufacturerForStrip = caseInsensitiveGet(extracted, 'manufacturer', 'brand') ?? detectManufacturer(haystack);
+    const manufacturerForStrip =
+      caseInsensitiveGet(extracted, 'manufacturer', 'brand') ?? detectManufacturer(title) ?? detectManufacturer(haystack);
     rawPlayer = stripManufacturerFromPlayer(rawPlayer, manufacturerForStrip);
     player = rawPlayer;
     number = sanitizeShirtNumber(
@@ -1166,12 +1183,19 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   }
 
   // ---- Manufacturer ----
+  // Title first, full haystack only as a fallback when the title alone
+  // found nothing - unlike type/issue/signed/etc above, there's no
+  // "default" here for a stray haystack match to wrongly override (a
+  // manufacturer nav list matching first is still a real risk, e.g. a
+  // "Shop by Brand" link naming every brand on every page), so a genuine
+  // haystack-only mention is still worth recovering rather than leaving
+  // this blank.
   const explicitManufacturer = caseInsensitiveGet(extracted, 'manufacturer', 'brand');
   let manufacturer: string | null = null;
   if (explicitManufacturer) {
     manufacturer = canonicalManufacturer(explicitManufacturer);
   } else {
-    manufacturer = detectManufacturer(haystack);
+    manufacturer = detectManufacturer(title) ?? detectManufacturer(haystack);
   }
 
   // ---- Colour (main two) ----
@@ -1191,7 +1215,10 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       if (!p.canonical) reviewReasons.push(`colour "${p.raw}" is not in Kickio's fixed palette`);
     }
   } else {
-    const detected = detectColours(haystack, 2);
+    // Same title-first, haystack-as-fallback reasoning as manufacturer -
+    // colour has no wrong-default risk, only a "found nothing" one.
+    const fromTitle = detectColours(title, 2);
+    const detected = fromTitle.length > 0 ? fromTitle : detectColours(haystack, 2);
     colour = detected[0]?.canonical ?? null;
     colourSecondary = detected[1]?.canonical ?? null;
     for (const d of detected) {
@@ -1209,7 +1236,12 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       reviewReasons.push(`condition text "${explicitCondition}" did not match Kickio's condition ladder`);
     }
   } else {
-    condition = gradeConditionText(haystack, hostname);
+    // Title first, haystack as a fallback - condition wording (BNIB, w/
+    // tags, Mint, ...) is often stated right in this retailer's own
+    // titles, and a bare word like "good" or "new" is exactly the kind of
+    // thing sitewide boilerplate (nav, footer, "New arrivals") would
+    // otherwise false-positive on.
+    condition = gradeConditionText(title, hostname) ?? gradeConditionText(haystack, hostname);
   }
 
   // ---- Size ----

@@ -807,3 +807,87 @@ Consumer Rights Act 2015, see https://www.legislation.gov.uk/ukpga/2015/15/conte
     });
   });
 });
+
+describe('buildKickioProfile - keyword fields ignore page boilerplate outside the title', () => {
+  // Confirmed in production on vintagefootballshirts.com: getContentHtml()
+  // (services/mainContent.ts) only strips literal <nav>/<header>/<footer>
+  // tags, and this retailer's Shopify theme - like many - wraps its real
+  // nav/footer in plain <div>s instead, so sitewide boilerplate ("Shop by
+  // Player", a hidden locale switcher mentioning "cuarta equipación", a
+  // newsletter "you have successfully signed up" toast) survives into
+  // every page's markdown. type/issue/signed/special_edition/boxed/
+  // sleeves/gender each have a "default when nothing found" - Home,
+  // Standard Retail Version, Not Signed, etc - so a false match from that
+  // boilerplate doesn't just add noise, it silently overrides an
+  // otherwise-correct default. Every case below uses a title with no
+  // relevant keyword at all, paired with a description standing in for
+  // exactly that kind of contaminated haystack, to prove these fields no
+  // longer look past the title for them.
+  const boilerplateDescription =
+    'Shop by Player. Free UK & Europe shipping. Camiseta de la cuarta equipación. ' +
+    'You have successfully signed up to our newsletter. Boxing Day sale now on. ' +
+    "Women's sizing guide. New arrivals every week.";
+
+  it('does not tag an ordinary replica as Authentic/Player Version from a sitewide "Shop by Player" link', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/1998-arsenal-nike-home-shirt',
+      title: '1998 Arsenal Nike Home Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Arsenal' },
+    });
+    expect(profile.identity.issue).toBe('Standard Retail Version');
+  });
+
+  it('does not misdetect shirt type from unrelated page text (the real Boca Juniors away-shirt repro)', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2005-boca-juniors-nike-away-shirt',
+      title: '2005 Boca Juniors Nike Away Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Boca Juniors' },
+    });
+    expect(profile.identity.shirt_type).toBe('Away');
+  });
+
+  it('does not mark an item Signed from unrelated newsletter boilerplate ("signed up")', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2010-brazil-nike-home-shirt',
+      title: '2010 Brazil Nike Home Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Brazil' },
+    });
+    expect(profile.identity.signed).toBe('Not Signed');
+  });
+
+  it('does not tag an item Boxed from unrelated "Boxing Day sale" boilerplate', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2015-chelsea-adidas-away-shirt',
+      title: '2015 Chelsea Adidas Away Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Chelsea' },
+    });
+    expect(profile.listing.boxed_edition).toBe('Not A Boxed Edition');
+  });
+
+  it('does not tag an item Womens from an unrelated sizing-guide link', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2012-germany-adidas-home-shirt',
+      title: '2012 Germany Adidas Home Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Germany' },
+    });
+    expect(profile.identity.gender).toBe('Mens');
+  });
+
+  it('still recovers a genuine title-stated signal (Player Issue really is in the title)', () => {
+    // The point of scoping to the title isn't "never trust the word
+    // player" - it's that the title is reliably about THIS item. This
+    // retailer's own titles already say so explicitly when it's true.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2023-24-england-nike-player-issue-pre-match-shirt',
+      title: '2023-24 England Nike Player Issue Pre-Match Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'England' },
+    });
+    expect(profile.identity.issue).toBe('Authentic/Player Version');
+  });
+});
