@@ -10,9 +10,10 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    api.get<{ success: boolean; settings: SettingsType }>('/admin/settings').then((res) =>
-      setForm(res.settings),
-    );
+    api
+      .get<{ success: boolean; settings: SettingsType }>('/admin/settings')
+      .then((res) => setForm(res.settings))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load settings'));
   }, []);
 
   async function onSubmit(e: FormEvent) {
@@ -31,7 +32,7 @@ export default function Settings() {
     }
   }
 
-  if (!form) return <Spinner />;
+  if (!form) return error ? <ErrorBanner message={error} /> : <Spinner />;
 
   return (
     <div className="max-w-xl space-y-4">
@@ -119,7 +120,10 @@ function CurrencyRates() {
   const [error, setError] = useState<string | null>(null);
 
   function reload() {
-    api.get<{ success: boolean; rates: CurrencyRate[] }>('/admin/currency-rates').then((res) => setRates(res.rates));
+    api
+      .get<{ success: boolean; rates: CurrencyRate[] }>('/admin/currency-rates')
+      .then((res) => setRates(res.rates))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load currency rates'));
   }
 
   useEffect(reload, []);

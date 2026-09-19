@@ -34,12 +34,15 @@ export default function SiteForm() {
 
   useEffect(() => {
     if (!id) return;
-    api.get<{ success: boolean; site: Site }>(`/admin/sites/${id}`).then((res) => {
-      setForm(res.site);
-      setSelectorsJson(JSON.stringify(res.site.default_selectors, null, 2));
-      setAllowedPathsText(res.site.allowed_paths.join('\n'));
-      setDeniedPathsText(res.site.denied_paths.join('\n'));
-    });
+    api
+      .get<{ success: boolean; site: Site }>(`/admin/sites/${id}`)
+      .then((res) => {
+        setForm(res.site);
+        setSelectorsJson(JSON.stringify(res.site.default_selectors, null, 2));
+        setAllowedPathsText(res.site.allowed_paths.join('\n'));
+        setDeniedPathsText(res.site.denied_paths.join('\n'));
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load site'));
   }, [id]);
 
   async function onSubmit(e: FormEvent) {

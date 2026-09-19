@@ -29,7 +29,9 @@ export default function JobDetail() {
       .then((res) => {
         setJob(res.job);
         setPages(res.pages);
-      });
+        setError(null);
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load job'));
   }
 
   useEffect(load, [id]);
@@ -70,7 +72,7 @@ export default function JobDetail() {
     }
   }
 
-  if (!job) return <Spinner />;
+  if (!job) return error ? <ErrorBanner message={error} /> : <Spinner />;
 
   return (
     <div className="space-y-4">

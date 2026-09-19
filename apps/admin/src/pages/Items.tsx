@@ -45,7 +45,10 @@ export default function Items() {
   const pageSize = 25;
 
   useEffect(() => {
-    api.get<{ success: boolean; sites: Site[] }>('/admin/sites').then((res) => setSites(res.sites));
+    api
+      .get<{ success: boolean; sites: Site[] }>('/admin/sites')
+      .then((res) => setSites(res.sites))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load sites'));
   }, []);
 
   function loadItems() {

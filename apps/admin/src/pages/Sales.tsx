@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import type { Sale, Site } from '../lib/types';
-import { Button, Card, KickioProfilePanel, PageHeader, Select, Spinner, Thumbnail } from '../components/ui';
+import { Button, Card, ErrorBanner, KickioProfilePanel, PageHeader, Select, Spinner, Thumbnail } from '../components/ui';
 
 export default function Sales() {
   const [sites, setSites] = useState<Site[] | null>(null);
@@ -9,10 +9,14 @@ export default function Sales() {
   const [total, setTotal] = useState(0);
   const [siteId, setSiteId] = useState('');
   const [page, setPage] = useState(1);
+  const [error, setError] = useState<string | null>(null);
   const pageSize = 25;
 
   useEffect(() => {
-    api.get<{ success: boolean; sites: Site[] }>('/admin/sites').then((res) => setSites(res.sites));
+    api
+      .get<{ success: boolean; sites: Site[] }>('/admin/sites')
+      .then((res) => setSites(res.sites))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load sites'));
   }, []);
 
   useEffect(() => {
@@ -23,7 +27,8 @@ export default function Sales() {
       .then((res) => {
         setSales(res.sales);
         setTotal(res.total);
-      });
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load sales'));
   }, [siteId, page]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -56,7 +61,9 @@ export default function Sales() {
         <div className="text-sm text-slate-400">{total} sale{total === 1 ? '' : 's'}</div>
       </Card>
 
-      {!sales && <Spinner />}
+      {error && <ErrorBanner message={error} />}
+
+      {!sales && !error && <Spinner />}
 
       {sales?.length === 0 && (
         <Card>
