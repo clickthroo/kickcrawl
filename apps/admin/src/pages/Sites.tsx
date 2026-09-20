@@ -24,7 +24,10 @@ export default function Sites() {
   const [message, setMessage] = useState<string | null>(null);
 
   function reload() {
-    api.get<{ success: boolean; sites: Site[] }>('/admin/sites').then((res) => setSites(res.sites));
+    api
+      .get<{ success: boolean; sites: Site[] }>('/admin/sites')
+      .then((res) => setSites(res.sites))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load sites'));
   }
 
   useEffect(reload, []);
@@ -52,7 +55,7 @@ export default function Sites() {
     }
   }
 
-  if (!sites) return <Spinner />;
+  if (!sites) return error ? <ErrorBanner message={error} /> : <Spinner />;
 
   return (
     <div className="space-y-4">

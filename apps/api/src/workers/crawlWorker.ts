@@ -7,7 +7,6 @@ import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlS
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
 import { detectSellerSignals } from '../services/sellerSignals.js';
-import { closeBrowser } from '../services/browser.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 
@@ -60,6 +59,28 @@ export function catalogIdFromUrl(url: string): string | null {
 export function isCrawlItem(path: string, includePaths: string[]): boolean {
   if (includePaths.length === 0) return true;
   return includePaths.some((p) => matchesPathPattern(path, p));
+}
+
+/**
+ * Whether this specific page fetch should render via a real browser.
+ * Browser rendering only ever matters for a page's own LINKS - an item
+ * page's links are never followed at all (see the "not matchesAllowedPaths"
+ * guard around the traversal code below) - so a site that's confirmed its
+ * item pages' own content (title, price, stock) renders fine over plain
+ * HTTP even when its nav doesn't (skip_browser_for_items) can skip
+ * Playwright, and the single global browser slot every browser-driven
+ * fetch across the whole app serializes through (services/browser.ts),
+ * for exactly the pages that don't need it. A non-item (nav/category)
+ * page always keeps the job's own setting, since THAT'S the page whose
+ * links actually get traversed.
+ */
+export function resolveUseBrowser(
+  matchesAllowedPaths: boolean,
+  jobUseBrowser: boolean | undefined,
+  site: Pick<SiteConfig, 'skip_browser_for_items'> | null | undefined,
+): boolean | undefined {
+  if (matchesAllowedPaths && site?.skip_browser_for_items) return false;
+  return jobUseBrowser;
 }
 
 async function updateJobProgress(jobId: string, total: number, completed: number): Promise<void> {
@@ -159,12 +180,24 @@ export async function scrapePageWithTimeout(
   opts: Parameters<typeof scrapePage>[1],
   site: Parameters<typeof scrapePage>[2],
 ): Promise<ScrapeCoreResult> {
-  let timedOut = false;
-  const result = await Promise.race([
+  // Recycling the shared Chromium instance (services/browser.ts) on a
+  // fatal browser error used to happen here too, AFTER scrapePage() had
+  // already returned. By that point services/browser.ts's own
+  // withBrowserSlot had already released its single app-wide slot, so a
+  // different concurrently running job (concurrency: 3) could already be
+  // mid-fetch on a brand new browser instance - and this outer,
+  // context-unaware closeBrowser() call would tear that healthy browser
+  // out from under it, producing the exact same "browser has been closed"
+  // error that made IT recycle too, cascading into a self-sustaining
+  // failure storm from one initial crash. That recycling now happens
+  // inside services/fetcher.ts's fetchWithBrowser() instead, still within
+  // withBrowserSlot, where at most one browser-driven fetch is ever in
+  // flight app-wide - so there's no other job's browser left for it to
+  // race against.
+  return await Promise.race([
     scrapePage(url, opts, site),
     new Promise<ScrapeCoreResult>((resolve) =>
       setTimeout(() => {
-        timedOut = true;
         resolve({
           success: false,
           error: `Timed out after ${PAGE_TIMEOUT_MS}ms fetching this page`,
@@ -173,25 +206,6 @@ export async function scrapePageWithTimeout(
       }, PAGE_TIMEOUT_MS),
     ),
   ]);
-
-  // Recover the one memoized Chromium instance every browser-driven fetch
-  // shares (services/browser.ts) once we have real evidence it's broken,
-  // rather than leaving every future request on it to pay for a browser
-  // we already know is bad. Confirmed in production: several catalog
-  // pages crashed Chromium's renderer in a row ("page.goto: Page
-  // crashed") - each one returned quickly, as a normal failure, so
-  // nothing recycled the browser - and every single item page fetch
-  // afterward then hung for the full 90s timeout, one after another,
-  // against that same still-degraded instance. Two independent signals of
-  // "this browser is bad, not just this one page": our own outer timeout
-  // firing at all (nothing legitimate should still be running after 90s),
-  // or the fetch itself reporting Chromium's own fatal, page-independent
-  // failures rather than an ordinary navigation/HTTP error.
-  const browserFatal =
-    !result.success && !!result.error && /page crashed|target closed|browser has been closed/i.test(result.error);
-  if (timedOut || browserFatal) await closeBrowser().catch(() => undefined);
-
-  return result;
 }
 
 async function fireWebhook(jobId: string, status: string): Promise<void> {
@@ -291,15 +305,24 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     // raw HTML a second time.
     const baseFormats: ScrapeFormat[] = isItem ? scrapeOptions.formats ?? ['markdown'] : [];
     const formats: ScrapeFormat[] = baseFormats.includes('links') ? baseFormats : [...baseFormats, 'links'];
+    const useBrowser = resolveUseBrowser(matchesAllowedPaths, scrapeOptions.useBrowser, site);
     const result = await scrapePageWithTimeout(
       next.url,
-      { formats, onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser: scrapeOptions.useBrowser },
+      { formats, onlyMainContent: scrapeOptions.onlyMainContent ?? true, useBrowser },
       site,
     );
     if (!result.success) {
       console.log(`[crawlWorker] job ${jobId} failed ${next.url}: ${result.error}`);
+      // Recorded regardless of isItem - previously a failed fetch on a
+      // non-item (nav/category) page was completely silent: no error, no
+      // retry, nothing in the job's error count, just a page that
+      // contributed zero links to the queue as if it had never existed.
+      // That made a crawl that was quietly failing on most of its
+      // category pages look identical to "0 errors" in the UI, with no
+      // way to tell a genuinely small site apart from one where discovery
+      // was silently dying page after page.
+      errors.push(`${next.url}${isItem ? '' : ' (nav/category page - not counted as an item)'}: ${result.error}`);
       if (isItem) {
-        errors.push(`${next.url}: ${result.error}`);
         await recordPageResult(siteId, jobId, next.url, result);
       }
     } else {

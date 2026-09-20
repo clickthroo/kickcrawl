@@ -1,22 +1,25 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import type { Job } from '../lib/types';
-import { Badge, Card, PageHeader, ProgressBar, Select, Spinner } from '../components/ui';
+import { Badge, Card, ErrorBanner, PageHeader, ProgressBar, Select, Spinner } from '../components/ui';
 
 export default function Jobs() {
   const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState(() => searchParams.get('type') ?? '');
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams();
     if (statusFilter) params.set('status', statusFilter);
     if (typeFilter) params.set('type', typeFilter);
-    api.get<{ success: boolean; jobs: Job[] }>(`/admin/jobs?${params.toString()}`).then((res) =>
-      setJobs(res.jobs),
-    );
+    setError(null);
+    api
+      .get<{ success: boolean; jobs: Job[] }>(`/admin/jobs?${params.toString()}`)
+      .then((res) => setJobs(res.jobs))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load jobs'));
   }, [statusFilter, typeFilter]);
 
   return (
@@ -47,7 +50,9 @@ export default function Jobs() {
         </div>
       </div>
 
-      {!jobs && <Spinner />}
+      {error && <ErrorBanner message={error} />}
+
+      {!jobs && !error && <Spinner />}
 
       {jobs?.length === 0 && (
         <Card>

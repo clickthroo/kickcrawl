@@ -1,0 +1,15 @@
+-- Browser rendering (Playwright) is only actually needed to see a page's
+-- OWN links for traversal - an item page's links are never followed at
+-- all (crawlWorker.ts never reads them), so a site whose item pages
+-- render their real content fine over plain HTTP even when its nav
+-- doesn't (confirmed on vintagefootballshirts.com: a plain-HTTP crawl
+-- correctly extracted full item profiles for every product it reached,
+-- before browser mode was ever turned on for that site) doesn't need to
+-- pay Playwright's cost - and the single global browser slot
+-- (services/browser.ts) it serializes through - for those pages too.
+--
+-- Opt-in and off by default: a JS-rendered SPA (Vinted, use_browser_default
+-- already true) needs the browser for its item pages' own content just as
+-- much as for traversal, so this must never change behaviour for a site
+-- that hasn't explicitly confirmed otherwise.
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS skip_browser_for_items boolean NOT NULL DEFAULT false;

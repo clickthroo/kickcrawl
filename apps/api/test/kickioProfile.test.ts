@@ -130,12 +130,82 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('Arsenal Away Shirt Large')).toBe('Arsenal');
   });
 
+  it('strips a quoted special-edition aside rather than leaking it into the team', () => {
+    // Confirmed against a real vintagefootballshirts.com listing - the
+    // quoted trophy name was surviving verbatim (plus a stray SKU-shaped
+    // number split off the site's own product code) leaving
+    // "Sevilla 'Antonio Puerta Trophy' 83" where only "Sevilla" is real.
+    expect(guessTeamFromTitle("2019 Sevilla Nike 'Antonio Puerta Trophy' Home Shirt")).toBe('Sevilla');
+  });
+
+  it('leaves an apostrophe inside a real word alone (not mistaken for a quoted span)', () => {
+    expect(guessTeamFromTitle("N'Golo's 2018 France Home Shirt")).toBe("N'Golo's France");
+  });
+
+  it('strips a trailing stock/reference code, and the size letter it displaced from the end', () => {
+    // The real title from a live vintagefootballshirts.com listing - "S"
+    // used to survive as part of the guess because the site's own 6-digit
+    // stock code came after it, pushing "S" away from the very end where
+    // the bare-size-letter cleanup only ever looked.
+    expect(guessTeamFromTitle('2003-05 Barcelona Nike Training Shirt S 112587')).toBe('Barcelona');
+  });
+
+  it('leaves a real, short club number alone - only a long stock-code-shaped number is stripped', () => {
+    expect(guessTeamFromTitle('Hannover 96 Home Shirt 2019-20')).toBe('Hannover 96');
+  });
+
+  it('strips a short trailing stock code that a digit-length threshold alone could never safely catch', () => {
+    // Real title from a live listing: "Team: Celtic 47" was leaking
+    // through - the digit-length-based strip above requires 5+ digits
+    // specifically so it can never mistake a real club number
+    // (Hannover 96) for a stock code, but that same restraint meant a
+    // short code like this bare "47" survived untouched. Anchoring to
+    // the size word immediately before it (present in the real title)
+    // is what makes this one safe to strip despite being just 2 digits.
+    expect(guessTeamFromTitle('2012-13 Celtic Nike Home Shirt XL 47')).toBe('Celtic');
+  });
+
+  it('strips an alphanumeric trailing stock code the same way', () => {
+    // Real title from a live listing: "Team: Celtic M HA8318" - "M" isn't
+    // in the abbreviated XL/XXL/... list stripped early, so it survived
+    // all the way to the end, and the purely-numeric stock-code strip
+    // above can't match a letter-prefixed code like this at all.
+    expect(guessTeamFromTitle('2022-23 Celtic adidas Third Shirt M HA8318')).toBe('Celtic');
+  });
+
   it('strips a colour word sitting between the team name and the kit type', () => {
     // The real title from a live Vinted listing: "Pink" is a colour
     // qualifier, not part of the team name, but nothing was stripping it -
     // it survived as "Arsenal Pink" the same way an unstripped size word
     // used to leak through before that was fixed above.
     expect(guessTeamFromTitle('Arsenal Pink Third Shirt 22/23 Small')).toBe('Arsenal');
+  });
+
+  it('strips this retailer\'s "*w/tags*" condition note rather than leaking it into the team', () => {
+    // Real title from a live vintagefootballshirts.com listing: "Team:
+    // Leeds w/tags" was leaking through - the asterisks around it were
+    // already stripped, but nothing recognised the bare "w/tags" token
+    // itself as a condition note (this retailer's own shorthand for
+    // BNWT/BNWOT) rather than part of the team name.
+    expect(guessTeamFromTitle('2013-14 Leeds Macron Home Shirt *w/tags*')).toBe('Leeds');
+  });
+
+  it('strips a trailing alphanumeric stock code even with no size word in front of it to anchor on', () => {
+    // Real title from a live listing: "Team: Ukraine w/tags JZ4622" -
+    // unlike the earlier "Celtic M HA8318" case, there's no size word
+    // between the condition note and the code for the size+code strip
+    // above to anchor on, and the code isn't purely numeric either, so
+    // neither existing stock-code strip could catch it.
+    expect(guessTeamFromTitle('2026 Ukraine adidas Home Shirt *w/tags* JZ4622')).toBe('Ukraine');
+  });
+
+  it('leaves a real club name ending in a number alone - the new alphanumeric-code strip only matches letters fused directly onto digits', () => {
+    // Guards the new stock-code strip against being too broad: it only
+    // matches a couple of LETTERS immediately fused onto digits with no
+    // space ("HA8318", "JZ4622"), so a genuine trailing club number - which
+    // is always separated by a space, never fused onto the preceding word -
+    // is never mistaken for one.
+    expect(guessTeamFromTitle('Hannover 96 Away Shirt 2019-20')).toBe('Hannover 96');
   });
 });
 
@@ -781,5 +851,89 @@ Consumer Rights Act 2015, see https://www.legislation.gov.uk/ukpga/2015/15/conte
       expect(profile.listing.price).toBeNull();
       expect(profile.needs_review).toBe(false);
     });
+  });
+});
+
+describe('buildKickioProfile - keyword fields ignore page boilerplate outside the title', () => {
+  // Confirmed in production on vintagefootballshirts.com: getContentHtml()
+  // (services/mainContent.ts) only strips literal <nav>/<header>/<footer>
+  // tags, and this retailer's Shopify theme - like many - wraps its real
+  // nav/footer in plain <div>s instead, so sitewide boilerplate ("Shop by
+  // Player", a hidden locale switcher mentioning "cuarta equipación", a
+  // newsletter "you have successfully signed up" toast) survives into
+  // every page's markdown. type/issue/signed/special_edition/boxed/
+  // sleeves/gender each have a "default when nothing found" - Home,
+  // Standard Retail Version, Not Signed, etc - so a false match from that
+  // boilerplate doesn't just add noise, it silently overrides an
+  // otherwise-correct default. Every case below uses a title with no
+  // relevant keyword at all, paired with a description standing in for
+  // exactly that kind of contaminated haystack, to prove these fields no
+  // longer look past the title for them.
+  const boilerplateDescription =
+    'Shop by Player. Free UK & Europe shipping. Camiseta de la cuarta equipación. ' +
+    'You have successfully signed up to our newsletter. Boxing Day sale now on. ' +
+    "Women's sizing guide. New arrivals every week.";
+
+  it('does not tag an ordinary replica as Authentic/Player Version from a sitewide "Shop by Player" link', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/1998-arsenal-nike-home-shirt',
+      title: '1998 Arsenal Nike Home Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Arsenal' },
+    });
+    expect(profile.identity.issue).toBe('Standard Retail Version');
+  });
+
+  it('does not misdetect shirt type from unrelated page text (the real Boca Juniors away-shirt repro)', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2005-boca-juniors-nike-away-shirt',
+      title: '2005 Boca Juniors Nike Away Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Boca Juniors' },
+    });
+    expect(profile.identity.shirt_type).toBe('Away');
+  });
+
+  it('does not mark an item Signed from unrelated newsletter boilerplate ("signed up")', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2010-brazil-nike-home-shirt',
+      title: '2010 Brazil Nike Home Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Brazil' },
+    });
+    expect(profile.identity.signed).toBe('Not Signed');
+  });
+
+  it('does not tag an item Boxed from unrelated "Boxing Day sale" boilerplate', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2015-chelsea-adidas-away-shirt',
+      title: '2015 Chelsea Adidas Away Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Chelsea' },
+    });
+    expect(profile.listing.boxed_edition).toBe('Not A Boxed Edition');
+  });
+
+  it('does not tag an item Womens from an unrelated sizing-guide link', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2012-germany-adidas-home-shirt',
+      title: '2012 Germany Adidas Home Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'Germany' },
+    });
+    expect(profile.identity.gender).toBe('Mens');
+  });
+
+  it('still recovers a genuine title-stated signal (Player Issue really is in the title)', () => {
+    // The point of scoping to the title isn't "never trust the word
+    // player" - it's that the title is reliably about THIS item. This
+    // retailer's own titles already say so explicitly when it's true.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2023-24-england-nike-player-issue-pre-match-shirt',
+      title: '2023-24 England Nike Player Issue Pre-Match Shirt',
+      description: boilerplateDescription,
+      extracted: { team: 'England' },
+    });
+    expect(profile.identity.issue).toBe('Authentic/Player Version');
   });
 });

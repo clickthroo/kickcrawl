@@ -404,6 +404,19 @@ export function guessTeamFromTitle(title: string): string {
 
   let c = withoutSubtitle
     .replace(/\*+/g, '')
+    // This retailer always puts its own stock/reference code as the very
+    // last token, immediately after the size (e.g. "... Shirt S 112587",
+    // "... Shirt M HA8318", "... Shirt XL 47") - stripped as a pair here,
+    // anchored to both the end of the title AND an actual size word right
+    // before it. That size anchor is what makes this safe even for a
+    // short, alphanumeric, or otherwise-ambiguous code (a bare "47", a
+    // mixed "HA8318") that neither a digit-length threshold nor a
+    // bare-trailing-size check alone could safely catch - each of those
+    // only fires when its own target sits at the very end, and the size
+    // word sitting between the team name and the code was blocking both.
+    // A real club number (Hannover 96, Bayer 04 Leverkusen) is never
+    // preceded by a size word like this, so it's untouched.
+    .replace(/\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\s+[A-Za-z0-9]+$/i, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
     // the front of the title - that separator is what stops this unbounded
@@ -424,6 +437,12 @@ export function guessTeamFromTitle(title: string): string {
     .replace(new RegExp(`\\b(${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`, 'gi'), '')
     .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
+    // "*w/tags*"/"w/o tags" is a condition note (this retailer's own
+    // shorthand for BNWT/BNWOT), not part of the team - confirmed on real
+    // listings surviving as "Leeds w/tags" and "Ukraine w/tags JZ4622".
+    // The asterisks wrapping it are already gone by this point (stripped
+    // above), leaving the bare "w/tags" token to catch here.
+    .replace(/\bw\/o?\s*tags?\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
     .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
     .replace(/\b\d+\s*(?:st|nd|rd|th)\b/gi, '')
@@ -445,16 +464,43 @@ export function guessTeamFromTitle(title: string): string {
     // team itself, e.g. "France", should survive - only the tournament
     // label should go).
     .replace(/\b(World\s*Cup|FIFA|Olympics?|Euro'?s?|Copa\s+America|Africa\s+Cup|AFCON|Nations\s+League|Confederations\s+Cup)\b/gi, '')
-    .replace(/\([^)]*\)/g, '');
+    .replace(/\([^)]*\)/g, '')
+    // A quoted aside ("2019 Sevilla Nike 'Antonio Puerta Trophy' Home
+    // Shirt") names a special edition/commemoration, not the team - same
+    // reasoning as the parenthetical strip just above, just with quotes
+    // instead of parens. Anchored to whitespace on both sides so a
+    // genuine apostrophe inside a word (a contraction, a name like
+    // "N'Golo") is never mistaken for the start/end of a quoted span.
+    .replace(/(^|\s)'[^']+'(?=\s|$)/g, '$1')
+    .replace(/(^|\s)"[^"]+"(?=\s|$)/g, '$1');
   for (const m of MANUFACTURERS) {
     c = c.replace(new RegExp(`\\b${escapeRegex(m)}\\b`, 'gi'), '');
   }
   c = c.replace(/\s*[-–—]\s*$/g, '').replace(/^\s*[-–—]\s*/g, '');
   c = c.replace(/\.\s*$/, '').replace(/\s+/g, ' ').trim();
   c = c.replace(/\bHolland\b/gi, 'Netherlands');
+  // A trailing 5+ digit code is the retailer's own stock/reference number,
+  // not part of the team - confirmed on a real vintagefootballshirts.com
+  // listing ("2003-05 Barcelona Nike Training Shirt S 112587" was
+  // surviving as "Barcelona S 112587"). No club, competition or kit
+  // descriptor is ever a number that long - unlike a real club number
+  // (Hannover 96, Bayer 04 Leverkusen), which is always 4 digits or fewer
+  // and deliberately left alone.
+  c = c.replace(/\s+\d{5,}$/, '').trim();
+  // A trailing alphanumeric stock/reference code - a couple of letters
+  // fused directly onto 3-6 digits with no space ("HA8318", "JZ4622") - is
+  // this retailer's own SKU, not part of the team, even with no size word
+  // in front of it to anchor on (the earlier size+code strip above only
+  // fires when one is). Confirmed on a real listing that survived as
+  // "Ukraine w/tags JZ4622" with nothing between the code and the rest of
+  // the (already-stripped) title. No genuine team, club-number or kit
+  // descriptor ever fuses letters straight onto digits like this - a real
+  // club number (Hannover 96, Bayer 04) always has a space before it.
+  c = c.replace(/\s+[A-Za-z]{1,3}\d{3,6}$/, '').trim();
   // A leftover bare single-letter size code at the very end (e.g. "Size M"
-  // became just " M" once "Size" was stripped) is safe to drop - unlike a
-  // bare letter anywhere else in the string, which is left alone since it
+  // became just " M" once "Size" was stripped, or "S" once a trailing
+  // stock code was stripped off after it) is safe to drop - unlike a bare
+  // letter anywhere else in the string, which is left alone since it
   // could be part of a genuine one-word team name.
   c = c.replace(/\s+(XXS|XS|S|M|L|XL|XXL|XXXL)$/i, '').trim();
   // Guard against leftover junk (a bare size code, or anything too short to
@@ -1090,10 +1136,26 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   }
 
   // ---- Shirt type / jacket has no shirt_type ----
+  // Scoped to the title alone (not haystack) for this and every other
+  // keyword-matched field below that has a "default when nothing found"
+  // (Home, Standard Retail Version, Not Signed, ...) - confirmed in
+  // production on vintagefootballshirts.com: nearly every item was coming
+  // back "Authentic/Player Version" and a plain away shirt showed as
+  // "Fourth", because getContentHtml() (services/mainContent.ts) only
+  // strips literal <nav>/<header>/<footer> tags, and this retailer's theme
+  // (like many Shopify themes) wraps its real nav/footer in plain <div>s
+  // instead - so a sitewide "Shop by Player" link or a stray "cuarta"
+  // in hidden locale-switcher markup survived into every page's haystack
+  // and silently overrode the correct default. The title is always
+  // seller-authored and specific to this one listing - and this retailer's
+  // own titles already spell out "Player Issue", "Away", etc. explicitly
+  // when true (e.g. "2023-24 England Nike Player Issue Pre-Match Shirt") -
+  // so there's no legitimate signal being given up by not also trawling
+  // the rest of the page for these particular fields.
   let shirtType: string | null = null;
   if (!isJacket) {
     const explicitType = caseInsensitiveGet(extracted, 'type', 'shirtType', 'kitType');
-    const r = detectShirtType(explicitType ?? haystack);
+    const r = detectShirtType(explicitType ?? title);
     shirtType = r.type;
     if (r.informationalOnly) {
       reviewReasons.push('title indicates a Training/Pre-Match kit - Kickio has no dedicated Type value for this');
@@ -1105,7 +1167,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
 
   // ---- Gender ----
   const explicitGender = caseInsensitiveGet(extracted, 'gender', 'department');
-  const gender = canonicalGender(explicitGender && /\b(kids|women)/i.test(explicitGender) ? explicitGender : haystack);
+  const gender = canonicalGender(explicitGender && /\b(kids|women)/i.test(explicitGender) ? explicitGender : title);
 
   // ---- Issue / Special edition / Signed / Boxed (shirts only) ----
   let issue: string | null = null;
@@ -1113,16 +1175,16 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   let signed: string | null = null;
   let boxed: string | null = null;
   if (!isJacket) {
-    issue = canonicalIssue(caseInsensitiveGet(extracted, 'issue') ?? haystack);
-    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? haystack);
+    issue = canonicalIssue(caseInsensitiveGet(extracted, 'issue') ?? title);
+    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? title);
   } else {
-    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? haystack);
+    signed = canonicalSigned(caseInsensitiveGet(extracted, 'signed') ?? title);
   }
-  specialEdition = canonicalSpecialEdition(caseInsensitiveGet(extracted, 'specialEdition', 'edition') ?? haystack);
-  boxed = canonicalBoxed(caseInsensitiveGet(extracted, 'boxedEdition', 'boxed') ?? haystack);
+  specialEdition = canonicalSpecialEdition(caseInsensitiveGet(extracted, 'specialEdition', 'edition') ?? title);
+  boxed = canonicalBoxed(caseInsensitiveGet(extracted, 'boxedEdition', 'boxed') ?? title);
 
   // ---- Sleeves (shirts only) ----
-  const sleeves = isJacket ? null : canonicalSleeves(caseInsensitiveGet(extracted, 'sleeves') ?? haystack);
+  const sleeves = isJacket ? null : canonicalSleeves(caseInsensitiveGet(extracted, 'sleeves') ?? title);
 
   // ---- Player + number (shirts only) ----
   let player: string | null = null;
@@ -1140,7 +1202,8 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // risk the exact kind of false match season parsing already hit once.
     let rawPlayer = explicitPlayer ?? extractPlayerNameFromTitle(title) ?? extractPlayerNameFromTitle(description);
     rawPlayer = normalizePlayerName(team, rawPlayer);
-    const manufacturerForStrip = caseInsensitiveGet(extracted, 'manufacturer', 'brand') ?? detectManufacturer(haystack);
+    const manufacturerForStrip =
+      caseInsensitiveGet(extracted, 'manufacturer', 'brand') ?? detectManufacturer(title) ?? detectManufacturer(haystack);
     rawPlayer = stripManufacturerFromPlayer(rawPlayer, manufacturerForStrip);
     player = rawPlayer;
     number = sanitizeShirtNumber(
@@ -1149,12 +1212,19 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   }
 
   // ---- Manufacturer ----
+  // Title first, full haystack only as a fallback when the title alone
+  // found nothing - unlike type/issue/signed/etc above, there's no
+  // "default" here for a stray haystack match to wrongly override (a
+  // manufacturer nav list matching first is still a real risk, e.g. a
+  // "Shop by Brand" link naming every brand on every page), so a genuine
+  // haystack-only mention is still worth recovering rather than leaving
+  // this blank.
   const explicitManufacturer = caseInsensitiveGet(extracted, 'manufacturer', 'brand');
   let manufacturer: string | null = null;
   if (explicitManufacturer) {
     manufacturer = canonicalManufacturer(explicitManufacturer);
   } else {
-    manufacturer = detectManufacturer(haystack);
+    manufacturer = detectManufacturer(title) ?? detectManufacturer(haystack);
   }
 
   // ---- Colour (main two) ----
@@ -1174,7 +1244,10 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       if (!p.canonical) reviewReasons.push(`colour "${p.raw}" is not in Kickio's fixed palette`);
     }
   } else {
-    const detected = detectColours(haystack, 2);
+    // Same title-first, haystack-as-fallback reasoning as manufacturer -
+    // colour has no wrong-default risk, only a "found nothing" one.
+    const fromTitle = detectColours(title, 2);
+    const detected = fromTitle.length > 0 ? fromTitle : detectColours(haystack, 2);
     colour = detected[0]?.canonical ?? null;
     colourSecondary = detected[1]?.canonical ?? null;
     for (const d of detected) {
@@ -1192,7 +1265,12 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       reviewReasons.push(`condition text "${explicitCondition}" did not match Kickio's condition ladder`);
     }
   } else {
-    condition = gradeConditionText(haystack, hostname);
+    // Title first, haystack as a fallback - condition wording (BNIB, w/
+    // tags, Mint, ...) is often stated right in this retailer's own
+    // titles, and a bare word like "good" or "new" is exactly the kind of
+    // thing sitewide boilerplate (nav, footer, "New arrivals") would
+    // otherwise false-positive on.
+    condition = gradeConditionText(title, hostname) ?? gradeConditionText(haystack, hostname);
   }
 
   // ---- Size ----

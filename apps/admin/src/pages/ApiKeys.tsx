@@ -11,7 +11,10 @@ export default function ApiKeys() {
   const [creating, setCreating] = useState(false);
 
   function reload() {
-    api.get<{ success: boolean; apiKeys: ApiKey[] }>('/admin/api-keys').then((res) => setKeys(res.apiKeys));
+    api
+      .get<{ success: boolean; apiKeys: ApiKey[] }>('/admin/api-keys')
+      .then((res) => setKeys(res.apiKeys))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load API keys'));
   }
 
   useEffect(reload, []);

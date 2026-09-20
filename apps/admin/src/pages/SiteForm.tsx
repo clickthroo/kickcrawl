@@ -10,6 +10,7 @@ const EMPTY: Omit<Site, 'id' | 'created_at' | 'updated_at'> = {
   rate_limit_rps: 1,
   max_depth: 2,
   use_browser_default: false,
+  skip_browser_for_items: false,
   use_proxy: false,
   default_selectors: {},
   allowed_paths: [],
@@ -33,12 +34,15 @@ export default function SiteForm() {
 
   useEffect(() => {
     if (!id) return;
-    api.get<{ success: boolean; site: Site }>(`/admin/sites/${id}`).then((res) => {
-      setForm(res.site);
-      setSelectorsJson(JSON.stringify(res.site.default_selectors, null, 2));
-      setAllowedPathsText(res.site.allowed_paths.join('\n'));
-      setDeniedPathsText(res.site.denied_paths.join('\n'));
-    });
+    api
+      .get<{ success: boolean; site: Site }>(`/admin/sites/${id}`)
+      .then((res) => {
+        setForm(res.site);
+        setSelectorsJson(JSON.stringify(res.site.default_selectors, null, 2));
+        setAllowedPathsText(res.site.allowed_paths.join('\n'));
+        setDeniedPathsText(res.site.denied_paths.join('\n'));
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load site'));
   }, [id]);
 
   async function onSubmit(e: FormEvent) {
@@ -143,6 +147,24 @@ export default function SiteForm() {
               Active
             </label>
           </div>
+          {form.use_browser_default && (
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={form.skip_browser_for_items}
+                onChange={(e) => setForm({ ...form, skip_browser_for_items: e.target.checked })}
+              />
+              <span>
+                Skip the browser for recognized item pages (use plain HTTP for them instead)
+                <span className="block text-xs text-slate-400">
+                  Only turn this on once you've confirmed an item page's own content (title, price, stock) comes
+                  through fine without a browser - a crawl still uses the browser for its nav/category pages either
+                  way, since those need it to discover links.
+                </span>
+              </span>
+            </label>
+          )}
         </Card>
 
         <Card className="space-y-4">

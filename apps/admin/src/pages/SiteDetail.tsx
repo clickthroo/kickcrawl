@@ -34,7 +34,10 @@ export default function SiteDetail() {
 
   useEffect(() => {
     if (!id) return;
-    api.get<{ success: boolean; site: Site }>(`/admin/sites/${id}`).then((res) => setSite(res.site));
+    api
+      .get<{ success: boolean; site: Site }>(`/admin/sites/${id}`)
+      .then((res) => setSite(res.site))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load site'));
   }, [id]);
 
   function loadUrls() {
@@ -49,7 +52,8 @@ export default function SiteDetail() {
       .then((res) => {
         setUrls(res.urls);
         setTotal(res.total);
-      });
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load URLs'));
   }
 
   useEffect(loadUrls, [id, status, pathFilter, page]);
@@ -127,7 +131,7 @@ export default function SiteDetail() {
     }
   }
 
-  if (!site) return <Spinner />;
+  if (!site) return error ? <ErrorBanner message={error} /> : <Spinner />;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 

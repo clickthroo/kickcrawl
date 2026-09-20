@@ -5,6 +5,8 @@ export interface Site {
   rate_limit_rps: number;
   max_depth: number;
   use_browser_default: boolean;
+  /** Skip browser rendering for pages recognized as items even when use_browser_default is on - see their own content already renders fine over plain HTTP. */
+  skip_browser_for_items: boolean;
   use_proxy: boolean;
   default_selectors: Record<string, string>;
   allowed_paths: string[];
@@ -127,6 +129,8 @@ export interface Sale {
   title: string | null;
   price: number | null;
   currency: string | null;
+  /** Full Kickio profile as it was at the moment the sale was detected - null for a sale recorded before this was added. */
+  profile: KickioProfile | null;
   detected_at: string;
 }
 

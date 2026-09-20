@@ -268,6 +268,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
         rate_limit_rps: row.rate_limit_rps,
         max_depth: row.max_depth,
         use_browser_default: row.use_browser_default,
+        skip_browser_for_items: row.skip_browser_for_items,
         use_proxy: row.use_proxy,
         default_selectors: row.default_selectors,
         allowed_paths: row.allowed_paths,

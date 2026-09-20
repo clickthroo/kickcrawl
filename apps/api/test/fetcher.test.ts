@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * A fake enough of Playwright's Page.route() to exercise guardNavigation's
@@ -95,5 +95,177 @@ describe('guardNavigation', () => {
     const route = await dispatch('document', 'http://169.254.169.254/');
     expect(assertSafeUrl).toHaveBeenCalledWith('http://169.254.169.254/');
     expect(route.abort).toHaveBeenCalled();
+  });
+});
+
+describe('fetchWithBrowser', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('gives up and releases the shared browser slot instead of hanging forever when browser.newContext() never settles', async () => {
+    // The real-world case: browser.newContext() (and context.newPage(),
+    // page.content(), context.close()) have no timeout of their own,
+    // unlike page.goto()'s 30s one - a wedged-but-not-crashed browser
+    // process hanging on any of them used to leave withBrowserSlot's
+    // single global slot (services/browser.ts) held forever, silently
+    // deadlocking every future browser-driven fetch across the whole app,
+    // not just this one page.
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() =>
+          Promise.resolve({
+            newContext: vi.fn(() => new Promise(() => {})), // never resolves
+            close: vi.fn(() => Promise.resolve()),
+          }),
+        ),
+      },
+    }));
+
+    const { fetchWithBrowser } = await import('../src/services/fetcher.js');
+    const { withBrowserSlot } = await import('../src/services/browser.js');
+
+    const stuck = fetchWithBrowser('https://example.com/stuck', 'UA', 0);
+    // Attached in the same tick the promise is created, so Node never sees
+    // it as briefly "unhandled" once fake-timer advancement lets it settle
+    // further down - the actual assertion still only resolves once awaited.
+    const stuckAssertion = expect(stuck).rejects.toThrow(/timed out after 45000ms/i);
+
+    // Let the microtask queue drain so the call is genuinely inside
+    // withBrowserSlot (holding the slot) before advancing the clock.
+    await vi.advanceTimersByTimeAsync(0);
+
+    const secondSlotAcquired = vi.fn();
+    const second = withBrowserSlot(async () => {
+      secondSlotAcquired();
+      return 'second-ran';
+    });
+
+    // Still stuck - the slot must not be free before the timeout fires.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(secondSlotAcquired).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    await stuckAssertion;
+    // The slot was actually released - a call queued behind the stuck one
+    // gets to run instead of waiting forever behind it too.
+    await expect(second).resolves.toBe('second-ran');
+    expect(secondSlotAcquired).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports success even when context.close() throws afterward - a close-time failure must never overwrite a result that already succeeded', async () => {
+    // Confirmed in production: a page that navigated and rendered
+    // perfectly fine was still being reported as a failed fetch the
+    // instant context.close() threw ("Protocol error: Failed to find
+    // context", "Target page, context or browser has been closed") -
+    // `finally { await context.close(); }` with no try/catch of its own
+    // let that close-time error silently replace the successful `return`
+    // from the try block above it. Worse, that second message also
+    // matches the fatal-browser-error check below, so it triggered an
+    // unnecessary full browser restart on what was actually a perfectly
+    // good page.
+    const page = {
+      route: vi.fn((_pattern: string, handler: (route: unknown) => Promise<void>) => {
+        void handler;
+        return Promise.resolve();
+      }),
+      goto: vi.fn(() => Promise.resolve({ status: () => 200 })),
+      waitForTimeout: vi.fn(() => Promise.resolve()),
+      content: vi.fn(() => Promise.resolve('<html>ok</html>')),
+      url: vi.fn(() => 'https://example.com/ok'),
+    };
+    const context = {
+      newPage: vi.fn(() => Promise.resolve(page)),
+      close: vi.fn(() => Promise.reject(new Error('Target page, context or browser has been closed'))),
+    };
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() => Promise.resolve({ newContext: vi.fn(() => Promise.resolve(context)) })),
+      },
+    }));
+
+    const { fetchWithBrowser } = await import('../src/services/fetcher.js');
+    const result = await fetchWithBrowser('https://example.com/ok', 'UA', 0);
+
+    expect(result.html).toBe('<html>ok</html>');
+    expect(result.statusCode).toBe(200);
+    expect(context.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('recycles the shared browser when Chromium itself reports a fatal, page-independent failure - a real renderer crash rejects immediately, well before the 45s timeout branch ever gets a chance to fire', async () => {
+    // This recycling decision used to live in crawlWorker.ts, checked
+    // AFTER scrapePage() had already returned - by which point
+    // withBrowserSlot (services/browser.ts) had already released its
+    // single app-wide slot, so a different concurrently running job
+    // (concurrency: 3) could already be mid-fetch on a brand new browser
+    // instance by the time that stale, context-unaware check ran, and its
+    // closeBrowser() call would tear that job's healthy browser out from
+    // under it - producing the exact same "browser has been closed" error
+    // and making THAT job recycle too, a self-sustaining storm from one
+    // initial crash. Deciding it here instead, inside withBrowserSlot, is
+    // safe: at most one browser-driven fetch is ever in flight app-wide,
+    // so there's no other job's browser this could possibly be racing.
+    const closeBrowser = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/services/browser.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/services/browser.js')>('../src/services/browser.js');
+      return { ...actual, closeBrowser };
+    });
+    const page = {
+      route: vi.fn((_pattern: string, handler: (route: unknown) => Promise<void>) => {
+        void handler;
+        return Promise.resolve();
+      }),
+      goto: vi.fn(() => Promise.reject(new Error('page.goto: Page crashed'))),
+    };
+    const context = {
+      newPage: vi.fn(() => Promise.resolve(page)),
+      close: vi.fn(() => Promise.resolve()),
+    };
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() => Promise.resolve({ newContext: vi.fn(() => Promise.resolve(context)) })),
+      },
+    }));
+
+    const { fetchWithBrowser } = await import('../src/services/fetcher.js');
+    await expect(fetchWithBrowser('https://example.com/crash', 'UA', 0)).rejects.toThrow(/page crashed/i);
+
+    expect(closeBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it('never recycles the browser for an ordinary navigation failure - the browser itself is fine', async () => {
+    const closeBrowser = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/services/browser.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/services/browser.js')>('../src/services/browser.js');
+      return { ...actual, closeBrowser };
+    });
+    const page = {
+      route: vi.fn((_pattern: string, handler: (route: unknown) => Promise<void>) => {
+        void handler;
+        return Promise.resolve();
+      }),
+      goto: vi.fn(() => Promise.reject(new Error('net::ERR_CONNECTION_RESET'))),
+    };
+    const context = {
+      newPage: vi.fn(() => Promise.resolve(page)),
+      close: vi.fn(() => Promise.resolve()),
+    };
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() => Promise.resolve({ newContext: vi.fn(() => Promise.resolve(context)) })),
+      },
+    }));
+
+    const { fetchWithBrowser } = await import('../src/services/fetcher.js');
+    await expect(fetchWithBrowser('https://example.com/reset', 'UA', 0)).rejects.toThrow(/ERR_CONNECTION_RESET/i);
+
+    expect(closeBrowser).not.toHaveBeenCalled();
   });
 });

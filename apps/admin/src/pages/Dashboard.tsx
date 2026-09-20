@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode, type SVGProps } from 'react';
-import { api } from '../lib/api';
-import { Card, PageHeader, Spinner } from '../components/ui';
+import { api, ApiError } from '../lib/api';
+import { Card, ErrorBanner, PageHeader, Spinner } from '../components/ui';
 
 interface DashboardStats {
   today: { total: string; success: string; failed: string };
@@ -83,11 +83,16 @@ function StatCard({
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get<{ success: boolean } & DashboardStats>('/admin/stats/dashboard').then(setStats);
+    api
+      .get<{ success: boolean } & DashboardStats>('/admin/stats/dashboard')
+      .then(setStats)
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load dashboard stats'));
   }, []);
 
+  if (error) return <ErrorBanner message={error} />;
   if (!stats) return <Spinner />;
 
   const successRate =

@@ -9,7 +9,7 @@ import { getCurrencyRates } from '../lib/currencyRates.js';
 import { buildKickioProfile } from '../services/kickioProfile.js';
 import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
-import { PAGE_TIMEOUT_MS, passesSellerFilter } from './crawlWorker.js';
+import { PAGE_TIMEOUT_MS, passesSellerFilter, resolveUseBrowser } from './crawlWorker.js';
 
 export const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -50,7 +50,12 @@ export async function recheckSite(
 
   for (const item of items) {
     try {
-      const result = await scrapePage(item.url, { formats: ['markdown'], onlyMainContent: true }, site);
+      // Every url here already matched allowed_paths (the filter just
+      // above), so this is always the matchesAllowedPaths=true case of
+      // crawlWorker.ts's own per-page useBrowser decision - reused here
+      // rather than duplicating that same rule.
+      const useBrowser = resolveUseBrowser(true, undefined, site);
+      const result = await scrapePage(item.url, { formats: ['markdown'], onlyMainContent: true, useBrowser }, site);
 
       // A site's seller filters (require_pro_seller, min_seller_feedback)
       // can be turned on, or tightened, after an item was already
@@ -82,9 +87,13 @@ export async function recheckSite(
         const newStatus = profile.listing.stock_status;
 
         if (isNewSale(item.stock_status, newStatus)) {
+          // The full profile - not just title/price/currency - so the Sales
+          // page can show every feature we knew about the item (team,
+          // season, condition, images, ...) exactly as it was at the moment
+          // it sold, the same way the Items list shows it for an active one.
           await pool.query(
-            `INSERT INTO sales (url_id, site_id, title, price, currency) VALUES ($1, $2, $3, $4, $5)`,
-            [urlId, site.id, result.metadata.title, profile.listing.price, profile.listing.currency],
+            `INSERT INTO sales (url_id, site_id, title, price, currency, profile) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [urlId, site.id, result.metadata.title, profile.listing.price, profile.listing.currency, JSON.stringify(profile)],
           );
           progress.sales += 1;
         }
