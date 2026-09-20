@@ -61,6 +61,8 @@ export interface KickioProfile {
   category: string;
   identity: {
     team: string | null;
+    /** The Kickio `teams` row `team` matched against, when a live list was available - see kickioTeams.ts. */
+    team_kickio_match: string | null;
     season: string | null;
     extra_seasons: string[];
     shirt_type: string | null;

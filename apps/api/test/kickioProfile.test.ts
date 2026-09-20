@@ -12,6 +12,7 @@ import {
   extractSizeFromVariant,
   gradeConditionText,
   guessTeamFromTitle,
+  matchKickioTeam,
   normalizePlayerName,
   retailerHostname,
   RETAILER_CONDITION_OVERRIDES,
@@ -422,6 +423,51 @@ describe('guessTeamFromTitle', () => {
   });
 });
 
+describe('matchKickioTeam', () => {
+  const teams = [
+    { name: 'Arsenal', slug: 'arsenal' },
+    { name: 'Real Madrid', slug: 'real-madrid' },
+    { name: 'Saint-Étienne', slug: 'saint-etienne' },
+    { name: 'Manchester United', slug: 'manchester-united' },
+  ];
+
+  it('matches exactly, case-insensitively', () => {
+    expect(matchKickioTeam('arsenal', teams)).toEqual({ name: 'Arsenal', slug: 'arsenal', matchType: 'exact' });
+  });
+
+  it('matches after normalizing accents/punctuation when there is no exact match', () => {
+    // "Saint Etienne" (no accent, no hyphen) doesn't exactly equal Kickio's
+    // "Saint-Étienne", but normalizes to the same thing.
+    expect(matchKickioTeam('Saint Etienne', teams)).toEqual({
+      name: 'Saint-Étienne',
+      slug: 'saint-etienne',
+      matchType: 'normalized',
+    });
+  });
+
+  it('matches after stripping a club-designator word', () => {
+    expect(matchKickioTeam('Real Madrid CF', teams)).toEqual({
+      name: 'Real Madrid',
+      slug: 'real-madrid',
+      matchType: 'normalized',
+    });
+  });
+
+  it('returns null for a genuinely unmatched guess, rather than guessing at the closest one', () => {
+    // Deliberately no fuzzy/trigram fallback here - "Man Utd" is a real
+    // alias Kickio's own team_aliases table would resolve, but this
+    // function can't see that table (authenticated-only), so it's left
+    // unmatched rather than guessed at.
+    expect(matchKickioTeam('Man Utd', teams)).toBeNull();
+    expect(matchKickioTeam('Totally Unknown FC', teams)).toBeNull();
+  });
+
+  it('returns null for a blank guess', () => {
+    expect(matchKickioTeam('', teams)).toBeNull();
+    expect(matchKickioTeam('   ', teams)).toBeNull();
+  });
+});
+
 describe('extractPlayerNumber', () => {
   it('reads a "#10"-style number', () => {
     expect(extractPlayerNumber('Man Utd Away Shirt Rooney #10')).toBe('10');
@@ -799,6 +845,39 @@ describe('buildKickioProfile', () => {
     expect(profile.confidence.team).toBe('certain');
     expect(profile.confidence.season).toBe('certain');
     expect(profile.needs_review).toBe(false);
+  });
+
+  it('sets team_kickio_match when a live Kickio team list is supplied and the resolved team matches', () => {
+    const kickioTeams = [{ name: 'Manchester United', slug: 'manchester-united' }];
+
+    const matched = buildKickioProfile({
+      url: 'https://www.ebay.co.uk/itm/1',
+      title: 'Manchester United 2012-13 Away Shirt',
+      extracted: { team: 'Manchester United' },
+      kickioTeams,
+    });
+    expect(matched.identity.team).toBe('Manchester United');
+    expect(matched.identity.team_kickio_match).toBe('Manchester United');
+
+    const unmatched = buildKickioProfile({
+      url: 'https://www.ebay.co.uk/itm/2',
+      title: 'Some Obscure Non-League Club 2012-13 Away Shirt',
+      extracted: { team: 'Some Obscure Non-League Club' },
+      kickioTeams,
+    });
+    expect(unmatched.identity.team_kickio_match).toBeNull();
+  });
+
+  it('leaves team_kickio_match null when no Kickio team list was supplied at all', () => {
+    // Same as before this feature existed - a deployment without
+    // KICKIO_SUPABASE_URL configured shouldn't flag every item as
+    // unmatched just because matching was never attempted.
+    const profile = buildKickioProfile({
+      url: 'https://www.ebay.co.uk/itm/1',
+      title: 'Manchester United 2012-13 Away Shirt',
+      extracted: { team: 'Manchester United' },
+    });
+    expect(profile.identity.team_kickio_match).toBeNull();
   });
 
   it('reads a player name and number from a Vinted-style title - all-caps back print, no "#"', () => {

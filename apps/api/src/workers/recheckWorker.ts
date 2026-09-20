@@ -6,7 +6,8 @@ import { markUrlFetched } from '../lib/urlStore.js';
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { createJob, failJob } from '../lib/jobRecords.js';
 import { getCurrencyRates } from '../lib/currencyRates.js';
-import { buildKickioProfile } from '../services/kickioProfile.js';
+import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
+import { buildKickioProfile, type KickioTeamRef } from '../services/kickioProfile.js';
 import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 import { PAGE_TIMEOUT_MS, passesSellerFilter, resolveUseBrowser } from './crawlWorker.js';
@@ -35,6 +36,7 @@ export async function recheckSite(
   jobId: string,
   currencyRates: Record<string, number>,
   progress: { checked: number; total: number; sales: number; errors: string[] },
+  kickioTeams: readonly KickioTeamRef[] | null = null,
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
     `SELECT id, url, path, stock_status FROM urls WHERE site_id = $1 AND status = 'fetched'`,
@@ -83,6 +85,7 @@ export async function recheckSite(
           images: [result.metadata.image],
           extracted: result.extracted,
           currencyRates,
+          kickioTeams,
         });
         const newStatus = profile.listing.stock_status;
 
@@ -116,9 +119,10 @@ async function processRecheck(): Promise<void> {
   try {
     const { rows: sites } = await pool.query<SiteConfig>('SELECT * FROM sites WHERE is_active = true');
     const currencyRates = await getCurrencyRates();
+    const kickioTeams = await getKickioTeamsForMatching();
 
     for (const site of sites) {
-      await recheckSite(site, jobId, currencyRates, progress);
+      await recheckSite(site, jobId, currencyRates, progress, kickioTeams);
     }
 
     await pool.query(

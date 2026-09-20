@@ -5,6 +5,7 @@ import { crawlQueue } from '../../queue.js';
 import { createJob } from '../../lib/jobRecords.js';
 import { buildKickioProfile } from '../../services/kickioProfile.js';
 import { getCurrencyRates } from '../../lib/currencyRates.js';
+import { getKickioTeamsForMatching } from '../../lib/kickioTeams.js';
 
 export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
@@ -85,6 +86,7 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
     // so an admin can see how it would map without Kickcrawl ever writing
     // to Kickio's own database.
     const currencyRates = await getCurrencyRates();
+    const kickioTeams = await getKickioTeamsForMatching();
     const pagesWithProfile = pages.map((p) => ({
       ...p,
       profile: buildKickioProfile({
@@ -97,6 +99,7 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
         extracted: p.extracted,
         scrapedAt: p.fetched_at,
         currencyRates,
+        kickioTeams,
       }),
     }));
 
