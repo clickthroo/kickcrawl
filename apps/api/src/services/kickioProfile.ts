@@ -804,19 +804,58 @@ export function sanitizeShirtNumber(raw: string | null | undefined): string | nu
 // Size (Part 2 "Size")
 // =========================================================================
 
+// Canonical adult range confirmed directly by Kickio: XS-6XL, using "3XL"
+// (not "XXXL") for the triple-large step - kickio-shirt-mapping-guide.md's
+// own "Recognised source notations" table disagreed with its own "Allowed
+// values" list on this exact point, so this was corrected against Kickio's
+// direct answer rather than either half of that contradiction.
 const SIZE_MAP: Record<string, string> = {
-  xxs: 'XXS', xs: 'XS', s: 'S', small: 'S', m: 'M', med: 'M', medium: 'M', l: 'L', large: 'L',
+  xs: 'XS', s: 'S', small: 'S', m: 'M', med: 'M', medium: 'M', l: 'L', large: 'L',
   xl: 'XL', xlarge: 'XL', 'x-large': 'XL', 'extra large': 'XL', extralarge: 'XL',
   xxl: 'XXL', '2xl': 'XXL', 'xx-large': 'XXL', xxlarge: 'XXL',
-  xxxl: 'XXXL', '3xl': 'XXXL', 'xxx-large': 'XXXL', xxxlarge: 'XXXL',
-  '4xl': '4XL', xxxxl: '4XL',
+  '3xl': '3XL', xxxl: '3XL', 'xxx-large': '3XL', xxxlarge: '3XL',
+  '4xl': '4XL', xxxxl: '4XL', 'xxxx-large': '4XL',
+  '5xl': '5XL', xxxxxl: '5XL', 'xxxxx-large': '5XL',
+  '6xl': '6XL', xxxxxxl: '6XL', 'xxxxxx-large': '6XL',
+};
+
+// Kickio has no "XXS" adult size at all (XS is the smallest) - confirmed
+// directly by Kickio: a listing using "XXS" as if it were an adult size is
+// really describing a garment cut for a 9-10 year old, not a genuinely
+// smaller adult fit, so it maps onto that age band instead of a
+// nonexistent adult "XXS" value.
+const ADULT_XXS_AGE_BAND = '9-10 Years';
+
+// Kickio's youth sizing is age-band only, not letter sizes - confirmed
+// directly by Kickio ("we only work in years (age)"). Maps this
+// retailer's own youth letter sizes onto the canonical 2-year bands
+// Kickio's list actually runs (`15-16 Years` down to `3-4 Years`),
+// following the standard age-band convention used across football-shirt
+// junior kit sizing generally (Nike/adidas/Puma junior charts all follow
+// this same XS-through-XXL progression). A youth code above XXL/2XL (this
+// retailer occasionally writes "Youth 3XL") has no defined band above
+// 15-16 Years to map onto, so it's deliberately left unresolved here
+// rather than inventing one.
+const YOUTH_AGE_MAP: Record<string, string> = {
+  xxs: '3-4 Years',
+  xs: '5-6 Years',
+  s: '7-8 Years', small: '7-8 Years',
+  m: '9-10 Years', med: '9-10 Years', medium: '9-10 Years',
+  l: '11-12 Years', large: '11-12 Years',
+  xl: '13-14 Years', xlarge: '13-14 Years', 'x-large': '13-14 Years',
+  xxl: '15-16 Years', '2xl': '15-16 Years',
 };
 
 export function extractSizeFromTitle(text: string | null | undefined): string | null {
   if (!text) return null;
   const norm = (raw: string): string | null => {
+    if (/^xxs$/i.test(raw)) return ADULT_XXS_AGE_BAND;
     const k = raw.toLowerCase().replace(/\s+/g, '');
     return SIZE_MAP[k] ?? SIZE_MAP[raw.toLowerCase()] ?? null;
+  };
+  const normYouth = (raw: string): string | null => {
+    const k = raw.toLowerCase().replace(/\s+/g, '');
+    return YOUTH_AGE_MAP[k] ?? YOUTH_AGE_MAP[raw.toLowerCase()] ?? null;
   };
 
   const labelled = text.match(/\b(?:size|sz)\s*[:-]?\s*([A-Za-z0-9-]{1,6})\b/i);
@@ -825,18 +864,20 @@ export function extractSizeFromTitle(text: string | null | undefined): string | 
     if (s) return s;
   }
   const youth = text.match(
-    /\b(youth|boys?|girls?|junior|kids?|child(?:ren)?s?)\s+(xxs|xs|s|small|m|med|medium|l|large|xl|xlarge|x-large|xxl|2xl|xxxl|3xl)\b/i,
+    /\b(youth|boys?|girls?|junior|kids?|child(?:ren)?s?)\s+(xxs|xs|s|small|m|med|medium|l|large|xl|xlarge|x-large|xxl|2xl)\b/i,
   );
   if (youth) {
-    const s = norm(youth[2]);
-    if (s) return `Youth ${s}`;
+    const s = normYouth(youth[2]);
+    if (s) return s;
   }
   const paren = text.match(/[([]\s*(xxs|xs|s|m|l|xl|xxl|xxxl|2xl|3xl|small|medium|large|xlarge|x-large)\s*[)\]]/i);
   if (paren) {
     const s = norm(paren[1]);
     if (s) return s;
   }
-  const explicit = text.match(/\b(x-?large|xx-?large|xxx-?large|xlarge|xxlarge|xxxlarge|2xl|3xl|4xl)\b/i);
+  const explicit = text.match(
+    /\b(x-?large|xx-?large|xxx-?large|xxxx-?large|xlarge|xxlarge|xxxlarge|2xl|3xl|4xl|5xl|6xl)\b/i,
+  );
   if (explicit) {
     const s = norm(explicit[1]);
     if (s) return s;
@@ -847,7 +888,7 @@ export function extractSizeFromTitle(text: string | null | undefined): string | 
     if (s) return s;
   }
   const bare = text.match(/(?:^|\s)(XXS|XS|XL|XXL|XXXL)(?:\s|$|[,./])/);
-  if (bare) return bare[1].toUpperCase();
+  if (bare) return norm(bare[1]);
   return null;
 }
 
@@ -857,6 +898,7 @@ export function extractSizeFromVariant(variantTitle: string | null | undefined):
   const parts = variantTitle.split(/\s*\/\s*/);
   for (const part of parts) {
     const k = part.trim().toLowerCase();
+    if (k === 'xxs') return ADULT_XXS_AGE_BAND;
     if (SIZE_MAP[k]) return SIZE_MAP[k];
   }
   return parts[0]?.trim() || null;

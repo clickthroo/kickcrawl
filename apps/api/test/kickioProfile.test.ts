@@ -9,6 +9,7 @@ import {
   extractSeason,
   extractSeasonSpan,
   extractSizeFromTitle,
+  extractSizeFromVariant,
   gradeConditionText,
   guessTeamFromTitle,
   normalizePlayerName,
@@ -499,7 +500,52 @@ describe('extractSizeFromTitle', () => {
     expect(extractSizeFromTitle('Size L')).toBe('L');
     expect(extractSizeFromTitle('(XL)')).toBe('XL');
     expect(extractSizeFromTitle('Large')).toBe('L');
-    expect(extractSizeFromTitle('Youth L')).toBe('Youth L');
+  });
+
+  it('maps a youth/kids size to Kickio\'s age-band format, not a letter size', () => {
+    // Confirmed directly by Kickio: youth sizing is age-band only ("we
+    // only work in years (age)") - this used to return "Youth L" etc,
+    // a format Kickio's size field doesn't actually accept at all.
+    expect(extractSizeFromTitle('Youth L')).toBe('11-12 Years');
+    expect(extractSizeFromTitle('Boys Medium')).toBe('9-10 Years');
+    expect(extractSizeFromTitle('Junior XL')).toBe('13-14 Years');
+    expect(extractSizeFromTitle('Kids S')).toBe('7-8 Years');
+    expect(extractSizeFromTitle('Youth XS')).toBe('5-6 Years');
+    expect(extractSizeFromTitle('Youth XXL')).toBe('15-16 Years');
+  });
+
+  it('uses "3XL" for the triple-large adult size, not "XXXL"', () => {
+    // Confirmed directly by Kickio: the canonical allowed-values list
+    // (6XL, 5XL, 4XL, 3XL, XXL, XL, L, M, S, XS) is the correct one - the
+    // guide's own "Recognised source notations" table disagreed with its
+    // own allowed-values list on this exact point before this was checked.
+    expect(extractSizeFromTitle('Size XXXL')).toBe('3XL');
+    expect(extractSizeFromTitle('Size 3XL')).toBe('3XL');
+    expect(extractSizeFromTitle('(XXXL)')).toBe('3XL');
+    expect(extractSizeFromTitle('XXXL')).toBe('3XL');
+  });
+
+  it('extends adult sizing up to 6XL', () => {
+    expect(extractSizeFromTitle('Size 4XL')).toBe('4XL');
+    expect(extractSizeFromTitle('Size 5XL')).toBe('5XL');
+    expect(extractSizeFromTitle('Size 6XL')).toBe('6XL');
+  });
+
+  it('maps a bare "XXS" to the 9-10 Years age band - Kickio has no adult XXS at all', () => {
+    // Confirmed directly by Kickio: "if its an adult XXS it's 9-10 yrs
+    // (kids)" - a listing using "XXS" as if it were an adult size is
+    // really describing a 9-10 year old's fit, not a smaller adult cut.
+    expect(extractSizeFromTitle('Size XXS')).toBe('9-10 Years');
+    expect(extractSizeFromTitle('(XXS)')).toBe('9-10 Years');
+    expect(extractSizeFromTitle('XXS')).toBe('9-10 Years');
+  });
+});
+
+describe('extractSizeFromVariant', () => {
+  it('normalises a Shopify-style variant segment the same way as the title parser', () => {
+    expect(extractSizeFromVariant('L / Red')).toBe('L');
+    expect(extractSizeFromVariant('XXXL / Blue')).toBe('3XL');
+    expect(extractSizeFromVariant('XXS / Red')).toBe('9-10 Years');
   });
 });
 
