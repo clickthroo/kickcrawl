@@ -424,6 +424,30 @@ export function guessTeamFromTitle(title: string): string {
   const trailingNumberIsStockCode =
     !!kitWordMatch && !!trailingBareCodeMatch && kitWordMatch.index! < trailingBareCodeMatch.index!;
 
+  // A trailing "<one capitalized word> <1-2 digit number>" at the very end,
+  // with a kit-type word earlier in the title separating it from the team
+  // name, is the seller's own unmarked back-print name + shirt number
+  // ("Ibrahimović 9") - the same bare shape extractPlayerNumber/
+  // extractPlayerNameFromTitle already recognise elsewhere in this file for
+  // the player_name/number fields, just without requiring a "#" marker in
+  // front of it. Confirmed on a real listing surviving as "Manchester
+  // United Ibrahimović" once only the trailing "9" (read, correctly, as
+  // this retailer's own stock code per trailingNumberIsStockCode above) had
+  // been stripped, leaving the player's name still attached to the team
+  // guess. Deliberately limited to exactly one preceding word - unlike the
+  // "#"-marked strip below, which allows up to 3 - so this can never reach
+  // back across a quoted aside ("'Antonio Puerta Trophy' Home Shirt 83")
+  // and eat into it; gated on kitWordMatch the same way
+  // trailingNumberIsStockCode is, so a genuine club number with no kit word
+  // anywhere in the title ("Arsenal 96" on its own) is never mistaken for
+  // this. Uses \p{L} rather than the narrower À-ÿ (Latin-1 Supplement)
+  // range so it also matches Eastern/Central European surnames like
+  // "Ibrahimović" ("ć" falls outside À-ÿ) - needs the "u" flag for \p{L}
+  // to be recognised.
+  const trailingNameNumberMatch = rawNoAsterisks.match(/\b(\p{Lu}[\p{L}'’.-]*)\s+\d{1,2}$/u);
+  const trailingNameNumberIsPlayerTag =
+    !!kitWordMatch && !!trailingNameNumberMatch && kitWordMatch.index! < trailingNameNumberMatch.index!;
+
   let c = withoutSubtitle
     .replace(/\*+/g, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
@@ -434,9 +458,19 @@ export function guessTeamFromTitle(title: string): string {
     // previously unbounded, and every kit-type word ahead of it ("Wolves
     // Castore Third Shirt Neto") is ALSO capitalized in a title-case
     // listing, with nothing to stop the greedy match from eating all the
-    // way back through the team name too, wiping out the whole guess.
-    .replace(/\b(?:[A-ZÀ-Ý][a-zà-ÿ']+\s+){0,2}[A-ZÀ-Ý][a-zà-ÿ']+\s*#\d+/g, '')
-    .replace(/#\d+/g, '')
+    // way back through the team name too, wiping out the whole guess. Uses
+    // \p{Lu}/\p{Ll} rather than the narrower À-ÿ (Latin-1 Supplement)
+    // range so it also matches Eastern/Central European surnames like
+    // "Ibrahimović" ("ć" falls outside À-ÿ) - confirmed on a real listing
+    // that was surviving as "Manchester United Ibrahimović" with only the
+    // trailing "#9" stripped, because this regex previously failed to
+    // match the name at all and left it untouched.
+    .replace(/\b(?:\p{Lu}[\p{Ll}']+\s+){0,2}\p{Lu}[\p{Ll}']+\s*#\d+/gu, '')
+    .replace(/#\d+/g, '');
+  if (trailingNameNumberIsPlayerTag) {
+    c = c.replace(/\s+\p{Lu}[\p{L}'’.-]*\s+\d{1,2}$/u, '').trim();
+  }
+  c = c
     .replace(/\d{4}[-/]\d{2,4}/g, '')
     .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}(?![\d/-])/g, '')
     .replace(/\b\d{4}\b/g, '')
@@ -628,12 +662,16 @@ export function guessTeamFromTitle(title: string): string {
 // Player name + number (Part 2 "Player name" / "Shirt number")
 // =========================================================================
 
-// One name-shaped word - letters (incl. accented), plus an apostrophe or
-// hyphen that can appear inside a real surname ("O'Grady", "N'Golo",
+// One name-shaped word - any Unicode letter (not just the Latin-1
+// Supplement block, À-ÿ - that range misses Eastern/Central European
+// letters like "ć"/"č"/"š"/"ž" that show up in real surnames, e.g.
+// "Ibrahimović"; \p{L} covers those too), plus an apostrophe or hyphen
+// that can appear inside a real surname ("O'Grady", "N'Golo",
 // "Alaba-Adeyemi"). Never starts with a digit, so a number can't itself
-// be mistaken for "part of a name".
-const NAME_WORD = "[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.-]*";
-const NAME_WORDS_TAIL = new RegExp(`(?:${NAME_WORD}\\s+){0,2}${NAME_WORD}$`);
+// be mistaken for "part of a name". Every RegExp built from this needs the
+// "u" flag for \p{L} to be recognised.
+const NAME_WORD = "[\\p{L}][\\p{L}'’.-]*";
+const NAME_WORDS_TAIL = new RegExp(`(?:${NAME_WORD}\\s+){0,2}${NAME_WORD}$`, 'u');
 
 // A single-word (possibly accented, hyphenated, or apostrophised) surname
 // immediately followed by a shirt number at the very end of the text, with
@@ -644,7 +682,7 @@ const NAME_WORDS_TAIL = new RegExp(`(?:${NAME_WORD}\\s+){0,2}${NAME_WORD}$`);
 // in a title is genuinely ambiguous with a season, size or price, so this
 // stays conservative rather than risk absorbing unrelated preceding words
 // (a team abbreviation, a kit-type word) into a false "name".
-const TRAILING_NAME_NUMBER = new RegExp(`(${NAME_WORD})\\s+#?(\\d{1,2})$`);
+const TRAILING_NAME_NUMBER = new RegExp(`(${NAME_WORD})\\s+#?(\\d{1,2})$`, 'u');
 
 function stripTrailingSizeCode(text: string): string {
   return text.replace(/\s*\([A-Z0-9]{1,4}\)\s*$/i, '').trimEnd();

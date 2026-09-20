@@ -385,6 +385,41 @@ describe('guessTeamFromTitle', () => {
     // way the bare-number guard above does.
     expect(guessTeamFromTitle('Arsenal HJ')).toBe('Arsenal HJ');
   });
+
+  it('strips a trailing "<player name> #<number>" back-print when the name has a letter outside the old À-ÿ range', () => {
+    // Confirmed on a real listing surviving as "Manchester United
+    // Ibrahimović" - the "#"-marked strip previously only matched
+    // A-Za-zÀ-ÿ, which excludes Eastern/Central European letters like "ć"
+    // (Latin Extended-A, not Latin-1 Supplement), so it silently failed to
+    // match the whole name and left it attached to the team guess.
+    expect(guessTeamFromTitle('2016-17 Manchester United adidas Away Shirt Ibrahimović #9')).toBe(
+      'Manchester United',
+    );
+  });
+
+  it('strips an unmarked trailing "<player name> <number>" back-print, not just the "#"-marked form', () => {
+    // Same underlying name, without a "#" marker this time - covers the
+    // bare back-print shape too, not just the letter-range fix above.
+    expect(guessTeamFromTitle('2016-17 Manchester United adidas Away Shirt Ibrahimović 9')).toBe(
+      'Manchester United',
+    );
+  });
+
+  it('does not let the unmarked player-tag strip reach across a quoted aside', () => {
+    // "Trophy'" is capitalized and directly adjacent to "Home", so a
+    // multi-word version of the new strip could walk backwards into the
+    // quoted special-edition name and delete its closing quote, breaking
+    // the later quoted-aside strip. Limited to exactly one preceding word
+    // so it can't.
+    expect(guessTeamFromTitle("2019 Sevilla Nike 'Antonio Puerta Trophy' Home Shirt 83")).toBe('Sevilla');
+  });
+
+  it('leaves an unmarked trailing "<word> <number>" alone when there is no kit-type word anywhere to prove it is a player tag', () => {
+    // Same guard as the stock-code and letter-code cases above - without a
+    // kit word anywhere in the title, this is genuinely ambiguous with a
+    // real club number (Hannover 96), so it's left alone.
+    expect(guessTeamFromTitle('Arsenal 96')).toBe('Arsenal 96');
+  });
 });
 
 describe('extractPlayerNumber', () => {
