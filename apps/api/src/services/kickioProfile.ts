@@ -447,7 +447,11 @@ export function guessTeamFromTitle(title: string): string {
     // detectColours matches against elsewhere in this file) rather than a
     // separate list that could drift out of sync with it.
     .replace(new RegExp(`\\b(${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`, 'gi'), '')
-    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    // "LS" (no slash) is the same long-sleeve marker as "L/S" below, just
+    // this retailer's own shorthand for it on some listings - confirmed on
+    // a real long-sleeved listing surviving as "Manchester United x
+    // George Best LS".
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
     // "*w/tags*"/"w/o tags" is a condition note (this retailer's own
     // shorthand for BNWT/BNWOT), not part of the team - confirmed on real
@@ -462,6 +466,14 @@ export function guessTeamFromTitle(title: string): string {
     // "Liverpool Originals LFSTLR". The manufacturer word itself ("adidas")
     // is already stripped separately below via the MANUFACTURERS loop.
     .replace(/\bOriginals\b/gi, '')
+    // A manufacturer/retailer collab line ("... x George Best ...") names
+    // a tribute or collaboration, not the team - confirmed on a real
+    // listing surviving as "Manchester United x George Best LS".
+    // Anchored to a standalone "x" token (never matches the "X" fused
+    // inside a size like "2XL", since there's no word boundary there)
+    // followed by 1-3 genuinely capitalized words, so it can't mistake
+    // ordinary lowercase text for a collab name.
+    .replace(/\b[xX]\b\s+(?:[A-ZÀ-Ý][a-zà-ÿ'’-]*\s*){1,3}/g, '')
     .replace(/\b\d+\s*(?:st|nd|rd|th)\b/gi, '')
     .replace(/\b\d+\s*Years?\b/gi, '')
     .replace(/\b\d{1,2}\s*\/\s*10\b/g, '')
@@ -514,6 +526,17 @@ export function guessTeamFromTitle(title: string): string {
   // descriptor ever fuses letters straight onto digits like this - a real
   // club number (Hannover 96, Bayer 04) always has a space before it.
   c = c.replace(/\s+[A-Za-z]{1,3}\d{3,6}$/, '').trim();
+  // A trailing alphanumeric code in any other shape - letters and digits
+  // mixed together in either order, sometimes with a trailing letter too
+  // ("PLY25001R", "NOR25501R"), or a longer hash-like fragment
+  // ("HM0H6CA2690QUE") - is still this retailer's own SKU/internal id,
+  // not part of the team, even though it doesn't fit the narrower
+  // "letters then digits" shape the strip above targets. Requires BOTH a
+  // letter and a digit somewhere in the token (a genuine club number or
+  // season is always purely numeric, e.g. "Hannover 96") and a minimum
+  // length of 5, long enough that it can't coincide with any real
+  // shirt-related shorthand.
+  c = c.replace(/\s+(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{5,}$/, '').trim();
   // A trailing bare, all-caps alphabetic token (4+ letters, no digits) is
   // this retailer's own style/SKU code once everything recognizable
   // around it has already been stripped - confirmed on a real listing
