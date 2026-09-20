@@ -27,5 +27,14 @@ export const config = {
   adminPasswordHash: process.env.ADMIN_PASSWORD_HASH ?? '',
   sessionSecret: env('SESSION_SECRET', 'dev-only-insecure-secret-change-me'),
   webhookUrl: process.env.WEBHOOK_URL ?? '',
+  // Kickio's own Supabase project - read-only, for the "Kickio Teams"
+  // admin page (Part 2 "Team" verification against Kickio's real canonical
+  // list). Uses Kickio's public anon/publishable key against its `teams`
+  // table, which has an unauthenticated-read RLS policy - safe to hold as
+  // plain config, not a secret. Left blank disables that admin page rather
+  // than failing startup, since it's a read-only convenience, not a
+  // dependency the rest of the app needs.
+  kickioSupabaseUrl: process.env.KICKIO_SUPABASE_URL ?? '',
+  kickioSupabaseAnonKey: process.env.KICKIO_SUPABASE_ANON_KEY ?? '',
   nodeEnv: process.env.NODE_ENV ?? 'development',
 };

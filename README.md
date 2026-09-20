@@ -84,6 +84,7 @@ See `.env.example` for the full list. The essentials:
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | Fallback LLM extraction when a site has no working selectors |
 | `PROXY_URL` | Upstream proxy used when a site has "use proxy" enabled |
 | `WEBHOOK_URL` | Optional POST notification when a crawl job completes |
+| `KICKIO_SUPABASE_URL` / `KICKIO_SUPABASE_ANON_KEY` | Kickio's own Supabase project (read-only) — powers the **Kickio Teams** admin page; blank disables that page |
 
 ## API reference
 

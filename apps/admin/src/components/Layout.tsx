@@ -68,6 +68,17 @@ function IconJobs(props: IconProps) {
   );
 }
 
+function IconTeams(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.5 19.5c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5" />
+      <circle cx="17" cy="8.5" r="2.3" />
+      <path d="M14.8 14.3c2.6.3 4.7 2.5 4.7 5.2" />
+    </IconBase>
+  );
+}
+
 function IconKey(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -113,6 +124,7 @@ const NAV_ITEMS = [
   { to: '/items', label: 'Items', tabLabel: 'Items', icon: IconItems, end: false },
   { to: '/sales', label: 'Sales', tabLabel: 'Sales', icon: IconSales, end: false },
   { to: '/jobs', label: 'Jobs', tabLabel: 'Jobs', icon: IconJobs, end: false },
+  { to: '/kickio-teams', label: 'Kickio Teams', tabLabel: 'Teams', icon: IconTeams, end: false },
   { to: '/api-keys', label: 'API Keys', tabLabel: 'Keys', icon: IconKey, end: false },
   { to: '/settings', label: 'Settings', tabLabel: 'Settings', icon: IconSettings, end: false },
 ];

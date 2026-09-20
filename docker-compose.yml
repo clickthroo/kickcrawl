@@ -50,6 +50,8 @@ services:
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret-change-me}
       WEBHOOK_URL: ${WEBHOOK_URL:-}
+      KICKIO_SUPABASE_URL: ${KICKIO_SUPABASE_URL:-}
+      KICKIO_SUPABASE_ANON_KEY: ${KICKIO_SUPABASE_ANON_KEY:-}
 
 volumes:
   kickcrawl_pgdata:
