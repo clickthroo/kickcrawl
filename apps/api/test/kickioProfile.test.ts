@@ -207,6 +207,45 @@ describe('guessTeamFromTitle', () => {
     // is never mistaken for one.
     expect(guessTeamFromTitle('Hannover 96 Away Shirt 2019-20')).toBe('Hannover 96');
   });
+
+  it('strips a trailing stock code that comes BEFORE the size word instead of after', () => {
+    // Real title from a live listing: "Team: Manchester City 77" - every
+    // other stock-code strip above assumes the retailer's own code comes
+    // AFTER the size ("... Shirt XL 47"), but this listing had it the
+    // other way around ("... Shirt *w/tags* 77 XL"). The unconditional,
+    // un-anchored abbreviated-size-word strip elsewhere in this function
+    // cleanly removed the trailing "XL" on its own, but that left the "77"
+    // in front of it orphaned with no size word left to anchor a strip on.
+    expect(guessTeamFromTitle('2024-25 Manchester City Puma Authentic GK Home Shirt *w/tags* 77 XL')).toBe(
+      'Manchester City',
+    );
+  });
+
+  it('does not mistake a real word immediately before a trailing size letter for a stock code', () => {
+    // Guards the new code-before-size strip against being too broad: it
+    // only matches when that word contains a digit, since - unlike the
+    // size-then-code direction, which is anchored by the code sitting
+    // safely AFTER a known size-word boundary - a plain word here could
+    // just as easily be genuinely part of the team name itself.
+    expect(guessTeamFromTitle('2012-13 Celtic Home Shirt M')).toBe('Celtic');
+  });
+
+  it("strips a manufacturer's own product-line name and an all-caps trailing SKU rather than leaking either into the team", () => {
+    // Real title from a live listing: "Team: Liverpool Originals LFSTLR" -
+    // "Originals" is adidas's own product-line name (as in "adidas
+    // Originals"), not part of the team, and "LFSTLR" is this retailer's
+    // own style/SKU code, in a shape (bare letters, no digits) neither of
+    // the other trailing-code strips above can match.
+    expect(guessTeamFromTitle('2025-26 Liverpool adidas Originals LFSTLR Home Shirt *w/tags*')).toBe('Liverpool');
+  });
+
+  it('leaves a short, real team abbreviation in all caps alone - only a 4+ letter trailing code is stripped', () => {
+    // Guards the new trailing all-caps code strip against being too
+    // broad: a genuine short team abbreviation (PSG, USA) is common
+    // enough as the entire team name on its own that it's deliberately
+    // left below the length threshold that the style/SKU code strip uses.
+    expect(guessTeamFromTitle('PSG Home Shirt')).toBe('PSG');
+  });
 });
 
 describe('extractPlayerNumber', () => {
