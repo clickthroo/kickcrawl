@@ -402,6 +402,25 @@ export function guessTeamFromTitle(title: string): string {
   const cutAt = candidates.length ? Math.min(...candidates) : -1;
   const withoutSubtitle = cutAt >= 0 ? title.slice(0, cutAt) : title;
 
+  // A short bare trailing number with no adjacent size word to anchor on
+  // (unlike the "XL 47"/"77 XL" pairs handled below) is still this
+  // retailer's own stock code on some listings - confirmed on real
+  // listings surviving as "Sevilla 83" and "Manchester City 78". The
+  // safe way to tell it apart from a genuine club number (Hannover 96,
+  // Bayer 04 Leverkusen) is word ORDER in the raw title: a real club
+  // number always sits immediately next to the team name, before any
+  // kit-type word ("Hannover 96 Home Shirt") - this retailer's stock
+  // code always comes after one, right at the very end ("... Home Shirt
+  // 83"). Computed here, against the raw title, before any stripping
+  // below could remove the evidence either way needs.
+  const rawNoAsterisks = withoutSubtitle.replace(/\*+/g, '');
+  const kitWordMatch = rawNoAsterisks.match(
+    /\b(?:Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Sweatshirts?|Hoodies?|Home|Away|Third|Fourth|Goalkeeper|GK|Training)\b/i,
+  );
+  const trailingBareNumberMatch = rawNoAsterisks.match(/\s(\d{1,4})\s*$/);
+  const trailingNumberIsStockCode =
+    !!kitWordMatch && !!trailingBareNumberMatch && kitWordMatch.index! < trailingBareNumberMatch.index!;
+
   let c = withoutSubtitle
     .replace(/\*+/g, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
@@ -430,11 +449,16 @@ export function guessTeamFromTitle(title: string): string {
     // this retailer's own shorthand for it on some listings - confirmed on
     // a real long-sleeved listing surviving as "Manchester United x
     // George Best LS".
-    // "Sweatshirt"/"Hoodie" and "1/4 Zip" cover this retailer's casualwear
-    // listings (training tops, half-zips), not just match shirts -
-    // confirmed on a real listing surviving as "Manchester United
-    // Essentials 1/4 Zip Sweatshirt".
-    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Sweatshirts?|Hoodies?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    // "Sweatshirt"/"Hoodie", "Tee" and "Jacket" cover this retailer's
+    // non-shirt listings (training tops, half-zips, casualwear, jackets),
+    // not just match shirts - confirmed on real listings surviving as
+    // "Manchester United Essentials 1/4 Zip Sweatshirt", "Arsenal Graphic
+    // Tee", and "Liverpool Presentation Jacket".
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Sweatshirts?|Hoodies?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    // "Graphic" and "Presentation" describe the garment style, not the
+    // team, on the same casualwear listings above - "Arsenal Graphic Tee"
+    // and "Liverpool Presentation Jacket" were otherwise surviving whole.
+    .replace(/\b(Graphic|Presentation)\b/gi, '')
     .replace(/\b1\/4\s*Zip\b/gi, '')
     .replace(/\bQuarter[- ]?Zip\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
@@ -447,12 +471,12 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
     .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
     // A manufacturer's own product-line name ("adidas Originals", "adidas
-    // Essentials") is not part of the team - confirmed on real listings
-    // surviving as "Liverpool Originals LFSTLR" and "Manchester United
-    // Essentials 1/4 Zip Sweatshirt". The manufacturer word itself
-    // ("adidas") is already stripped separately below via the
-    // MANUFACTURERS loop.
-    .replace(/\b(Originals|Essentials)\b/gi, '')
+    // Essentials", "Nike Energy") is not part of the team - confirmed on
+    // real listings surviving as "Liverpool Originals LFSTLR", "Manchester
+    // United Essentials 1/4 Zip Sweatshirt" and "Norway Energy". The
+    // manufacturer word itself ("adidas"/"Nike") is already stripped
+    // separately below via the MANUFACTURERS loop.
+    .replace(/\b(Originals|Essentials|Energy)\b/gi, '')
     // A manufacturer/retailer collab line ("... x George Best ...") names
     // a tribute or collaboration, not the team - confirmed on a real
     // listing surviving as "Manchester United x George Best LS".
@@ -533,6 +557,16 @@ export function guessTeamFromTitle(title: string): string {
   // (Hannover 96, Bayer 04 Leverkusen), which is always 4 digits or fewer
   // and deliberately left alone.
   c = c.replace(/\s+\d{5,}$/, '').trim();
+  // A short (1-4 digit) trailing number is ALSO this retailer's own stock
+  // code, not a club number, specifically when trailingNumberIsStockCode
+  // (computed above, against the raw title) says a kit-type word came
+  // before it - see that computation for the full reasoning. Deliberately
+  // separate from the 5+ digit strip above: unlike that one, a short bare
+  // number alone is genuinely ambiguous with a real club number, so this
+  // only fires with that extra, order-based evidence backing it up.
+  if (trailingNumberIsStockCode) {
+    c = c.replace(/\s+\d{1,4}$/, '').trim();
+  }
   // A trailing alphanumeric stock/reference code - a couple of letters
   // fused directly onto 3-6 digits with no space ("HA8318", "JZ4622") - is
   // this retailer's own SKU, not part of the team, even with no size word

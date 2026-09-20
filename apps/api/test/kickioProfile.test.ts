@@ -322,6 +322,41 @@ describe('guessTeamFromTitle', () => {
       'Manchester United',
     );
   });
+
+  it('strips more casualwear garment words and a manufacturer product line', () => {
+    // Real titles from live listings: "Team: Arsenal Graphic Tee" and
+    // "Team: Liverpool Presentation Jacket" - "Tee"/"Jacket" are more
+    // non-shirt garment types this retailer sells, and "Graphic"/
+    // "Presentation" describe the garment style, not the team.
+    expect(guessTeamFromTitle('2009-10 Arsenal Nike Graphic Tee XXL 355064-62')).toBe('Arsenal');
+    expect(guessTeamFromTitle('2025-26 Liverpool adidas Presentation Jacket *w/tags*')).toBe('Liverpool');
+    // Real title from a live listing: "Team: Norway Energy" - "Energy" is
+    // Nike's own product-line name, the same family as adidas's
+    // "Originals"/"Essentials" above.
+    expect(guessTeamFromTitle('2026 Norway Nike Energy Shirt *As New* L IH1869-001')).toBe('Norway');
+  });
+
+  it('strips a short bare trailing number when a kit-type word in the raw title proves it is a stock code, not a club number', () => {
+    // Real titles from live listings: "Team: Sevilla 83" and "Team:
+    // Manchester City 78" - unlike every other trailing-code case above,
+    // these have no adjacent size word at all to anchor a strip on, so a
+    // short bare number here is genuinely ambiguous with a real club
+    // number (Hannover 96) on shape alone. The distinguishing signal is
+    // word ORDER in the raw title: a real club number always sits
+    // immediately next to the team name, before any kit-type word: a
+    // trailing number that comes AFTER one is this retailer's own stock
+    // code instead.
+    expect(guessTeamFromTitle("2019 Sevilla Nike 'Antonio Puerta Trophy' Home Shirt 83")).toBe('Sevilla');
+    expect(guessTeamFromTitle('2025-26 Manchester City Puma Home Shirt L/S *w/tags* 78')).toBe('Manchester City');
+  });
+
+  it('leaves a bare trailing number alone when there is no kit-type word anywhere to prove it is a stock code', () => {
+    // Guards the new short-bare-number strip against being too broad: with
+    // no kit-type word in the title at all, there's no evidence either
+    // way, so it stays conservative and leaves the number untouched -
+    // exactly like a real club number would look on its own.
+    expect(guessTeamFromTitle('Arsenal 96')).toBe('Arsenal 96');
+  });
 });
 
 describe('extractPlayerNumber', () => {
