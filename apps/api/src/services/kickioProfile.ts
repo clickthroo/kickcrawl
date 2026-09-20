@@ -17,6 +17,13 @@ export type Confidence = 'certain' | 'inferred';
 
 export interface KickioIdentity {
   team: string | null;
+  /**
+   * The Kickio `teams` row `team` matched against (exact or normalized name
+   * match), when a live list was available - see KickioProfileInput.kickioTeams.
+   * Purely a corroboration signal for the admin UI; `team` above is always
+   * left as the raw scraped/guessed text, never overwritten by this.
+   */
+  team_kickio_match: string | null;
   season: string | null;
   extra_seasons: string[];
   shirt_type: string | null;
@@ -99,6 +106,14 @@ export interface KickioProfileInput {
    * guessing a rate would violate this file's "never invent a value" rule.
    */
   currencyRates?: Record<string, number> | null;
+  /**
+   * Kickio's live canonical team list (from KICKIO_SUPABASE_URL - see
+   * lib/kickioTeams.ts), for matchKickioTeam() to check the resolved team
+   * string against. Omitted/null when that isn't configured in this
+   * deployment - team_kickio_match is then always null too, same as before
+   * this existed.
+   */
+  kickioTeams?: readonly KickioTeamRef[] | null;
 }
 
 // =========================================================================
@@ -656,6 +671,74 @@ export function guessTeamFromTitle(title: string): string {
     return c.replace(/\b\w+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
   }
   return c;
+}
+
+// =========================================================================
+// Team matching against Kickio's own canonical team list
+// =========================================================================
+
+/** Just enough of Kickio's `teams` row to match and display - see lib/kickioTeams.ts on the caller side. */
+export interface KickioTeamRef {
+  name: string;
+  slug: string;
+}
+
+export type KickioTeamMatchType = 'exact' | 'normalized';
+
+export interface KickioTeamMatch {
+  name: string;
+  slug: string;
+  matchType: KickioTeamMatchType;
+}
+
+// Mirrors Kickio's own public.normalize_team_name() SQL function (strip
+// diacritics, punctuation, and common club-designator words, collapse
+// whitespace) closely enough for exact/normalized matching here.
+// Deliberately NOT a full port: Kickio's own version also feeds a trigram-
+// similarity fallback and an authenticated-only `team_aliases` table
+// (Wolves -> Wolverhampton Wanderers, PSG -> Paris Saint-Germain, ...) that
+// this file's caller - reading via Kickio's public anon/publishable key -
+// can't see. Left out entirely rather than guessed at: a hardcoded copy of
+// that alias table would silently drift out of sync with Kickio's real one,
+// and a bare trigram-similarity threshold picked without seeing real
+// mismatches risks false positives more than it resolves. Exact/normalized
+// matching alone still confirms the common case (most scraped titles
+// already spell a team close enough to its canonical Kickio name); anything
+// short of that is deliberately left unmatched (null) rather than guessed.
+const CLUB_DESIGNATOR_WORDS =
+  /\b(fc|cf|afc|sc|ac|cd|cp|fk|sk|bk|if|sv|tsv|vfl|vfb|club|football|soccer|de|do|the)\b/g;
+
+function normalizeKickioTeamName(s: string): string {
+  const noDiacritics = s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return noDiacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(CLUB_DESIGNATOR_WORDS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Matches a resolved team string (explicit field or guessTeamFromTitle's
+ * best-effort guess) against Kickio's live team list, when the caller has
+ * one available - see KickioProfileInput.kickioTeams. Returns null both
+ * when nothing matches AND when no list was supplied at all, so a
+ * deployment without KICKIO_SUPABASE_URL configured behaves exactly as
+ * before rather than flagging every single team as unmatched.
+ */
+export function matchKickioTeam(guess: string, teams: readonly KickioTeamRef[]): KickioTeamMatch | null {
+  const trimmed = guess.trim();
+  if (!trimmed) return null;
+
+  const exact = teams.find((t) => t.name.toLowerCase() === trimmed.toLowerCase());
+  if (exact) return { name: exact.name, slug: exact.slug, matchType: 'exact' };
+
+  const normalizedGuess = normalizeKickioTeamName(trimmed);
+  if (!normalizedGuess) return null;
+  const normalized = teams.find((t) => normalizeKickioTeamName(t.name) === normalizedGuess);
+  if (normalized) return { name: normalized.name, slug: normalized.slug, matchType: 'normalized' };
+
+  return null;
 }
 
 // =========================================================================
@@ -1331,6 +1414,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       reviewReasons.push('team could not be determined from the available text');
     }
   }
+  const kickioTeamMatch = team && input.kickioTeams ? matchKickioTeam(team, input.kickioTeams) : null;
 
   // ---- Season ----
   const explicitSeason = caseInsensitiveGet(extracted, 'season', 'seasonReleased', 'year');
@@ -1613,6 +1697,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     category,
     identity: {
       team,
+      team_kickio_match: kickioTeamMatch?.name ?? null,
       season,
       extra_seasons: extraSeasons,
       shirt_type: shirtType,

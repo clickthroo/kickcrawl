@@ -212,6 +212,14 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
       <div className="mt-2 space-y-2">
         <div className="flex flex-wrap gap-1.5">
           <ProfileField label="Team" value={identity.team} confident={confidence.team !== 'inferred'} />
+          {identity.team_kickio_match && (
+            <span
+              className="max-w-full rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700"
+              title={`Matches a team in Kickio's own live list: "${identity.team_kickio_match}"`}
+            >
+              ✓ Kickio: {identity.team_kickio_match}
+            </span>
+          )}
           <ProfileField
             label="Season"
             value={

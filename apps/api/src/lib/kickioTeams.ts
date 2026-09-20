@@ -83,6 +83,22 @@ export async function getKickioTeams(
   }
 }
 
+/**
+ * Best-effort variant for buildKickioProfile()'s optional team-matching
+ * input (KickioProfileInput.kickioTeams) - never throws. "Not configured in
+ * this deployment" and "a refresh failed with nothing cached to fall back
+ * to" both just mean matching is unavailable this time, not a reason to
+ * break the job/items/rescrape response that's asking for a profile.
+ */
+export async function getKickioTeamsForMatching(): Promise<KickioTeam[] | null> {
+  try {
+    const { teams } = await getKickioTeams();
+    return teams;
+  } catch {
+    return null;
+  }
+}
+
 /** Test-only - clears the module-level cache between test cases. */
 export function resetKickioTeamsCacheForTests(): void {
   cache = null;
