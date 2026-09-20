@@ -849,6 +849,30 @@ describe('buildKickioProfile', () => {
     expect(profile.category).toBe('Football Shirts');
   });
 
+  it('infers the Shorts category from the title too', () => {
+    // Confirmed the same gap existed for Shorts as for Jackets/Hoodies:
+    // "Arsenal Adidas Home Shorts" was defaulting to Football Shirts and
+    // also picking up shirt_type "Home" as if it were an actual shirt
+    // title, since nothing distinguished a shorts listing from a shirt
+    // one. shirt_type is deliberately left as detected here (unlike
+    // jackets) - home/away/third shorts are a real, distinct kit item,
+    // not a nonsensical field the way it is for a jacket.
+    const shorts = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/arsenal-home-shorts',
+      title: '2024-25 Arsenal Adidas Home Shorts',
+    });
+    expect(shorts.category).toBe('Shorts');
+
+    // Guards the new match against "Short-Sleeved"/"Short Sleeve" -
+    // singular "Short", not "Shorts" - being mistaken for a shorts
+    // listing.
+    const shortSleeved = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/arsenal-short-sleeved-shirt',
+      title: '2024-25 Arsenal Adidas Home Short-Sleeved Shirt',
+    });
+    expect(shortSleeved.category).toBe('Football Shirts');
+  });
+
   it('maps a shirt spanning two seasons (real example: "1998-00 Nigeria Home Shirt L")', () => {
     const profile = buildKickioProfile({
       url: 'https://www.vintagefootballshirts.com/products/1998-00-nigeria-home-shirt-l',
