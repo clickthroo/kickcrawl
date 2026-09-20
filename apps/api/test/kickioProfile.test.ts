@@ -522,11 +522,22 @@ describe('gradeConditionText', () => {
     expect(gradeConditionText('Arsenal Track Jacket Size XL Good')).toBe('Good');
   });
 
-  it('maps onto Kickio\'s 5-tier ladder only - no "Fair" tier', () => {
-    expect(gradeConditionText('Fair condition, some wear')).toBe('Needs Attention');
-    expect(gradeConditionText('Acceptable condition')).toBe('Needs Attention');
-    expect(gradeConditionText('Satisfactory')).toBe('Needs Attention');
-    expect(gradeConditionText('5/10 condition')).toBe('Needs Attention');
+  it("maps onto Kickio's full 6-tier ladder, including the Fair tier", () => {
+    // Confirmed against kickio-shirt-mapping-guide.md (Kickio's own
+    // canonical spec, Part 2): the ladder has six tiers, not five - "fair"/
+    // "acceptable"/Vinted's "Satisfactory"-equivalent labels/a 4-5/10
+    // rating all map to Fair, distinctly harsher than Good but distinctly
+    // better than Needs Attention (which is reserved for "well used",
+    // "worn", "poor condition", etc.). This function used to collapse all
+    // of these into Needs Attention, a harsher grade than any of them
+    // actually mean.
+    expect(gradeConditionText('Fair condition, some wear')).toBe('Fair');
+    expect(gradeConditionText('Acceptable condition')).toBe('Fair');
+    expect(gradeConditionText('Satisfactory')).toBe('Fair');
+    expect(gradeConditionText('5/10 condition')).toBe('Fair');
+    expect(gradeConditionText('4/10 condition')).toBe('Fair');
+    expect(gradeConditionText('3/10 condition')).toBe('Needs Attention');
+    expect(gradeConditionText('Well used, some fading')).toBe('Needs Attention');
   });
 
   it('lets a retailer-specific override outrank the generic ladder', () => {
