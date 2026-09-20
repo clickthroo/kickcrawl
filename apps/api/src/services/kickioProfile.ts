@@ -1229,6 +1229,25 @@ function resolveCategory(raw: string | null): string {
   return match ?? 'Football Shirts';
 }
 
+// A jacket/coat or hoodie/sweatshirt listing needs its own Kickio category,
+// not the "Football Shirts" default it would otherwise silently fall back
+// to - confirmed on real listings ("Wrexham Macron Anthem Heritage
+// Jacket", "Liverpool adidas Presentation Jacket", "Manchester United
+// adidas Essentials 1/4 Zip Sweatshirt") that this codebase's own
+// team-name parser already recognizes as non-shirt garment types (it
+// strips "Jacket"/"Sweatshirt" as noise words there), while category
+// resolution only ever looked at an explicit site-configured field and
+// otherwise always defaulted to Football Shirts regardless of what the
+// title actually said. Scoped to the title alone, like every other
+// keyword-matched field with a default (shirt_type, issue, etc. above) -
+// same reasoning: sitewide boilerplate elsewhere on the page shouldn't be
+// able to override a real per-listing signal.
+function detectCategoryFromTitle(title: string): string | null {
+  if (/\b(jackets?|coats?)\b/i.test(title)) return 'Jackets/Coats';
+  if (/\b(hoodies?|sweatshirts?|sweat\s*tops?)\b/i.test(title)) return 'Hoodies/Sweat Tops';
+  return null;
+}
+
 // =========================================================================
 // Main entry point
 // =========================================================================
@@ -1247,7 +1266,9 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   const confidence: Record<string, Confidence> = {};
   const reviewReasons: string[] = [];
 
-  const category = resolveCategory(caseInsensitiveGet(extracted, 'category', 'productType', 'productCategory'));
+  const category = resolveCategory(
+    caseInsensitiveGet(extracted, 'category', 'productType', 'productCategory') ?? detectCategoryFromTitle(title),
+  );
   const isJacket = category === 'Jackets/Coats';
 
   // ---- Team ----
