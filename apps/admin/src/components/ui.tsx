@@ -198,7 +198,7 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
   const { identity, listing, custom_attributes, confidence, needs_review, review_reason, category } = profile;
 
   return (
-    <details className="group rounded-md border border-slate-200 bg-slate-50/50 px-3 py-2">
+    <details open className="group rounded-md border border-slate-200 bg-slate-50/50 px-3 py-2">
       <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-medium text-slate-500">
         <span>
           Kickio profile <span className="font-normal text-slate-400">· {category}</span>
