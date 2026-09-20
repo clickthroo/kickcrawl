@@ -246,6 +246,39 @@ describe('guessTeamFromTitle', () => {
     // left below the length threshold that the style/SKU code strip uses.
     expect(guessTeamFromTitle('PSG Home Shirt')).toBe('PSG');
   });
+
+  it('strips a manufacturer collab line rather than leaking it into the team', () => {
+    // Real title from a live listing: "Team: Manchester United x George
+    // Best LS" - "x George Best" names a tribute/collaboration line, not
+    // the team, and "LS" is this retailer's own shorthand for long-sleeve
+    // (the same thing "L/S" already covers, just without the slash).
+    expect(guessTeamFromTitle('2024-25 Manchester United adidas Originals x George Best LS Shirt *w/tags*')).toBe(
+      'Manchester United',
+    );
+  });
+
+  it('strips a trailing alphanumeric stock code with a letter suffix, a shape the other code strips miss', () => {
+    // Real title from a live listing: "Team: Plymouth PLY25001R" - the
+    // existing fused letters-then-digits strip only matches when the code
+    // ENDS in digits ("HA8318"), but this one has a trailing letter after
+    // the digits too, so it needed a broader mixed-alphanumeric strip.
+    expect(guessTeamFromTitle('2025-26 Plymouth Puma Home Shirt *BNIB* PLY25001R')).toBe('Plymouth');
+    // Real title from a live listing: "Team: Northampton Town NOR25501R" -
+    // same shape, confirming it's this retailer's general SKU format, not
+    // a one-off.
+    expect(guessTeamFromTitle('2025-26 Northampton Town Puma Home Shirt NOR25501R')).toBe('Northampton Town');
+  });
+
+  it('strips a long hash-like alphanumeric code the same way', () => {
+    // Real title from a live listing: "Team: Qpr Hm0h6ca2690que" - the
+    // whole title was in solid capitals, so once the code was stripped,
+    // the leftover "QPR" fell under the length-3 threshold that keeps a
+    // real short abbreviation (PSG, USA) untouched rather than wrongly
+    // title-casing it - a better outcome than the title-cased "Qpr" the
+    // original bug produced, since "QPR" is the correct form to begin
+    // with.
+    expect(guessTeamFromTitle('2025-26 QPR Errea Away Shirt *w/tags* HM0H6CA2690QUE')).toBe('QPR');
+  });
 });
 
 describe('extractPlayerNumber', () => {
