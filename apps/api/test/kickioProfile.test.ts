@@ -819,6 +819,36 @@ describe('buildKickioProfile', () => {
     expect(profile.confidence['custom_attributes.jacket-style']).toBe('certain');
   });
 
+  it('infers Jackets/Coats and Hoodies/Sweat Tops categories from the title when no explicit category field is configured', () => {
+    // Real titles from live listings: these were previously always
+    // defaulting to "Football Shirts" with no category field configured on
+    // the site, even though the title itself plainly says otherwise -
+    // confirmed by "Wrexham Macron Anthem Heritage Jacket" and "Manchester
+    // United adidas Essentials 1/4 Zip Sweatshirt" surviving with a bare
+    // team name once the garment-type words were correctly stripped from
+    // it, meaning the category signal was there in the title all along.
+    const jacket = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/wrexham-anthem-heritage-jacket',
+      title: '2026-27 Wrexham Macron Anthem Heritage Jacket',
+    });
+    expect(jacket.category).toBe('Jackets/Coats');
+    expect(jacket.identity.shirt_type).toBeNull();
+
+    const sweatshirt = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/man-utd-essentials-sweatshirt',
+      title: '2024-25 Manchester United adidas Essentials 1/4 Zip Sweatshirt',
+    });
+    expect(sweatshirt.category).toBe('Hoodies/Sweat Tops');
+  });
+
+  it('leaves category as Football Shirts for an ordinary shirt title', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/arsenal-home-shirt',
+      title: '2020-21 Arsenal Adidas Home Shirt',
+    });
+    expect(profile.category).toBe('Football Shirts');
+  });
+
   it('maps a shirt spanning two seasons (real example: "1998-00 Nigeria Home Shirt L")', () => {
     const profile = buildKickioProfile({
       url: 'https://www.vintagefootballshirts.com/products/1998-00-nigeria-home-shirt-l',
