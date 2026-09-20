@@ -1245,6 +1245,12 @@ function resolveCategory(raw: string | null): string {
 function detectCategoryFromTitle(title: string): string | null {
   if (/\b(jackets?|coats?)\b/i.test(title)) return 'Jackets/Coats';
   if (/\b(hoodies?|sweatshirts?|sweat\s*tops?)\b/i.test(title)) return 'Hoodies/Sweat Tops';
+  // Confirmed the same gap exists for Shorts: "Arsenal Adidas Home
+  // Shorts" was defaulting to Football Shirts AND picking up a
+  // shirt_type ("Home") as if it were an actual shirt. Word-boundary
+  // matched so it can't fire on "Short-Sleeved"/"Short Sleeve" (singular
+  // "Short", not "Shorts").
+  if (/\bshorts\b/i.test(title)) return 'Shorts';
   return null;
 }
 
