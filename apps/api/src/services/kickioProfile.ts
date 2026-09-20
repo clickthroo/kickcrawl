@@ -867,7 +867,7 @@ export function extractSizeFromVariant(variantTitle: string | null | undefined):
 // =========================================================================
 
 /** Kickio's fixed condition grades - every mapped condition lands on one of these. */
-export type ConditionGrade = 'Brand New (With Tags)' | 'Mint' | 'Very Good' | 'Good' | 'Needs Attention';
+export type ConditionGrade = 'Brand New (With Tags)' | 'Mint' | 'Very Good' | 'Good' | 'Fair' | 'Needs Attention';
 
 /**
  * Retailer-specific condition wording, checked before the generic ladder
@@ -937,6 +937,12 @@ export function gradeConditionText(raw: string | null | undefined, hostname?: st
     if (r === 10) return 'Mint';
     if (r >= 8) return 'Very Good';
     if (r >= 6) return 'Good';
+    // Kickio's ladder (kickio-shirt-mapping-guide.md, Part 2) has a
+    // distinct Fair tier for 4-5/10, not just Good-vs-Needs Attention -
+    // confirmed by cross-referencing this function against that guide,
+    // which was missing here entirely (every 4-5/10 rating was silently
+    // landing on the much harsher "Needs Attention").
+    if (r >= 4) return 'Fair';
     return 'Needs Attention';
   }
 
@@ -952,15 +958,21 @@ export function gradeConditionText(raw: string | null | undefined, hostname?: st
   if (/\bvery\s+good\b|\bottim\w*\b|\bmuy\s+bueno\b|\btr.s\s+bon\s+.tat|\bsehr\s+gut\b|\bzeer\s+goed\b/.test(l))
     return 'Very Good';
   if (/^good$|\bgood\s+condition\b|\bbuon\w*\b|^bien$|\bbon\s+.tat\b|^gut$|^goed$/.test(l)) return 'Good';
+  // Vinted's "Satisfactory"-equivalent labels map to Fair, per the guide -
+  // this was returning Needs Attention, a harsher grade than Vinted's own
+  // label actually means.
   if (/\bsatisfactor\w*\b|\bdiscret\w*\b|\baceptable\b|\bsatisfaisant\w*\b|\bzufriedenstellend\b|\bredelijk\b/.test(l))
-    return 'Needs Attention';
+    return 'Fair';
 
   if (/\bbnwt\b|\bnwt\b|\bbnib\b/.test(l)) return 'Brand New (With Tags)';
   if (/\bdeadstock\b|\bnos\b|\bbrand\s*new\b/.test(l)) return 'Brand New (With Tags)';
   if (/\bbnwot\b|\bnwot\b|near\s*mint|\bmint\b|pristine|perfect\s*condition/.test(l)) return 'Mint';
   if (/excellent|\bvgc\b|great\s*condition|as\s*new/.test(l)) return 'Very Good';
   if (/good\s*condition|\bgood\b/.test(l)) return 'Good';
-  if (/\bfair\b|acceptable/.test(l)) return 'Needs Attention';
+  // "fair"/"acceptable" map to Fair, per the guide - distinct from the
+  // "well used"/"worn"/etc. group just below, which genuinely does mean
+  // Needs Attention.
+  if (/\bfair\b|acceptable/.test(l)) return 'Fair';
   if (/well\s*used|\bworn\b|poor\s*condition|vintage\s*condition|heavily\s*used/.test(l)) return 'Needs Attention';
   if (/\bpre[- ]?owned\b|\bused\b/.test(l)) return 'Good';
   if (/\bnew\b/.test(l)) return 'Brand New (With Tags)';
