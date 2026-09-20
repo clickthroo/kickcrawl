@@ -279,6 +279,49 @@ describe('guessTeamFromTitle', () => {
     // with.
     expect(guessTeamFromTitle('2025-26 QPR Errea Away Shirt *w/tags* HM0H6CA2690QUE')).toBe('QPR');
   });
+
+  it('strips a paired size+code even when a noise word originally sat between them', () => {
+    // Real titles from live listings surviving as "England 72" and
+    // "France S 57": the size+code pairing strips above only ever ran
+    // ONCE, early in the pipeline, before words like "Retro" had been
+    // stripped - so when one of those words sat directly between the size
+    // and the code ("XL Retro 72"), the pair wasn't adjacent yet the one
+    // time the check ran, and by the time "Retro" was stripped later, the
+    // size word itself had already been removed too (by the unconditional
+    // size-word strip), leaving the code permanently orphaned. The
+    // size+code pairing now runs after every other noise word, but still
+    // before the size word's own unconditional removal.
+    expect(guessTeamFromTitle('2016-17 England Nike Away Shirt *w/tags* XL Retro 72')).toBe('England');
+    expect(guessTeamFromTitle('2014-15 France Nike Player Issue Home Shirt S Retro 57')).toBe('France');
+    // Real title from a live listing: "Team: Tottenham M DN" - same
+    // mechanism, just with the code coming after an all-letters (not
+    // digit-gated) size+code pair instead of a numeric one.
+    expect(guessTeamFromTitle('2022-23 Tottenham Nike Player Issue Third Shirt *w/tags* M Retro DN')).toBe(
+      'Tottenham',
+    );
+  });
+
+  it('does not let a bounded player-name-before-# strip eat backwards into the team name', () => {
+    // Real title from a live listing that came back with NO team at all
+    // ("team could not be determined from the available text"):
+    // "2021-22 Wolves Castore Third Shirt Neto #7" - every word ahead of
+    // "Neto #7" ("Wolves Castore Third Shirt") is ALSO capitalized in this
+    // title-case listing, and the player-name-before-# strip used to be
+    // unbounded, so it greedily consumed the entire capitalized run all
+    // the way back through the team name too, wiping out the whole guess.
+    expect(guessTeamFromTitle('2021-22 Wolves Castore Third Shirt Neto #7')).toBe('Wolves');
+  });
+
+  it("strips a manufacturer's casualwear product line and garment-type words, not just shirt-specific ones", () => {
+    // Real title from a live listing: "Team: Manchester United Essentials
+    // 1/4 Zip Sweatshirt" - "Essentials" is adidas's own product-line name
+    // (like "Originals"), and "1/4 Zip"/"Sweatshirt" are casualwear
+    // garment-type words this retailer also sells alongside match shirts,
+    // neither of which the existing shirt-specific noise-word lists cover.
+    expect(guessTeamFromTitle('2024-25 Manchester United adidas Essentials 1/4 Zip Sweatshirt')).toBe(
+      'Manchester United',
+    );
+  });
 });
 
 describe('extractPlayerNumber', () => {
