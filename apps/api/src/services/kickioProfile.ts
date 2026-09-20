@@ -417,6 +417,18 @@ export function guessTeamFromTitle(title: string): string {
     // A real club number (Hannover 96, Bayer 04 Leverkusen) is never
     // preceded by a size word like this, so it's untouched.
     .replace(/\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\s+[A-Za-z0-9]+$/i, '')
+    // This retailer doesn't always put the code after the size - some
+    // listings have it BEFORE instead ("... Shirt *w/tags* 77 XL"),
+    // confirmed on a real listing surviving as "Manchester City 77" (the
+    // "XL" was cleanly stripped by the later, unconditional abbreviated-
+    // size-word strip below, but that left the "77" in front of it
+    // orphaned with nothing left to anchor a strip on). Gated to a code
+    // token that contains at least one digit, unlike the rule above -
+    // this side has no size word marking where the team name itself
+    // ends, so an all-letters token here could just as easily be a real
+    // (if unusual) trailing word in the team name; a digit is what makes
+    // it unambiguously a code instead.
+    .replace(/\b[A-Za-z]*\d[A-Za-z0-9]*\s+(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)$/i, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
     // the front of the title - that separator is what stops this unbounded
@@ -445,6 +457,11 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\bw\/o?\s*tags?\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
     .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
+    // A manufacturer's own product-line name ("adidas Originals") is not
+    // part of the team - confirmed on a real listing surviving as
+    // "Liverpool Originals LFSTLR". The manufacturer word itself ("adidas")
+    // is already stripped separately below via the MANUFACTURERS loop.
+    .replace(/\bOriginals\b/gi, '')
     .replace(/\b\d+\s*(?:st|nd|rd|th)\b/gi, '')
     .replace(/\b\d+\s*Years?\b/gi, '')
     .replace(/\b\d{1,2}\s*\/\s*10\b/g, '')
@@ -497,6 +514,16 @@ export function guessTeamFromTitle(title: string): string {
   // descriptor ever fuses letters straight onto digits like this - a real
   // club number (Hannover 96, Bayer 04) always has a space before it.
   c = c.replace(/\s+[A-Za-z]{1,3}\d{3,6}$/, '').trim();
+  // A trailing bare, all-caps alphabetic token (4+ letters, no digits) is
+  // this retailer's own style/SKU code once everything recognizable
+  // around it has already been stripped - confirmed on a real listing
+  // that survived as "Liverpool Originals LFSTLR". A real team name never
+  // arrives from this retailer in solid capitals like this (its titles
+  // use normal title case throughout), so this can't mistake a genuine
+  // trailing word in the team name for a code - unlike a short 2-3 letter
+  // abbreviation (PSG, USA), which is common enough as a real team name
+  // on its own that it's deliberately left below this length threshold.
+  c = c.replace(/\s+[A-Z]{4,}$/, '').trim();
   // A leftover bare single-letter size code at the very end (e.g. "Size M"
   // became just " M" once "Size" was stripped, or "S" once a trailing
   // stock code was stripped off after it) is safe to drop - unlike a bare
