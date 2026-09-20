@@ -12,6 +12,7 @@ import Jobs from './pages/Jobs';
 import JobDetail from './pages/JobDetail';
 import ApiKeys from './pages/ApiKeys';
 import Settings from './pages/Settings';
+import KickioTeams from './pages/KickioTeams';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { email, loading } = useAuth();
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="sales" element={<Sales />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="jobs/:id" element={<JobDetail />} />
+        <Route path="kickio-teams" element={<KickioTeams />} />
         <Route path="api-keys" element={<ApiKeys />} />
         <Route path="settings" element={<Settings />} />
       </Route>
