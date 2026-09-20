@@ -402,24 +402,27 @@ export function guessTeamFromTitle(title: string): string {
   const cutAt = candidates.length ? Math.min(...candidates) : -1;
   const withoutSubtitle = cutAt >= 0 ? title.slice(0, cutAt) : title;
 
-  // A short bare trailing number with no adjacent size word to anchor on
-  // (unlike the "XL 47"/"77 XL" pairs handled below) is still this
-  // retailer's own stock code on some listings - confirmed on real
-  // listings surviving as "Sevilla 83" and "Manchester City 78". The
-  // safe way to tell it apart from a genuine club number (Hannover 96,
-  // Bayer 04 Leverkusen) is word ORDER in the raw title: a real club
-  // number always sits immediately next to the team name, before any
-  // kit-type word ("Hannover 96 Home Shirt") - this retailer's stock
-  // code always comes after one, right at the very end ("... Home Shirt
-  // 83"). Computed here, against the raw title, before any stripping
-  // below could remove the evidence either way needs.
+  // A short bare trailing number OR all-caps letter code, with no adjacent
+  // size word to anchor on (unlike the "XL 47"/"77 XL" pairs handled
+  // below), is still this retailer's own stock code on some listings -
+  // confirmed on real listings surviving as "Sevilla 83", "Manchester
+  // City 78" (numeric) and "Atletico Madrid HJ" (2-letter - too short for
+  // the unconditional 4+ letter all-caps strip elsewhere, which has to
+  // stay conservative since it has no other evidence backing it up). The
+  // safe way to tell either shape apart from a genuine club number
+  // (Hannover 96, Bayer 04 Leverkusen) is word ORDER in the raw title: a
+  // real club number always sits immediately next to the team name,
+  // before any kit-type word ("Hannover 96 Home Shirt") - this
+  // retailer's stock code always comes after one, right at the very end
+  // ("... Home Shirt 83"). Computed here, against the raw title, before
+  // any stripping below could remove the evidence either way needs.
   const rawNoAsterisks = withoutSubtitle.replace(/\*+/g, '');
   const kitWordMatch = rawNoAsterisks.match(
     /\b(?:Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Sweatshirts?|Hoodies?|Home|Away|Third|Fourth|Goalkeeper|GK|Training)\b/i,
   );
-  const trailingBareNumberMatch = rawNoAsterisks.match(/\s(\d{1,4})\s*$/);
+  const trailingBareCodeMatch = rawNoAsterisks.match(/\s(\d{1,4}|[A-Z]{2,3})\s*$/);
   const trailingNumberIsStockCode =
-    !!kitWordMatch && !!trailingBareNumberMatch && kitWordMatch.index! < trailingBareNumberMatch.index!;
+    !!kitWordMatch && !!trailingBareCodeMatch && kitWordMatch.index! < trailingBareCodeMatch.index!;
 
   let c = withoutSubtitle
     .replace(/\*+/g, '')
@@ -458,7 +461,10 @@ export function guessTeamFromTitle(title: string): string {
     // "Graphic" and "Presentation" describe the garment style, not the
     // team, on the same casualwear listings above - "Arsenal Graphic Tee"
     // and "Liverpool Presentation Jacket" were otherwise surviving whole.
-    .replace(/\b(Graphic|Presentation)\b/gi, '')
+    // "Anthem Heritage" is Macron's own jacket product-line name, the
+    // same family - confirmed on a real listing surviving as "Wrexham
+    // Anthem Heritage" once "Jacket" itself was already being stripped.
+    .replace(/\b(Graphic|Presentation|Anthem Heritage)\b/gi, '')
     .replace(/\b1\/4\s*Zip\b/gi, '')
     .replace(/\bQuarter[- ]?Zip\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
@@ -557,15 +563,18 @@ export function guessTeamFromTitle(title: string): string {
   // (Hannover 96, Bayer 04 Leverkusen), which is always 4 digits or fewer
   // and deliberately left alone.
   c = c.replace(/\s+\d{5,}$/, '').trim();
-  // A short (1-4 digit) trailing number is ALSO this retailer's own stock
-  // code, not a club number, specifically when trailingNumberIsStockCode
-  // (computed above, against the raw title) says a kit-type word came
-  // before it - see that computation for the full reasoning. Deliberately
-  // separate from the 5+ digit strip above: unlike that one, a short bare
-  // number alone is genuinely ambiguous with a real club number, so this
-  // only fires with that extra, order-based evidence backing it up.
+  // A short (1-4 digit) trailing number, or a short (2-3 letter) all-caps
+  // trailing code, is ALSO this retailer's own stock code, not a club
+  // number or a real short abbreviation, specifically when
+  // trailingNumberIsStockCode (computed above, against the raw title)
+  // says a kit-type word came before it - see that computation for the
+  // full reasoning. Deliberately separate from the unconditional 5+
+  // digit and 4+ letter strips elsewhere: unlike those, a short bare
+  // code alone is genuinely ambiguous with a real club number or team
+  // abbreviation, so this only fires with that extra, order-based
+  // evidence backing it up.
   if (trailingNumberIsStockCode) {
-    c = c.replace(/\s+\d{1,4}$/, '').trim();
+    c = c.replace(/\s+(\d{1,4}|[A-Z]{2,3})$/, '').trim();
   }
   // A trailing alphanumeric stock/reference code - a couple of letters
   // fused directly onto 3-6 digits with no space ("HA8318", "JZ4622") - is
@@ -602,11 +611,13 @@ export function guessTeamFromTitle(title: string): string {
   // became just " M" once "Size" was stripped, or "S" once a trailing
   // stock code was stripped off after it) is safe to drop - unlike a bare
   // letter anywhere else in the string, which is left alone since it
-  // could be part of a genuine one-word team name.
-  c = c.replace(/\s+(XXS|XS|S|M|L|XL|XXL|XXXL)$/i, '').trim();
+  // could be part of a genuine one-word team name. "Y" (youth) is this
+  // retailer's own size marker alongside the standard XS-XXXL range -
+  // confirmed on a real listing surviving as "Aberdeen Y".
+  c = c.replace(/\s+(XXS|XS|S|M|L|XL|XXL|XXXL|Y)$/i, '').trim();
   // Guard against leftover junk (a bare size code, or anything too short to
   // plausibly be a team name) rather than surfacing it as a false "team".
-  if (!c || c.length <= 2 || /^(XXS|XS|S|M|L|XL|XXL|XXXL)$/i.test(c)) return '';
+  if (!c || c.length <= 2 || /^(XXS|XS|S|M|L|XL|XXL|XXXL|Y)$/i.test(c)) return '';
   if (c === c.toUpperCase() && c.length > 3) {
     return c.replace(/\b\w+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
   }
