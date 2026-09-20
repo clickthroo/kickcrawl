@@ -357,6 +357,33 @@ describe('guessTeamFromTitle', () => {
     // exactly like a real club number would look on its own.
     expect(guessTeamFromTitle('Arsenal 96')).toBe('Arsenal 96');
   });
+
+  it("strips a manufacturer's jacket product-line name and a youth size marker", () => {
+    // Real title from a live listing: "Team: Wrexham Anthem Heritage" -
+    // "Anthem Heritage" is Macron's own jacket product-line name, the
+    // same family as "Presentation" above, surviving even once "Jacket"
+    // itself was already being stripped.
+    expect(guessTeamFromTitle('2026-27 Wrexham Macron Anthem Heritage Jacket')).toBe('Wrexham');
+    // Real title from a live listing: "Team: Aberdeen Y" - "Y" (youth) is
+    // this retailer's own size marker alongside the standard range, not
+    // previously recognized as a size at all.
+    expect(guessTeamFromTitle('1987-90 Aberdeen Umbro Home Shirt Y')).toBe('Aberdeen');
+  });
+
+  it('strips a short bare trailing letter code the same way as a short bare number, backed by the same kit-word-order evidence', () => {
+    // Real title from a live listing: "Team: Atletico Madrid HJ" - same
+    // mechanism as the "Sevilla 83"/"Manchester City 78" numeric cases
+    // above, just with a 2-letter all-caps code instead of digits - too
+    // short for the unconditional 4+ letter all-caps strip, which has no
+    // other evidence to rely on and so has to stay conservative.
+    expect(guessTeamFromTitle('2025-26 Atletico Madrid Nike Third Shirt *w/tags* HJ')).toBe('Atletico Madrid');
+  });
+
+  it('leaves a short bare trailing letter code alone when there is no kit-type word anywhere to prove it is a stock code', () => {
+    // Guards the new short-code strip against being too broad, the same
+    // way the bare-number guard above does.
+    expect(guessTeamFromTitle('Arsenal HJ')).toBe('Arsenal HJ');
+  });
 });
 
 describe('extractPlayerNumber', () => {
