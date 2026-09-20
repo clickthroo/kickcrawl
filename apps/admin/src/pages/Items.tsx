@@ -301,7 +301,22 @@ export default function Items() {
                 </div>
               </div>
 
-              <KickioProfilePanel profile={u.preview_profile} />
+              {u.preview_profile ? (
+                <KickioProfilePanel profile={u.preview_profile} />
+              ) : (
+                // Nothing to map yet - this URL was discovered by the crawl
+                // but has never actually been fetched (or the fetch itself
+                // failed before any content was saved), so there's no
+                // scraped title/markdown for buildKickioProfile to work
+                // from. Showing nothing at all here read as a missing
+                // feature rather than "no data yet" - "Re-scrape" above is
+                // the way to get it fetched.
+                <div className="rounded-md border border-dashed border-slate-200 px-3 py-2 text-xs text-slate-400">
+                  {u.status === 'failed'
+                    ? 'Not scraped yet - the last fetch failed before any page content was saved. Use Re-scrape to try again.'
+                    : 'Not scraped yet - use Re-scrape to fetch this item and map its details.'}
+                </div>
+              )}
             </Card>
           ))}
         </div>
