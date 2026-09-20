@@ -404,37 +404,16 @@ export function guessTeamFromTitle(title: string): string {
 
   let c = withoutSubtitle
     .replace(/\*+/g, '')
-    // This retailer always puts its own stock/reference code as the very
-    // last token, immediately after the size (e.g. "... Shirt S 112587",
-    // "... Shirt M HA8318", "... Shirt XL 47") - stripped as a pair here,
-    // anchored to both the end of the title AND an actual size word right
-    // before it. That size anchor is what makes this safe even for a
-    // short, alphanumeric, or otherwise-ambiguous code (a bare "47", a
-    // mixed "HA8318") that neither a digit-length threshold nor a
-    // bare-trailing-size check alone could safely catch - each of those
-    // only fires when its own target sits at the very end, and the size
-    // word sitting between the team name and the code was blocking both.
-    // A real club number (Hannover 96, Bayer 04 Leverkusen) is never
-    // preceded by a size word like this, so it's untouched.
-    .replace(/\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\s+[A-Za-z0-9]+$/i, '')
-    // This retailer doesn't always put the code after the size - some
-    // listings have it BEFORE instead ("... Shirt *w/tags* 77 XL"),
-    // confirmed on a real listing surviving as "Manchester City 77" (the
-    // "XL" was cleanly stripped by the later, unconditional abbreviated-
-    // size-word strip below, but that left the "77" in front of it
-    // orphaned with nothing left to anchor a strip on). Gated to a code
-    // token that contains at least one digit, unlike the rule above -
-    // this side has no size word marking where the team name itself
-    // ends, so an all-letters token here could just as easily be a real
-    // (if unusual) trailing word in the team name; a digit is what makes
-    // it unambiguously a code instead.
-    .replace(/\b[A-Za-z]*\d[A-Za-z0-9]*\s+(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)$/i, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
-    // the front of the title - that separator is what stops this unbounded
-    // capitalized-word run from eating backwards into a multi-word team
-    // name once those separators are removed later.
-    .replace(/\b(?:[A-ZÀ-Ý][a-zà-ÿ']+\s+)*[A-ZÀ-Ý][a-zà-ÿ']+\s*#\d+/g, '')
+    // the front of the title. Bounded to at most 3 capitalized words before
+    // the "#" (a generous real player-name length) - confirmed on a real
+    // listing ("2021-22 Wolves Castore Third Shirt Neto #7") that this was
+    // previously unbounded, and every kit-type word ahead of it ("Wolves
+    // Castore Third Shirt Neto") is ALSO capitalized in a title-case
+    // listing, with nothing to stop the greedy match from eating all the
+    // way back through the team name too, wiping out the whole guess.
+    .replace(/\b(?:[A-ZÀ-Ý][a-zà-ÿ']+\s+){0,2}[A-ZÀ-Ý][a-zà-ÿ']+\s*#\d+/g, '')
     .replace(/#\d+/g, '')
     .replace(/\d{4}[-/]\d{2,4}/g, '')
     .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}(?![\d/-])/g, '')
@@ -451,7 +430,13 @@ export function guessTeamFromTitle(title: string): string {
     // this retailer's own shorthand for it on some listings - confirmed on
     // a real long-sleeved listing surviving as "Manchester United x
     // George Best LS".
-    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    // "Sweatshirt"/"Hoodie" and "1/4 Zip" cover this retailer's casualwear
+    // listings (training tops, half-zips), not just match shirts -
+    // confirmed on a real listing surviving as "Manchester United
+    // Essentials 1/4 Zip Sweatshirt".
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Sweatshirts?|Hoodies?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    .replace(/\b1\/4\s*Zip\b/gi, '')
+    .replace(/\bQuarter[- ]?Zip\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
     // "*w/tags*"/"w/o tags" is a condition note (this retailer's own
     // shorthand for BNWT/BNWOT), not part of the team - confirmed on real
@@ -461,11 +446,13 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\bw\/o?\s*tags?\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
     .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
-    // A manufacturer's own product-line name ("adidas Originals") is not
-    // part of the team - confirmed on a real listing surviving as
-    // "Liverpool Originals LFSTLR". The manufacturer word itself ("adidas")
-    // is already stripped separately below via the MANUFACTURERS loop.
-    .replace(/\bOriginals\b/gi, '')
+    // A manufacturer's own product-line name ("adidas Originals", "adidas
+    // Essentials") is not part of the team - confirmed on real listings
+    // surviving as "Liverpool Originals LFSTLR" and "Manchester United
+    // Essentials 1/4 Zip Sweatshirt". The manufacturer word itself
+    // ("adidas") is already stripped separately below via the
+    // MANUFACTURERS loop.
+    .replace(/\b(Originals|Essentials)\b/gi, '')
     // A manufacturer/retailer collab line ("... x George Best ...") names
     // a tribute or collaboration, not the team - confirmed on a real
     // listing surviving as "Manchester United x George Best LS".
@@ -480,6 +467,36 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\b(As New|Near Mint|Very Good|Brand New|Excellent|Good|Fair|Poor|New|Used|Mint)\b/gi, '')
     .replace(/\b(Mens|Womens|Women'?s|Men'?s|Kids|Youth|Boys|Girls|Junior|Adult)\b/gi, '')
     .replace(/\bSize\b/gi, '')
+    // This retailer always puts its own stock/reference code immediately
+    // next to the size (e.g. "... Shirt S 112587", "... Shirt M HA8318",
+    // "... Shirt XL 47", or reversed, "... Shirt 77 XL") - stripped as a
+    // pair here, anchored to both the end of the title AND an actual size
+    // word right next to it. That size anchor is what makes this safe
+    // even for a short, alphanumeric, or otherwise-ambiguous code (a bare
+    // "47", a mixed "HA8318") that neither a digit-length threshold nor a
+    // bare-trailing-size check alone could safely catch. Deliberately
+    // placed this late - after every other noise word above (colours,
+    // Retro/Vintage/etc., BNWT, condition words, "Mint"...) has already
+    // been stripped, but before the unconditional size-word strip just
+    // below - confirmed on real listings that were surviving as "England
+    // 72" and "France S 57": an intervening noise word originally sitting
+    // between the size and the code (e.g. "XL Retro 72") meant this pair
+    // wasn't actually adjacent yet the first time an earlier, same-shaped
+    // check ran, and by the time that word was stripped later, the size
+    // word itself had already been removed too, orphaning the code with
+    // nothing left to anchor a strip on. Running this pass here instead,
+    // after the noise but before the size word's own removal, means it
+    // never misses a pair for that reason again. A real club number
+    // (Hannover 96, Bayer 04 Leverkusen) is never preceded by a size word
+    // like this, so it's untouched.
+    .replace(/\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\s+[A-Za-z0-9]+$/i, '')
+    // The code isn't always after the size - gated to a token that
+    // contains at least one digit, unlike the rule above: this side has
+    // no size word marking where the team name itself ends, so an
+    // all-letters token here could just as easily be a real (if unusual)
+    // trailing word in the team name; a digit is what makes it
+    // unambiguously a code instead.
+    .replace(/\b[A-Za-z]*\d[A-Za-z0-9]*\s+(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)$/i, '')
     // Spelled-out sizes ("Small mens", "Medium", "Large") are as common in
     // real listing titles as the abbreviated forms right below - Vinted's
     // own titles use them (e.g. "... 20/21. Small mens"), and left
