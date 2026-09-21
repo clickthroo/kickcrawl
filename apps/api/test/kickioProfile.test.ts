@@ -503,6 +503,59 @@ describe('guessTeamFromTitle', () => {
       guessTeamFromTitle("2017-18 Liverpool New Balance '125 Years' Home Shirt Lallana #20 XL"),
     ).toBe('Liverpool');
   });
+
+  it('strips "Staff Issue" and a coat\'s own style words ("Padded"/"Rain"), not just "Coat" itself', () => {
+    // Real title from a live listing: "Team: Juventus Staff Issue Padded
+    // Rain Coat" - "Coat" wasn't even in the garment-word strip list at
+    // all (only "Jacket" was, despite both mapping to the same
+    // Jackets/Coats category), and "Staff Issue"/"Padded"/"Rain" weren't
+    // recognised as style/issue-type words the way "Player Issue"/
+    // "Graphic"/"Presentation" already were.
+    expect(guessTeamFromTitle('1990-91 Juventus Kappa Staff Issue Padded Rain Coat *w/tags* XL')).toBe(
+      'Juventus',
+    );
+  });
+
+  it('strips "Terrace Icons", another manufacturer product-line name', () => {
+    // Real title from a live listing: "Team: Juventus Terrace Icons" -
+    // same shape as "Anthem Heritage"/"Originals" above.
+    expect(guessTeamFromTitle('2024-25 Juventus adidas Terrace Icons Hoodie *w/tags* M')).toBe('Juventus');
+  });
+
+  it('strips a longer hyphenated stock code than the first version of this strip allowed for', () => {
+    // Real title from a live listing: "Team: Juventus 95000JV-000" - 7
+    // characters ahead of the hyphen, longer than the "Italy 76"/
+    // "Birmingham BM" fix's original 1-6 character cap allowed.
+    expect(guessTeamFromTitle('1994-95 Juventus Kappa Basic Home Shirt *BNIB* 95000JV-000')).toBe(
+      'Juventus',
+    );
+  });
+
+  it('does not read ordinary kit/noise words right before a marked number as if they were a player name', () => {
+    // Real title from a live listing: "Team: Athletic Bilbao Match" - a
+    // blank/number-only match-issue shirt with no real player name at
+    // all. Without a noise-word exclusion on this strip's own word-slots
+    // (mirroring PLAYER_NAME_NOISE_WORDS below, for the same reason),
+    // "Issue Home Shirt" - three ordinary, unrelated capitalized words,
+    // not a name - was being read as if it were the player name right
+    // before "#5" and stripped along with it, taking "Issue" with it
+    // before the "Match Issue" phrase strip ever got a chance to see it
+    // as a whole phrase.
+    expect(guessTeamFromTitle('1992-94 Athletic Bilbao Match Issue Home Shirt #5')).toBe('Athletic Bilbao');
+  });
+
+  it('strips "x <manufacturer>" even when the manufacturer is written lowercase', () => {
+    // Real title from a live listing: "Team: Manchester United x
+    // Ultimate365 Tour WIND.RDY" - the "x <collab name>" strip requires a
+    // genuinely capitalized word after "x" by design (so it can't mistake
+    // ordinary lowercase text for a collab name), which correctly leaves
+    // "x adidas" (lowercase) alone rather than risk that - but then
+    // nothing else removed the bare "x" once the MANUFACTURERS loop
+    // separately (and correctly) stripped "adidas" on its own.
+    expect(
+      guessTeamFromTitle('2025-26 Manchester United x adidas Ultimate365 Tour WIND.RDY Hoodie'),
+    ).toBe('Manchester United');
+  });
 });
 
 describe('matchKickioTeam', () => {
