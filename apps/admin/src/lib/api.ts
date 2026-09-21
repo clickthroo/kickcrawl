@@ -2,12 +2,9 @@ const BASE = '/api';
 
 export class ApiError extends Error {
   status: number;
-  /** The full parsed response body, when the server sent one - lets a caller read extra fields (e.g. a diagnostic) beyond just `error`. */
-  body?: unknown;
-  constructor(status: number, message: string, body?: unknown) {
+  constructor(status: number, message: string) {
     super(message);
     this.status = status;
-    this.body = body;
   }
 }
 
@@ -45,7 +42,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new ApiError(res.status, body.error ?? `Request failed with ${res.status}`, body);
+    throw new ApiError(res.status, body.error ?? `Request failed with ${res.status}`);
   }
   return body as T;
 }
