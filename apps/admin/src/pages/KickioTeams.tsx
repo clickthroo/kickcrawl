@@ -25,6 +25,7 @@ export default function KickioTeams() {
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [stale, setStale] = useState(false);
   const [notConfigured, setNotConfigured] = useState(false);
+  const [notConfiguredDebug, setNotConfiguredDebug] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
@@ -42,6 +43,11 @@ export default function KickioTeams() {
       .catch((err) => {
         if (err instanceof ApiError && err.status === NOT_CONFIGURED_STATUS) {
           setNotConfigured(true);
+          setNotConfiguredDebug(
+            err.body && typeof err.body === 'object' && 'debug' in err.body
+              ? ((err.body as { debug: Record<string, unknown> }).debug ?? null)
+              : null,
+          );
           setTeams([]);
           return;
         }
@@ -92,6 +98,11 @@ export default function KickioTeams() {
             <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">KICKIO_SUPABASE_ANON_KEY</code> (see{' '}
             <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">.env.example</code>) to enable this page.
           </p>
+          {notConfiguredDebug && (
+            <p className="mt-2 break-all rounded bg-slate-50 px-2 py-1.5 font-mono text-xs text-slate-400">
+              debug: {JSON.stringify(notConfiguredDebug)}
+            </p>
+          )}
         </Card>
       )}
 
