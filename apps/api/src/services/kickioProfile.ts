@@ -479,8 +479,21 @@ export function guessTeamFromTitle(title: string): string {
     // "Ibrahimović" ("ć" falls outside À-ÿ) - confirmed on a real listing
     // that was surviving as "Manchester United Ibrahimović" with only the
     // trailing "#9" stripped, because this regex previously failed to
-    // match the name at all and left it untouched.
-    .replace(/\b(?:\p{Lu}[\p{Ll}']+\s+){0,2}\p{Lu}[\p{Ll}']+\s*#\d+/gu, '')
+    // match the name at all and left it untouched. Each word-slot also
+    // excludes recognized kit/noise words (mirroring
+    // PLAYER_NAME_NOISE_WORDS below, for the same reason) - confirmed on
+    // a real listing ("Athletic Bilbao Match Issue Home Shirt #5" - a
+    // blank/number-only match-issue shirt with no real player name at
+    // all) that was surviving as "Athletic Bilbao Match": without the
+    // exclusion, "Issue Home Shirt" (three ordinary, unrelated capitalized
+    // words, not a name) was being read as if it were the player name
+    // right before "#5" and stripped along with it, taking "Issue" with
+    // it before the later Match-Issue phrase strip ever got a chance to
+    // see it as a whole phrase.
+    .replace(
+      /\b(?:(?!(?:Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Issue|Match|Player|Retail|Authentic)\b)\p{Lu}[\p{Ll}']+\s+){0,2}(?!(?:Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Issue|Match|Player|Retail|Authentic)\b)\p{Lu}[\p{Ll}']+\s*#\d+/gu,
+      '',
+    )
     .replace(/#\d+/g, '');
   if (trailingNameNumberIsPlayerTag) {
     c = c.replace(/\s+\p{Lu}[\p{L}'’.-]*\s+\d{1,2}$/u, '').trim();
@@ -511,12 +524,13 @@ export function guessTeamFromTitle(title: string): string {
     // this retailer's own shorthand for it on some listings - confirmed on
     // a real long-sleeved listing surviving as "Manchester United x
     // George Best LS".
-    // "Sweatshirt"/"Hoodie", "Tee" and "Jacket" cover this retailer's
-    // non-shirt listings (training tops, half-zips, casualwear, jackets),
-    // not just match shirts - confirmed on real listings surviving as
-    // "Manchester United Essentials 1/4 Zip Sweatshirt", "Arsenal Graphic
-    // Tee", and "Liverpool Presentation Jacket".
-    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Sweatshirts?|Hoodies?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    // "Sweatshirt"/"Hoodie", "Tee", "Jacket" and "Coat" cover this
+    // retailer's non-shirt listings (training tops, half-zips,
+    // casualwear, jackets, coats), not just match shirts - confirmed on
+    // real listings surviving as "Manchester United Essentials 1/4 Zip
+    // Sweatshirt", "Arsenal Graphic Tee", "Liverpool Presentation
+    // Jacket", and "Juventus Staff Issue Padded Rain Coat".
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Coats?|Sweatshirts?|Hoodies?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     // "Graphic" and "Presentation" describe the garment style, not the
     // team, on the same casualwear listings above - "Arsenal Graphic Tee"
     // and "Liverpool Presentation Jacket" were otherwise surviving whole.
@@ -526,10 +540,29 @@ export function guessTeamFromTitle(title: string): string {
     // "Drill" is the same shape again for a training top - confirmed on a
     // real listing surviving as "Manchester United Drill" once "Top"
     // itself was already being stripped by the garment-word strip above.
-    .replace(/\b(Graphic|Presentation|Anthem Heritage|Drill)\b/gi, '')
+    // "Padded"/"Rain" describe a coat's style the same way "Graphic"/
+    // "Presentation" describe a tee/jacket's - confirmed on the same real
+    // "Padded Rain Coat" listing as above, once "Coat" itself was already
+    // being stripped by the garment-word strip. "Terrace Icons" is
+    // another manufacturer product-line name, the same family as "Anthem
+    // Heritage" - confirmed on a real listing surviving as "Juventus
+    // Terrace Icons". "Ultimate365 Tour"/"WIND.RDY" are adidas's own golf-
+    // technical apparel line/fabric-technology names on a real listing
+    // surviving as "Manchester United x Ultimate365 Tour WIND.RDY" once
+    // "x adidas" itself was already being stripped (see the collab strip
+    // below).
+    .replace(/\b(Graphic|Presentation|Anthem Heritage|Drill|Padded|Rain|Terrace Icons|Ultimate365(?:\s+Tour)?)\b/gi, '')
+    .replace(/\bWIND\.RDY\b/gi, '')
     .replace(/\b1\/4\s*Zip\b/gi, '')
     .replace(/\bQuarter[- ]?Zip\b/gi, '')
-    .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
+    // "Match Issue" (no trailing "d") is a distinct phrase from "Match
+    // Issued" already covered here, and the correct source for this
+    // profile's own Issue field too (canonicalIssue() below already
+    // recognises it - this strip just hadn't kept up with it). "Staff
+    // Issue" is the same shape again, this retailer's own phrase for
+    // team-staff (rather than player-issued) gear - confirmed on a real
+    // listing surviving as "Juventus Staff Issue Padded Rain Coat".
+    .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Staff Issue|Match Worn|Match Issued|Match Issue)\b/gi, '')
     // "*w/tags*"/"w/o tags" is a condition note (this retailer's own
     // shorthand for BNWT/BNWOT), not part of the team - confirmed on real
     // listings surviving as "Leeds w/tags" and "Ukraine w/tags JZ4622".
@@ -561,6 +594,17 @@ export function guessTeamFromTitle(title: string): string {
     // fake collab-name words, on top of the real "George", stranding the
     // digits with nothing left to anchor the later code strips on.
     .replace(/\b[xX]\b\s+(?:[A-ZÀ-Ý][a-zà-ÿ'’-]+\s*){1,3}/g, '')
+    // The collab strip just above requires a genuinely capitalized name
+    // to follow "x", by design (see its own comment) - but this
+    // retailer sometimes writes a manufacturer collab in lowercase ("x
+    // adidas Ultimate365 Tour WIND.RDY"), which that strip correctly
+    // leaves alone rather than risk eating ordinary text, and the
+    // MANUFACTURERS loop below only removes "adidas" itself, not the "x"
+    // in front of it. Confirmed on that same real listing surviving as
+    // "Manchester United x Ultimate365 Tour WIND.RDY" once "adidas" had
+    // already gone. Safe specifically because it's anchored to this
+    // file's own trusted manufacturer list, not any lowercase word.
+    .replace(new RegExp(`\\b[xX]\\b\\s+(?:${MANUFACTURERS.map((m) => escapeRegex(m)).join('|')})\\b`, 'gi'), '')
     .replace(/\b\d+\s*(?:st|nd|rd|th)\b/gi, '')
     .replace(/\b\d+\s*Years?\b/gi, '')
     .replace(/\b\d{1,2}\s*\/\s*10\b/g, '')
@@ -654,22 +698,27 @@ export function guessTeamFromTitle(title: string): string {
   // and deliberately left alone.
   c = c.replace(/\s+\d{5,}$/, '').trim();
   // A trailing stock code that itself contains a hyphen ("765650-02",
-  // "BM0071-459", "RAN-002SSA") is still this retailer's own SKU, not a
-  // club number or season - confirmed on real listings that were
-  // surviving as "Italy 76", "Birmingham BM", and "Rangers M RAN-002SSA"
-  // (the last one preceded by a bare size letter too, which the earlier,
-  // narrower size+code pair strip couldn't reach since its own character
-  // class doesn't allow a hyphen either) before the season-span regex
-  // above was guarded against matching a run embedded inside one of
-  // these (see its own comment): once that stopped silently absorbing
+  // "BM0071-459", "RAN-002SSA", "95000JV-000") is still this retailer's
+  // own SKU, not a club number or season - confirmed on real listings
+  // that were surviving as "Italy 76", "Birmingham BM", "Rangers M
+  // RAN-002SSA" (the last one preceded by a bare size letter too, which
+  // the earlier, narrower size+code pair strip couldn't reach since its
+  // own character class doesn't allow a hyphen either), and "Juventus
+  // 95000JV-000" (7 characters ahead of the hyphen - longer than the
+  // first version of this strip allowed for) before the season-span
+  // regex above was guarded against matching a run embedded inside one
+  // of these (see its own comment): once that stopped silently absorbing
   // most of the code by accident, the whole shape needed an actual strip
   // of its own, since no other rule here tolerates an internal hyphen.
   // Deliberately generic about which side of the hyphen has the letters
   // (this retailer uses both "digits-hyphen-digits" and "letters-hyphen-
-  // alnum" shapes) rather than one narrow pattern per shape seen so far.
-  // A real club number or season is never followed by a hyphenated
-  // alphanumeric suffix like this.
-  c = c.replace(/\s+[A-Za-z0-9]{1,6}-[A-Za-z0-9]{2,6}$/, '').trim();
+  // alnum" shapes) rather than one narrow pattern per shape seen so far,
+  // and generously bounded (up to 8 characters either side) rather than
+  // tuned tightly to only the exact lengths confirmed so far - a real
+  // club number or season is never followed by a hyphenated alphanumeric
+  // suffix like this at all, regardless of length, so there's no real
+  // team name this could accidentally eat into.
+  c = c.replace(/\s+[A-Za-z0-9]{1,8}-[A-Za-z0-9]{2,8}$/, '').trim();
   // A short (1-4 digit) trailing number, or a short (2-3 letter) all-caps
   // trailing code, is ALSO this retailer's own stock code, not a club
   // number or a real short abbreviation, specifically when
