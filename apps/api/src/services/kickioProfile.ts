@@ -18,10 +18,19 @@ export type Confidence = 'certain' | 'inferred';
 export interface KickioIdentity {
   team: string | null;
   /**
-   * The Kickio `teams` row `team` matched against (exact or normalized name
-   * match), when a live list was available - see KickioProfileInput.kickioTeams.
-   * Purely a corroboration signal for the admin UI; `team` above is always
-   * left as the raw scraped/guessed text, never overwritten by this.
+   * The Kickio `teams` row `team` matched against (exact, normalized, or
+   * unambiguous-containment match - see matchKickioTeam()), when a live
+   * list was available - see KickioProfileInput.kickioTeams. Purely a
+   * corroboration signal for the admin UI; `team` above is always left as
+   * the raw scraped/guessed text, never overwritten by this.
+   *
+   * Decided policy for the future write-integration (not yet built - see
+   * kickio-shirt-mapping-guide.md/session history): a listing should only
+   * ever be sent to Kickio using THIS field, never the raw `team` above.
+   * When this is null (no confident match), the listing should be held
+   * for human review rather than sent with a guessed team name - sending
+   * `team` as-is risks either failing Kickio's own matching outright or,
+   * worse, creating a garbage team entry there.
    */
   team_kickio_match: string | null;
   season: string | null;
