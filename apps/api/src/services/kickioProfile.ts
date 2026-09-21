@@ -513,7 +513,10 @@ export function guessTeamFromTitle(title: string): string {
     // "Anthem Heritage" is Macron's own jacket product-line name, the
     // same family - confirmed on a real listing surviving as "Wrexham
     // Anthem Heritage" once "Jacket" itself was already being stripped.
-    .replace(/\b(Graphic|Presentation|Anthem Heritage)\b/gi, '')
+    // "Drill" is the same shape again for a training top - confirmed on a
+    // real listing surviving as "Manchester United Drill" once "Top"
+    // itself was already being stripped by the garment-word strip above.
+    .replace(/\b(Graphic|Presentation|Anthem Heritage|Drill)\b/gi, '')
     .replace(/\b1\/4\s*Zip\b/gi, '')
     .replace(/\bQuarter[- ]?Zip\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
@@ -585,10 +588,16 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\bExtra[- ]?Large\b/gi, '')
     .replace(/\b(Small|Medium|Large)\b/gi, '')
     .replace(/\b(XXXL|XXL|XL|XS|2XL|3XL|4XL|5XL|X-?Large|XX-?Large)\b/gi, '')
-    // Tournament words are never part of a national team's own name (the
-    // team itself, e.g. "France", should survive - only the tournament
-    // label should go).
-    .replace(/\b(World\s*Cup|FIFA|Olympics?|Euro'?s?|Copa\s+America|Africa\s+Cup|AFCON|Nations\s+League|Confederations\s+Cup)\b/gi, '')
+    // Tournament/competition words are never part of a team's own name -
+    // for a national side (the team itself, e.g. "France", should survive,
+    // only the tournament label should go) or a club (a cup win being
+    // commemorated is not the club's name either) - confirmed on a real
+    // listing surviving as "Southampton FA Cup" (a "30th Anniversary" of
+    // an FA Cup win, per its own title).
+    .replace(
+      /\b(World\s*Cup|FIFA|Olympics?|Euro'?s?|Copa\s+America|Africa\s+Cup|AFCON|Nations\s+League|Confederations\s+Cup|FA\s+Cup|League\s+Cup|Community\s+Shield|Champions\s+League|Europa\s+League|Conference\s+League|Super\s+Cup)\b/gi,
+      '',
+    )
     .replace(/\([^)]*\)/g, '')
     // A quoted aside ("2019 Sevilla Nike 'Antonio Puerta Trophy' Home
     // Shirt") names a special edition/commemoration, not the team - same

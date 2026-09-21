@@ -421,6 +421,21 @@ describe('guessTeamFromTitle', () => {
     // real club number (Hannover 96), so it's left alone.
     expect(guessTeamFromTitle('Arsenal 96')).toBe('Arsenal 96');
   });
+
+  it('strips a club competition name being commemorated, not just a national-team tournament', () => {
+    // Real title from a live listing: "Team: Southampton FA Cup" - a "30th
+    // Anniversary" shirt commemorating an FA Cup win, same bug shape as
+    // the World Cup/Euros strip above but for a club competition instead
+    // of a national tournament.
+    expect(guessTeamFromTitle("2006 Southampton FA Cup 30th Anniversary Home Shirt")).toBe('Southampton');
+  });
+
+  it('strips "Drill" the same way as "Graphic"/"Presentation" - a training-top style word, not the team', () => {
+    // Real title from a live listing: "Team: Manchester United Drill" -
+    // same shape as "Wrexham Anthem Heritage" above, surviving even once
+    // "Top" itself was already being stripped by the garment-word strip.
+    expect(guessTeamFromTitle('1992-93 Manchester United Umbro Drill Top')).toBe('Manchester United');
+  });
 });
 
 describe('matchKickioTeam', () => {
