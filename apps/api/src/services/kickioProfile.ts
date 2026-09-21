@@ -564,7 +564,14 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\b\d+\s*(?:st|nd|rd|th)\b/gi, '')
     .replace(/\b\d+\s*Years?\b/gi, '')
     .replace(/\b\d{1,2}\s*\/\s*10\b/g, '')
-    .replace(/\b(As New|Near Mint|Very Good|Brand New|Excellent|Good|Fair|Poor|New|Used|Mint)\b/gi, '')
+    // Bare "New" is excluded when directly followed by "Balance" -
+    // confirmed on a real listing surviving as "Liverpool Balance": this
+    // condition-word strip runs before the MANUFACTURERS loop below, so
+    // without the exclusion it was matching just the "New" inside "New
+    // Balance" as if it were condition text, leaving "Balance" behind as
+    // an orphan once the manufacturer loop no longer had the full phrase
+    // "New Balance" left to match against.
+    .replace(/\b(As New|Near Mint|Very Good|Brand New|Excellent|Good|Fair|Poor|New(?!\s+Balance)|Used|Mint)\b/gi, '')
     .replace(/\b(Mens|Womens|Women'?s|Men'?s|Kids|Youth|Boys|Girls|Junior|Adult)\b/gi, '')
     .replace(/\bSize\b/gi, '')
     // This retailer always puts its own stock/reference code immediately
@@ -623,8 +630,15 @@ export function guessTeamFromTitle(title: string): string {
     // instead of parens. Anchored to whitespace on both sides so a
     // genuine apostrophe inside a word (a contraction, a name like
     // "N'Golo") is never mistaken for the start/end of a quoted span.
-    .replace(/(^|\s)'[^']+'(?=\s|$)/g, '$1')
-    .replace(/(^|\s)"[^"]+"(?=\s|$)/g, '$1');
+    // Allows EMPTY content between the quotes ("*" not "+") - confirmed
+    // on a real listing ("2017-18 Liverpool New Balance '125 Years' Home
+    // Shirt") surviving as "Liverpool Balance ''": an earlier strip (the
+    // digit+"Years" one, above) had already emptied out "125 Years" from
+    // inside the quotes by the time this one ran, and with only "+" this
+    // couldn't match (let alone remove) a now-empty quote pair, leaving
+    // the bare quote marks behind as their own leftover junk.
+    .replace(/(^|\s)'[^']*'(?=\s|$)/g, '$1')
+    .replace(/(^|\s)"[^"]*"(?=\s|$)/g, '$1');
   for (const m of MANUFACTURERS) {
     c = c.replace(new RegExp(`\\b${escapeRegex(m)}\\b`, 'gi'), '');
   }
@@ -639,16 +653,23 @@ export function guessTeamFromTitle(title: string): string {
   // (Hannover 96, Bayer 04 Leverkusen), which is always 4 digits or fewer
   // and deliberately left alone.
   c = c.replace(/\s+\d{5,}$/, '').trim();
-  // A trailing numeric stock code that itself contains a hyphen ("765650-
-  // 02", "BM0071-459") is still this retailer's own SKU, not a club
-  // number or season - confirmed on real listings that were surviving as
-  // "Italy 76" and "Birmingham BM" before the season-span regex above was
-  // guarded against matching a run embedded inside one of these (see its
-  // own comment): once that stopped silently absorbing most of the code
-  // by accident, the whole thing needed an actual strip of its own, since
-  // no other rule here tolerates an internal hyphen. A real club number
-  // or season is never followed by a hyphenated digit suffix like this.
-  c = c.replace(/\s+[A-Za-z]{0,3}\d{4,6}-\d{2,4}$/, '').trim();
+  // A trailing stock code that itself contains a hyphen ("765650-02",
+  // "BM0071-459", "RAN-002SSA") is still this retailer's own SKU, not a
+  // club number or season - confirmed on real listings that were
+  // surviving as "Italy 76", "Birmingham BM", and "Rangers M RAN-002SSA"
+  // (the last one preceded by a bare size letter too, which the earlier,
+  // narrower size+code pair strip couldn't reach since its own character
+  // class doesn't allow a hyphen either) before the season-span regex
+  // above was guarded against matching a run embedded inside one of
+  // these (see its own comment): once that stopped silently absorbing
+  // most of the code by accident, the whole shape needed an actual strip
+  // of its own, since no other rule here tolerates an internal hyphen.
+  // Deliberately generic about which side of the hyphen has the letters
+  // (this retailer uses both "digits-hyphen-digits" and "letters-hyphen-
+  // alnum" shapes) rather than one narrow pattern per shape seen so far.
+  // A real club number or season is never followed by a hyphenated
+  // alphanumeric suffix like this.
+  c = c.replace(/\s+[A-Za-z0-9]{1,6}-[A-Za-z0-9]{2,6}$/, '').trim();
   // A short (1-4 digit) trailing number, or a short (2-3 letter) all-caps
   // trailing code, is ALSO this retailer's own stock code, not a club
   // number or a real short abbreviation, specifically when
@@ -720,7 +741,7 @@ export interface KickioTeamRef {
   slug: string;
 }
 
-export type KickioTeamMatchType = 'exact' | 'normalized';
+export type KickioTeamMatchType = 'exact' | 'normalized' | 'contained';
 
 export interface KickioTeamMatch {
   name: string;
@@ -762,8 +783,17 @@ function normalizeKickioTeamName(s: string): string {
  * when nothing matches AND when no list was supplied at all, so a
  * deployment without KICKIO_SUPABASE_URL configured behaves exactly as
  * before rather than flagging every single team as unmatched.
+ *
+ * `gender` (this profile's own already-resolved gender, e.g. "Mens") is
+ * used only to break a tie between otherwise-identical containment
+ * candidates that differ by a "Women" suffix (see below) - it never
+ * changes an exact/normalized match.
  */
-export function matchKickioTeam(guess: string, teams: readonly KickioTeamRef[]): KickioTeamMatch | null {
+export function matchKickioTeam(
+  guess: string,
+  teams: readonly KickioTeamRef[],
+  gender?: string | null,
+): KickioTeamMatch | null {
   const trimmed = guess.trim();
   if (!trimmed) return null;
 
@@ -774,6 +804,37 @@ export function matchKickioTeam(guess: string, teams: readonly KickioTeamRef[]):
   if (!normalizedGuess) return null;
   const normalized = teams.find((t) => normalizeKickioTeamName(t.name) === normalizedGuess);
   if (normalized) return { name: normalized.name, slug: normalized.slug, matchType: 'normalized' };
+
+  // A short form ("Tottenham", "Leeds", "Blackburn") that's a whole-word
+  // match inside (or containing) a canonical name - mirroring the
+  // containment step of Kickio's own match_team_smart, just without its
+  // alias-table/trigram steps either side of it (same reasoning as
+  // above). Confirmed directly against Kickio's live team list: this is
+  // NOT always safe to accept on its own - "Rangers" alone genuinely
+  // matches 9+ real, unrelated teams there (Carrick Rangers, Queens Park
+  // Rangers, Rangers FC (HK), Rangers du Congo, ...), and guessing among
+  // them would risk a confidently-wrong match, worse than staying
+  // unmatched. So this only ever accepts a containment match when
+  // exactly one candidate exists - if there's more than one, "Women" in
+  // the candidate's own name is tried once as a tiebreaker against this
+  // profile's already-resolved gender (confirmed against a real listing:
+  // "Tottenham" alone matches both "Tottenham Hotspur" and "Tottenham
+  // Hotspur Women" in Kickio's list), and if that still doesn't leave
+  // exactly one, it's left unmatched rather than guessed at.
+  const minLen = 4; // same length floor match_team_smart's own containment step uses
+  let candidates = teams.filter((t) => {
+    const n = normalizeKickioTeamName(t.name);
+    if (!n || n.length < minLen) return false;
+    return (` ${n} `).includes(` ${normalizedGuess} `) || (` ${normalizedGuess} `).includes(` ${n} `);
+  });
+  if (candidates.length > 1 && gender) {
+    const wantsWomens = /women/i.test(gender);
+    const genderMatched = candidates.filter((t) => /\bwomen'?s?\b/i.test(t.name) === wantsWomens);
+    if (genderMatched.length > 0) candidates = genderMatched;
+  }
+  if (candidates.length === 1) {
+    return { name: candidates[0].name, slug: candidates[0].slug, matchType: 'contained' };
+  }
 
   return null;
 }
@@ -1455,8 +1516,6 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       reviewReasons.push('team could not be determined from the available text');
     }
   }
-  const kickioTeamMatch = team && input.kickioTeams ? matchKickioTeam(team, input.kickioTeams) : null;
-
   // ---- Season ----
   const explicitSeason = caseInsensitiveGet(extracted, 'season', 'seasonReleased', 'year');
   let season: string | null = null;
@@ -1524,6 +1583,11 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   // ---- Gender ----
   const explicitGender = caseInsensitiveGet(extracted, 'gender', 'department');
   const gender = canonicalGender(explicitGender && /\b(kids|women)/i.test(explicitGender) ? explicitGender : title);
+
+  // Computed here (after gender, not right after team above) so the
+  // containment-match tiebreaker inside matchKickioTeam can use this
+  // profile's already-resolved gender - see its own comment.
+  const kickioTeamMatch = team && input.kickioTeams ? matchKickioTeam(team, input.kickioTeams, gender) : null;
 
   // ---- Issue / Special edition / Signed / Boxed (shirts only) ----
   let issue: string | null = null;
