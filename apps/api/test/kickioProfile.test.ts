@@ -1233,6 +1233,37 @@ describe('detectStockStatus', () => {
     expect(detectStockStatus('No longer available')).toBe('Out of Stock');
     expect(detectStockStatus('Still available - message to buy')).toBe('In Stock');
   });
+
+  it('ignores a stray bare "sold" in the wide text when a narrower bareWordText is supplied, but still trusts a real phrase there', () => {
+    // Real bug: "2021-22 Liverpool Nike Away Shirt *w/tags* XXXL" is a
+    // genuinely purchasable listing (live "Add to Bag"/Apple Pay checkout
+    // on the page) that this codebase reported "Out of Stock" for. Root
+    // cause: the page had no structured product/availability data (see
+    // buildKickioProfile's own review reason for this exact listing:
+    // "no explicit price field or structured product data was found"),
+    // so stock detection fell back to scanning the full page markdown,
+    // and this retailer's own sitewide boilerplate (a "4,231 shirts sold
+    // this month" trust badge) contains the bare word "sold" - the same
+    // contamination this codebase already found and fixed for
+    // shirt_type/issue/specialEdition on this exact retailer.
+    const bareWordOnlyInWideText = 'Customers also bought: 2022-23 Everton Shirt. 4,231 shirts sold this month.';
+    expect(
+      detectStockStatus(bareWordOnlyInWideText, null, '2021-22 Liverpool Nike Away Shirt *w/tags* XXXL'),
+    ).toBe('Unknown');
+    // A real bare "SOLD" stamp actually IN the narrower bareWordText must still work.
+    expect(detectStockStatus(bareWordOnlyInWideText, null, 'Man Utd Away Shirt SOLD')).toBe('Out of Stock');
+
+    // A genuine "Sold Out" PHRASE (not just the bare word) is a real,
+    // page-body signal recheckWorker's own sale detection relies on for
+    // retailers with no title marker - it's deliberately NOT narrowed the
+    // same way as the bare-word tier, so it must still be read from the
+    // full wide text regardless of what bareWordText says.
+    expect(detectStockStatus('£25 Sold out', null, '1998 France Home Shirt')).toBe('Out of Stock');
+
+    // A numeric count is likewise still read from the full wide text -
+    // unaffected by this fix, since count detection was never the risky part.
+    expect(detectStockStatus('Only 2 left in stock', null, 'Chelsea Home Shirt')).toBe('In Stock');
+  });
 });
 
 describe('buildKickioProfile', () => {
@@ -1288,6 +1319,31 @@ describe('buildKickioProfile', () => {
     expect(preMatch.identity.shirt_type).toBe('Pre-Match');
     expect(preMatch.confidence.shirt_type).toBe('certain');
     expect(preMatch.review_reason).not.toContain('no dedicated Type value');
+  });
+
+  it('does not report a genuinely purchasable listing as Out of Stock because of unrelated sitewide "sold" boilerplate', () => {
+    // Real bug/listing: "2021-22 Liverpool Nike Away Shirt *w/tags*
+    // XXXL" - a live, purchasable page (real "Add to Bag"/Apple Pay
+    // checkout) with no structured product/availability data (reproduced
+    // here via the same review reason the real listing had: no `price`
+    // and no `extracted.availability`), so stock detection fell back to
+    // scanning the full page markdown/description and picked up the bare
+    // word "sold" from unrelated boilerplate elsewhere on the page.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2021-22-liverpool-nike-away-shirt-xxxl',
+      title: '2021-22 Liverpool Nike Away Shirt *w/tags* XXXL',
+      description:
+        'Home Shop by Player New In Sale Free UK Delivery over £75 ' +
+        'Customers also bought: 2022-23 Everton Shirt. ' +
+        '4,231 shirts sold this month. Add to Bag Buy with Apple Pay ' +
+        'Trustpilot 4.7 stars 697 reviews',
+    });
+    // "Add to Bag" is a real IN_STOCK_PHRASES match, read from the full
+    // description text same as before (unaffected by this fix, since only
+    // the riskier bare-word tier was narrowed) - so once the bare "sold"
+    // false positive stops overriding it, this correctly resolves to
+    // "In Stock", not just "anything other than Out of Stock".
+    expect(profile.listing.stock_status).toBe('In Stock');
   });
 
   it('sets team_kickio_match when a live Kickio team list is supplied and the resolved team matches', () => {

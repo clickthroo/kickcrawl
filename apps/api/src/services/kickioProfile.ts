@@ -1494,20 +1494,48 @@ const LAST_ONE_PATTERN = /\b(last one|last item|final one|only one left)\b/i;
 /**
  * Availability signal, checked in order of how decisive/specific it is:
  *  1. An explicit numeric quantity (0 is decisive either way).
- *  2. A "<N> left/remaining/in stock/available" count in the text.
- *  3. "Last one" / "only one left" - still purchasable, just low stock.
- *  4. schema.org's Offer.availability enum, in URL or bare-token form.
- *  5. A specific out-of-stock phrase, then a specific in-stock phrase.
- *  6. A bare marketplace marker ("SOLD", "Reserved").
+ *  2. A "<N> left/remaining/in stock/available" count in `text`.
+ *  3. "Last one" / "only one left" in `text` - still purchasable, just low stock.
+ *  4. schema.org's Offer.availability enum, in URL or bare-token form, in `text`.
+ *  5. A specific out-of-stock phrase, then a specific in-stock phrase, in `text`.
+ *  6. A bare marketplace marker ("SOLD", "Reserved") in `bareWordText`.
  * "Sold out"/"out of stock" wins over a lingering "Add to cart" button when
  * both are present, since disabled buttons commonly stay in the markup
  * after an item sells out. Never guessed from absence alone: `null` means
  * there was no text to check at all, 'Unknown' means there was text but
  * none of the above signals matched it.
+ *
+ * Step 6 alone checks `bareWordText` (title + any explicit stock field)
+ * rather than `text` (which also carries the page's full description/
+ * markdown, up to 4000 chars) - confirmed on a real, genuinely-in-stock
+ * listing ("2021-22 Liverpool Nike Away Shirt *w/tags* XXXL", live "Add
+ * to Bag"/Apple Pay checkout buttons on the page, no structured
+ * availability data for this codebase to fall back to instead) that this
+ * codebase reported "Out of Stock" for: this retailer's own sitewide
+ * boilerplate (getContentHtml() in services/mainContent.ts only strips
+ * literal <nav>/<header>/<footer> tags, and this retailer's theme wraps
+ * its real nav/footer/trust-badge/chat-widget markup in plain <div>s
+ * instead, so sitewide text survives into every page's description - the
+ * same contamination this file already found and fixed for shirt_type/
+ * issue/specialEdition on this exact retailer) only needs ONE stray
+ * bare "sold" anywhere in up to 4000 characters of that boilerplate
+ * (e.g. a "12 shirts sold this month" trust badge, or an unrelated
+ * recommended item shown as sold out) to false-positive a real,
+ * purchasable listing - this codebase's own comment on
+ * OUT_OF_STOCK_BARE_WORDS already flagged it as the single riskiest,
+ * most guessable signal here, checked last for that reason.
+ * Steps 4-5 (the full phrases/schema tokens) are deliberately left
+ * scanning the full `text`, not narrowed the same way: an actual page-
+ * body "Sold Out"/"£25 Sold out" near a product's own price is a real,
+ * necessary signal recheckWorker's own sale-detection relies on for
+ * retailers with no dedicated title marker, and a complete, specific
+ * phrase like that is far less likely to be incidental sitewide
+ * boilerplate than the single common word "sold" alone.
  */
 export function detectStockStatus(
   text: string | null | undefined,
   quantity?: number | null,
+  bareWordText?: string | null,
 ): 'In Stock' | 'Out of Stock' | 'Unknown' | null {
   if (typeof quantity === 'number' && Number.isFinite(quantity)) {
     return quantity <= 0 ? 'Out of Stock' : 'In Stock';
@@ -1524,7 +1552,7 @@ export function detectStockStatus(
   if (OUT_OF_STOCK_PHRASES.test(text)) return 'Out of Stock';
   if (IN_STOCK_PHRASES.test(text)) return 'In Stock';
 
-  if (OUT_OF_STOCK_BARE_WORDS.test(text)) return 'Out of Stock';
+  if (OUT_OF_STOCK_BARE_WORDS.test(bareWordText ?? text)) return 'Out of Stock';
 
   return 'Unknown';
 }
@@ -1943,12 +1971,19 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     'stockLevel',
     'productAvailability',
   );
-  // Scan the explicit field (if the site has one) together with the title/
-  // description, not instead of it - a bare "SOLD" stamp is far more likely
-  // to show up in the title itself than in a dedicated stock field, which
-  // most sites Kickcrawl scrapes won't have configured at all.
+  // `stockText` (counts, schema tokens, and full out-of-stock/in-stock
+  // phrases) still scans the full haystack - a real per-product inventory
+  // count or a genuine page-body "Sold Out" near the price is a real
+  // signal recheckWorker's own sale detection relies on for retailers
+  // with no dedicated title marker. `bareWordText` (the single riskiest
+  // signal - a bare "sold"/"reserved" with no other context, see
+  // detectStockStatus's own comment) is deliberately narrower: the
+  // explicit field plus the TITLE only, never `description`/the rest of
+  // the page markdown, which this retailer's own sitewide boilerplate has
+  // already been confirmed (for other fields) to leak into.
   const stockText = explicitStock ? `${explicitStock} ${haystack}` : haystack;
-  const stockStatus = detectStockStatus(stockText, rawQuantity);
+  const stockBareWordText = explicitStock ? `${explicitStock} ${title}` : title;
+  const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText);
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};
