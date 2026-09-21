@@ -353,6 +353,17 @@ export function extractSeasonSpan(text: string): SeasonResult {
 // =========================================================================
 // Shirt type (Part 2 "Type" - Goalkeeper checked first, then Training/
 // Pre-Match, then Fourth/Third/Away/Home)
+//
+// Kickio's live "type" product_feature carries 10 variants, not the 8
+// this file originally mapped to - confirmed directly against the admin
+// UI's own Variants list (Home, Away, Third, Fourth, GK Home, GK Away, GK
+// Third, GK Fourth, Pre-Match, Training) and re-verified against the live
+// product_features row itself, which no longer matches the
+// 20260522030000_align_features_to_kickio.sql seed migration's 8-value
+// list this file was previously built from: Kickio has since added
+// "Pre-Match" and "Training" as real, flat Type values (not GK-qualified
+// - there's no "GK Training"), so they're no longer left null/
+// informational the way they were before.
 // =========================================================================
 
 const HOME_TOKEN = /\b(home|1st|primera|casa|domicile|heim|hemma)\b/;
@@ -368,44 +379,45 @@ const PREMATCH_TOKEN = /\b(pre[- ]?match|prematch)\b/;
 export interface ShirtTypeResult {
   type: string | null;
   certain: boolean;
-  informationalOnly: boolean;
 }
 
 export function detectShirtType(text: string): ShirtTypeResult {
   const l = ` ${text.toLowerCase().replace(/[_/|,]+/g, ' ').replace(/\s+/g, ' ')} `;
 
+  // Goalkeeper still takes priority over Training/Pre-Match, same as
+  // before - Kickio has no "GK Training"/"GK Pre-Match" variant, so a
+  // title naming both ("Goalkeeper Training Top") falls back to the
+  // existing GK-qualifier logic below rather than a flat "Training",
+  // pending real evidence either way.
   const goalkeeper = GOALKEEPER_TOKEN.test(l);
   if (goalkeeper) {
-    if (FOURTH_TOKEN.test(l)) return { type: 'GK Fourth', certain: true, informationalOnly: false };
-    if (THIRD_TOKEN.test(l)) return { type: 'GK Third', certain: true, informationalOnly: false };
-    if (AWAY_TOKEN.test(l)) return { type: 'GK Away', certain: true, informationalOnly: false };
-    if (HOME_TOKEN.test(l)) return { type: 'GK Home', certain: true, informationalOnly: false };
+    if (FOURTH_TOKEN.test(l)) return { type: 'GK Fourth', certain: true };
+    if (THIRD_TOKEN.test(l)) return { type: 'GK Third', certain: true };
+    if (AWAY_TOKEN.test(l)) return { type: 'GK Away', certain: true };
+    if (HOME_TOKEN.test(l)) return { type: 'GK Home', certain: true };
     // Goalkeeper confirmed, but no Home/Away/Third/Fourth qualifier found -
     // default to GK Home, but flag it as uncertain per the guide's rule that
     // Type is one of the fields that "must be certain".
-    return { type: 'GK Home', certain: false, informationalOnly: false };
+    return { type: 'GK Home', certain: false };
   }
 
-  // Training/Pre-Match have no dedicated Kickio Type enum value (Part 2) -
-  // don't force them into Home/Away.
-  if (TRAINING_TOKEN.test(l) || PREMATCH_TOKEN.test(l)) {
-    return { type: null, certain: false, informationalOnly: true };
-  }
+  if (PREMATCH_TOKEN.test(l)) return { type: 'Pre-Match', certain: true };
+  if (TRAINING_TOKEN.test(l)) return { type: 'Training', certain: true };
 
   if (FOURTH_TOKEN.test(l) || /\bfourth[- ]?(choice|kit|strip|shirt|jersey|top)\b/.test(l)) {
-    return { type: 'Fourth', certain: true, informationalOnly: false };
+    return { type: 'Fourth', certain: true };
   }
   if (THIRD_TOKEN.test(l) || /\bthird[- ]?(choice|kit|strip|shirt|jersey|top)\b/.test(l)) {
-    return { type: 'Third', certain: true, informationalOnly: false };
+    return { type: 'Third', certain: true };
   }
   if (AWAY_TOKEN.test(l) || /\b2nd\s+(shirt|jersey|kit|top|strip)\b/.test(l)) {
-    return { type: 'Away', certain: true, informationalOnly: false };
+    return { type: 'Away', certain: true };
   }
-  if (HOME_TOKEN.test(l)) return { type: 'Home', certain: true, informationalOnly: false };
+  if (HOME_TOKEN.test(l)) return { type: 'Home', certain: true };
 
   // No explicit token at all - Home is the documented default, but keep it
   // marked uncertain rather than "certain".
-  return { type: 'Home', certain: false, informationalOnly: false };
+  return { type: 'Home', certain: false };
 }
 
 // =========================================================================
@@ -1725,9 +1737,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     const explicitType = caseInsensitiveGet(extracted, 'type', 'shirtType', 'kitType');
     const r = detectShirtType(explicitType ?? title);
     shirtType = r.type;
-    if (r.informationalOnly) {
-      reviewReasons.push('title indicates a Training/Pre-Match kit - Kickio has no dedicated Type value for this');
-    } else if (r.type) {
+    if (r.type) {
       confidence.shirt_type = r.certain ? 'certain' : 'inferred';
       // Was a hardcoded "defaulted to Home" regardless of what r.type
       // actually was - confirmed misleading on every real "Goalkeeper

@@ -63,10 +63,26 @@ describe('detectShirtType', () => {
     expect(profile.identity.number).toBe('1');
   });
 
-  it('treats Training/Pre-Match as informational only, no enum value', () => {
-    const r = detectShirtType('Training Top');
-    expect(r.type).toBeNull();
-    expect(r.informationalOnly).toBe(true);
+  it('maps Training/Pre-Match to their own real Type values, not null', () => {
+    // Kickio's live "type" product_feature was re-checked directly
+    // against its admin UI's own Variants list and now has 10 values, not
+    // the 8 the original 20260522030000_align_features_to_kickio.sql
+    // seed migration had: "Pre-Match" and "Training" have since been
+    // added as real, flat Type values (no "GK Training" - Goalkeeper
+    // still takes priority, tested separately below), so they're no
+    // longer left null/flagged for review the way they used to be.
+    expect(detectShirtType('Training Top').type).toBe('Training');
+    expect(detectShirtType('Training Top').certain).toBe(true);
+    expect(detectShirtType('Pre-Match Shirt').type).toBe('Pre-Match');
+    expect(detectShirtType('Pre-Match Shirt').certain).toBe(true);
+  });
+
+  it('still prefers a GK-qualified type over Training/Pre-Match when both are present', () => {
+    // Kickio has no "GK Training"/"GK Pre-Match" variant, so Goalkeeper
+    // keeps priority over Training/Pre-Match here, same as it already has
+    // over Home/Away/Third/Fourth - pending real evidence that a listing
+    // actually needs a flat "Training" instead when both words appear.
+    expect(detectShirtType('Goalkeeper Training Top').type).toBe('GK Home');
   });
 
   it('detects Away', () => {
@@ -1248,6 +1264,30 @@ describe('buildKickioProfile', () => {
     expect(profile.confidence.team).toBe('certain');
     expect(profile.confidence.season).toBe('certain');
     expect(profile.needs_review).toBe(false);
+  });
+
+  it('maps a real training-top and pre-match-shirt listing to their own Type values end to end, with no leftover "no dedicated Type value" review reason', () => {
+    // Real titles: "2024-25 Rangers Castore 1/4 Zip Training Top *BNIB*
+    // TM7125-033" and "2025-26 Celtic adidas Pre-Match Shirt *BNIB*
+    // JN4956" - Kickio's live Type variants list now has "Training" and
+    // "Pre-Match" (see detectShirtType's own comment), so these should
+    // resolve to a certain, non-null shirt_type the same as any other
+    // qualifier, not the old null + "no dedicated Type value" review flag.
+    const training = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2024-25 Rangers Castore 1/4 Zip Training Top *BNIB* TM7125-033',
+    });
+    expect(training.identity.shirt_type).toBe('Training');
+    expect(training.confidence.shirt_type).toBe('certain');
+    expect(training.review_reason).not.toContain('no dedicated Type value');
+
+    const preMatch = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2025-26 Celtic adidas Pre-Match Shirt *BNIB* JN4956',
+    });
+    expect(preMatch.identity.shirt_type).toBe('Pre-Match');
+    expect(preMatch.confidence.shirt_type).toBe('certain');
+    expect(preMatch.review_reason).not.toContain('no dedicated Type value');
   });
 
   it('sets team_kickio_match when a live Kickio team list is supplied and the resolved team matches', () => {
