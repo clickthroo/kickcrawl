@@ -150,7 +150,7 @@ const MANUFACTURERS = [
   'Le Coq Sportif', 'Legea', 'Lotto', 'Luanvi', 'Macron', 'Marathon', 'Masita', 'Meyba',
   'Mitre', 'Mizuno', 'New Balance', 'NR', 'Nike', 'Olympikus', 'Patrick', 'Penalty', 'Pony',
   'Puma', 'Reebok', 'Reusch', 'Robey', 'Saller', 'Score Draw', 'Sergio Tacchini', 'Sondico',
-  'Soka', 'Stanno', 'Toffs', 'Topper', 'Uhlsport', 'Umbro', 'Under Armour', 'Vandanel',
+  'Soka', 'Stanno', 'TFG', 'Toffs', 'Topper', 'Uhlsport', 'Umbro', 'Under Armour', 'Vandanel',
   'Warrior', 'Wilson',
 ];
 
@@ -624,7 +624,7 @@ export function guessTeamFromTitle(title: string): string {
     // above), leaving the bare "w/tags" token to catch here.
     .replace(/\bw\/o?\s*tags?\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
-    .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
+    .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic|Limited Edition)\b/gi, '')
     // A manufacturer's own product-line name ("adidas Originals", "adidas
     // Essentials", "Nike Energy") is not part of the team - confirmed on
     // real listings surviving as "Liverpool Originals LFSTLR", "Manchester
@@ -767,12 +767,15 @@ export function guessTeamFromTitle(title: string): string {
   // Deliberately generic about which side of the hyphen has the letters
   // (this retailer uses both "digits-hyphen-digits" and "letters-hyphen-
   // alnum" shapes) rather than one narrow pattern per shape seen so far,
-  // and generously bounded (up to 8 characters either side) rather than
+  // and generously bounded (originally up to 8 characters either side,
+  // widened to 12 after a real listing - "2025-26 West Ham Umbro Away
+  // Shirt L/S *w/tags* XXXL TM12552NS-030" - surfaced a 9-character
+  // prefix, "TM12552NS", the first version didn't allow for) rather than
   // tuned tightly to only the exact lengths confirmed so far - a real
   // club number or season is never followed by a hyphenated alphanumeric
   // suffix like this at all, regardless of length, so there's no real
   // team name this could accidentally eat into.
-  c = c.replace(/\s+[A-Za-z0-9]{1,8}-[A-Za-z0-9]{2,8}$/, '').trim();
+  c = c.replace(/\s+[A-Za-z0-9]{1,12}-[A-Za-z0-9]{2,12}$/, '').trim();
   // A short (1-4 digit) trailing number, or a short (2-3 letter) all-caps
   // trailing code, is ALSO this retailer's own stock code, not a club
   // number or a real short abbreviation, specifically when
@@ -986,8 +989,24 @@ function stripTrailingSizeCode(text: string): string {
 // way - confirmed on a real listing ("... x George Best Track Pants #7
 // *BNIB* IV7536") surviving as player name "Best Track Pants" instead of
 // just "Best".
-const PLAYER_NAME_NOISE_WORDS =
-  /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC|Track|Pants|Bottoms|Drill)\b/gi;
+// "Goalkeeper"/"GK" is the same shape again - confirmed on real listings
+// ("1988-90 England Goalkeeper Shirt #1 M", "2000-01 Everton Goalkeeper
+// Shirt White #1 M") surviving as player "Goalkeeper" and "Goalkeeper
+// White" respectively: #1 is this retailer's own convention for a
+// goalkeeper shirt's number, not a back-printed name, and neither title
+// has a real surname anywhere in it, but with "Goalkeeper" missing from
+// this exclusion list it was being read as if it were one.
+// Also reuses COLOUR_WORDS (same list, same reasoning as its own use in
+// guessTeamFromTitle - see that comment) - confirmed on a real listing
+// ("2000-01 Everton Goalkeeper Shirt White #1 M") surviving as player
+// "White": this retailer's own word order here is "<type> Shirt <colour>
+// #<number>", not a back-printed name, and without the colour word
+// excluded it was the only thing left over once "Goalkeeper"/"Shirt" (see
+// above) were already stripped.
+const PLAYER_NAME_NOISE_WORDS = new RegExp(
+  `\\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Goalkeeper|GK|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC|Track|Pants|Bottoms|Drill|${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`,
+  'gi',
+);
 
 function cleanPlayerNameCandidate(raw: string): string | null {
   const cleaned = raw.trim().replace(PLAYER_NAME_NOISE_WORDS, '').trim();
@@ -1710,7 +1729,16 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       reviewReasons.push('title indicates a Training/Pre-Match kit - Kickio has no dedicated Type value for this');
     } else if (r.type) {
       confidence.shirt_type = r.certain ? 'certain' : 'inferred';
-      if (!r.certain) reviewReasons.push('no explicit Home/Away/Third/Fourth/GK keyword found - type defaulted to Home');
+      // Was a hardcoded "defaulted to Home" regardless of what r.type
+      // actually was - confirmed misleading on every real "Goalkeeper
+      // Shirt" listing with no Home/Away/Third/Fourth qualifier (e.g.
+      // "2022-23 Manchester United adidas Goalkeeper Shirt M H64059"):
+      // detectShirtType() correctly defaults an unqualified goalkeeper
+      // shirt to "GK Home", not "Home" (see its own comment), but this
+      // message told a reviewer it had defaulted to "Home" either way.
+      if (!r.certain) {
+        reviewReasons.push(`no explicit Home/Away/Third/Fourth/GK keyword found - type defaulted to ${r.type}`);
+      }
     }
   }
 

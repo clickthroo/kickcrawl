@@ -30,6 +30,39 @@ describe('detectShirtType', () => {
     expect(r.certain).toBe(false);
   });
 
+  it('names the actual defaulted type ("GK Home") in buildKickioProfile\'s review reason, not a hardcoded "Home"', () => {
+    // Real title: "2022-23 Manchester United adidas Goalkeeper Shirt M
+    // H64059" has no Home/Away/Third/Fourth qualifier, so detectShirtType
+    // correctly defaults it to "GK Home" (asserted above) - but the
+    // review-reason message buildKickioProfile pushed for any uncertain
+    // type was a hardcoded "...type defaulted to Home" regardless of what
+    // r.type actually was, misleading a reviewer on every such goalkeeper
+    // listing.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2022-23 Manchester United adidas Goalkeeper Shirt M H64059',
+    });
+    expect(profile.identity.shirt_type).toBe('GK Home');
+    expect(profile.review_reason).toContain(
+      'no explicit Home/Away/Third/Fourth/GK keyword found - type defaulted to GK Home',
+    );
+  });
+
+  it('resolves player to null (not the team name) on a marked-number goalkeeper shirt with no real back-print', () => {
+    // Real title: "1988-90 England Goalkeeper Shirt #1 M" - with the full
+    // team context buildKickioProfile has (unlike bare
+    // extractPlayerNameFromTitle, tested above), normalizePlayerName
+    // recognises "England" as a leftover team-name fragment, not a real
+    // player, and correctly reduces it to null rather than surfacing the
+    // team's own name as if it were a back-printed surname.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '1988-90 England Goalkeeper Shirt #1 M',
+    });
+    expect(profile.identity.player).toBeNull();
+    expect(profile.identity.number).toBe('1');
+  });
+
   it('treats Training/Pre-Match as informational only, no enum value', () => {
     const r = detectShirtType('Training Top');
     expect(r.type).toBeNull();
@@ -638,6 +671,33 @@ describe('guessTeamFromTitle', () => {
       guessTeamFromTitle('2025-26 Manchester United x adidas Ultimate365 Tour WIND.RDY Hoodie'),
     ).toBe('Manchester United');
   });
+
+  it('strips "TFG", a manufacturer this retailer\'s own vendor list has but this codebase\'s MANUFACTURERS list was missing', () => {
+    // Real title: "2002-03 Wrexham TFG Match Issue Third Shirt" was
+    // surviving as "Wrexham TFG" - confirmed via
+    // vintagefootballshirts.com/collections/vendors?q=TFG that TFG is one
+    // of this retailer's own vendor/manufacturer facets, not a stray word.
+    expect(guessTeamFromTitle('2002-03 Wrexham TFG Match Issue Third Shirt')).toBe('Wrexham');
+  });
+
+  it('strips "Limited Edition" the same way as "Centenary"/"Anniversary"/"Jubilee"', () => {
+    // Real title: "2013 Madureira Limited Edition 'Che Guevara 50 Years'
+    // GK Shirt" was surviving as "Madureira Limited Edition" once the
+    // quoted aside itself was already being stripped correctly.
+    expect(
+      guessTeamFromTitle("2013 Madureira Limited Edition 'Che Guevara 50 Years' GK Shirt"),
+    ).toBe('Madureira');
+  });
+
+  it('widens the hyphenated stock-code strip to a 9+ character prefix', () => {
+    // Real title: "2025-26 West Ham Umbro Away Shirt L/S *w/tags* XXXL
+    // TM12552NS-030" was surviving as "West Ham TM12552NS-030" - the
+    // 9-character prefix "TM12552NS" exceeded the strip's original 8-
+    // character limit.
+    expect(
+      guessTeamFromTitle('2025-26 West Ham Umbro Away Shirt L/S *w/tags* XXXL TM12552NS-030'),
+    ).toBe('West Ham');
+  });
 });
 
 describe('matchKickioTeam', () => {
@@ -869,6 +929,28 @@ describe('extractPlayerNameFromTitle', () => {
         '2024-25 Manchester United adidas Originals x George Best Track Pants #7 *BNIB* IV7536',
       ),
     ).toBe('Best');
+  });
+
+  it('does not read "Goalkeeper"/"GK" or a colour word right before a shirt number as if it were a player name', () => {
+    // Real titles, found while auditing every real Type value against
+    // live listings: "1988-90 England Goalkeeper Shirt #1 M" was
+    // surviving as player "Goalkeeper", and "2000-01 Everton Goalkeeper
+    // Shirt White #1 M" as "Goalkeeper White" (then, once "Goalkeeper"
+    // alone was excluded, as bare "White") - neither title has a real
+    // back-printed surname anywhere in it: "#1" is this retailer's own
+    // convention for an unqualified goalkeeper shirt's number, and
+    // "White" describes the shirt's colour, not a person. This function
+    // has no team context of its own: for the 3-word England title, what
+    // survives once "Goalkeeper"/"Shirt" are excluded is the bare team
+    // name itself ("England"), within the tail match's own 3-word cap -
+    // buildKickioProfile (tested separately below) is what reduces that
+    // further to null, via normalizePlayerName's own team-context
+    // stripping. The 4-word Everton title falls outside that same 3-word
+    // cap once "Everton" is counted, so "Goalkeeper Shirt White" is all
+    // that's captured, and excluding all three of those noise words
+    // empties the candidate straight to null here already.
+    expect(extractPlayerNameFromTitle('1988-90 England Goalkeeper Shirt #1 M')).toBe('England');
+    expect(extractPlayerNameFromTitle('2000-01 Everton Goalkeeper Shirt White #1 M')).toBeNull();
   });
 });
 
