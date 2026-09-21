@@ -486,7 +486,17 @@ export function guessTeamFromTitle(title: string): string {
     c = c.replace(/\s+\p{Lu}[\p{L}'’.-]*\s+\d{1,2}$/u, '').trim();
   }
   c = c
-    .replace(/\d{4}[-/]\d{2,4}/g, '')
+    // Bounded to a 4-digit group that isn't itself part of a longer
+    // alphanumeric run - confirmed on real listings surviving as "Italy
+    // 76" and "Birmingham BM": the retailer's own numeric stock codes
+    // ("765650-02", "BM0071-459") happen to contain a run that LOOKS like
+    // this same "####-##" season shape in the middle of them, and an
+    // unguarded version of this regex was matching that embedded run and
+    // stripping it, leaving only the digits/letters before it behind. A
+    // real season is always its own standalone token (bounded by
+    // whitespace or the start of the title, e.g. "2022-23 Italy ..."),
+    // never glued directly onto other letters or digits like a code is.
+    .replace(/(?<![A-Za-z0-9])\d{4}[-/]\d{2,4}(?![A-Za-z0-9])/g, '')
     .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}(?![\d/-])/g, '')
     .replace(/\b\d{4}\b/g, '')
     .replace(/\b(Home|Away|Third|Fourth|Goalkeeper|GK|Training|Pre[- ]?Match)\b/gi, '')
@@ -513,7 +523,10 @@ export function guessTeamFromTitle(title: string): string {
     // "Anthem Heritage" is Macron's own jacket product-line name, the
     // same family - confirmed on a real listing surviving as "Wrexham
     // Anthem Heritage" once "Jacket" itself was already being stripped.
-    .replace(/\b(Graphic|Presentation|Anthem Heritage)\b/gi, '')
+    // "Drill" is the same shape again for a training top - confirmed on a
+    // real listing surviving as "Manchester United Drill" once "Top"
+    // itself was already being stripped by the garment-word strip above.
+    .replace(/\b(Graphic|Presentation|Anthem Heritage|Drill)\b/gi, '')
     .replace(/\b1\/4\s*Zip\b/gi, '')
     .replace(/\bQuarter[- ]?Zip\b/gi, '')
     .replace(/\b(BNWT|BNIB|BNWOT|Player Issue|Match Worn|Match Issued)\b/gi, '')
@@ -538,8 +551,16 @@ export function guessTeamFromTitle(title: string): string {
     // Anchored to a standalone "x" token (never matches the "X" fused
     // inside a size like "2XL", since there's no word boundary there)
     // followed by 1-3 genuinely capitalized words, so it can't mistake
-    // ordinary lowercase text for a collab name.
-    .replace(/\b[xX]\b\s+(?:[A-ZÀ-Ý][a-zà-ÿ'’-]*\s*){1,3}/g, '')
+    // ordinary lowercase text for a collab name. Each "word" requires at
+    // least one lowercase letter after its capital, not just "*" (zero or
+    // more) - confirmed on a real listing ("... x George Best Track Pants
+    // #7 *BNIB* IV7536") surviving as "Manchester United 7536": with "*",
+    // a bare capital letter alone (no lowercase after it) still counted
+    // as a whole "word", so this was greedily eating "I" and "V" off the
+    // FRONT of the unrelated trailing stock code "IV7536" as two more
+    // fake collab-name words, on top of the real "George", stranding the
+    // digits with nothing left to anchor the later code strips on.
+    .replace(/\b[xX]\b\s+(?:[A-ZÀ-Ý][a-zà-ÿ'’-]+\s*){1,3}/g, '')
     .replace(/\b\d+\s*(?:st|nd|rd|th)\b/gi, '')
     .replace(/\b\d+\s*Years?\b/gi, '')
     .replace(/\b\d{1,2}\s*\/\s*10\b/g, '')
@@ -585,10 +606,16 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/\bExtra[- ]?Large\b/gi, '')
     .replace(/\b(Small|Medium|Large)\b/gi, '')
     .replace(/\b(XXXL|XXL|XL|XS|2XL|3XL|4XL|5XL|X-?Large|XX-?Large)\b/gi, '')
-    // Tournament words are never part of a national team's own name (the
-    // team itself, e.g. "France", should survive - only the tournament
-    // label should go).
-    .replace(/\b(World\s*Cup|FIFA|Olympics?|Euro'?s?|Copa\s+America|Africa\s+Cup|AFCON|Nations\s+League|Confederations\s+Cup)\b/gi, '')
+    // Tournament/competition words are never part of a team's own name -
+    // for a national side (the team itself, e.g. "France", should survive,
+    // only the tournament label should go) or a club (a cup win being
+    // commemorated is not the club's name either) - confirmed on a real
+    // listing surviving as "Southampton FA Cup" (a "30th Anniversary" of
+    // an FA Cup win, per its own title).
+    .replace(
+      /\b(World\s*Cup|FIFA|Olympics?|Euro'?s?|Copa\s+America|Africa\s+Cup|AFCON|Nations\s+League|Confederations\s+Cup|FA\s+Cup|League\s+Cup|Community\s+Shield|Champions\s+League|Europa\s+League|Conference\s+League|Super\s+Cup)\b/gi,
+      '',
+    )
     .replace(/\([^)]*\)/g, '')
     // A quoted aside ("2019 Sevilla Nike 'Antonio Puerta Trophy' Home
     // Shirt") names a special edition/commemoration, not the team - same
@@ -612,6 +639,16 @@ export function guessTeamFromTitle(title: string): string {
   // (Hannover 96, Bayer 04 Leverkusen), which is always 4 digits or fewer
   // and deliberately left alone.
   c = c.replace(/\s+\d{5,}$/, '').trim();
+  // A trailing numeric stock code that itself contains a hyphen ("765650-
+  // 02", "BM0071-459") is still this retailer's own SKU, not a club
+  // number or season - confirmed on real listings that were surviving as
+  // "Italy 76" and "Birmingham BM" before the season-span regex above was
+  // guarded against matching a run embedded inside one of these (see its
+  // own comment): once that stopped silently absorbing most of the code
+  // by accident, the whole thing needed an actual strip of its own, since
+  // no other rule here tolerates an internal hyphen. A real club number
+  // or season is never followed by a hyphenated digit suffix like this.
+  c = c.replace(/\s+[A-Za-z]{0,3}\d{4,6}-\d{2,4}$/, '').trim();
   // A short (1-4 digit) trailing number, or a short (2-3 letter) all-caps
   // trailing code, is ALSO this retailer's own stock code, not a club
   // number or a real short abbreviation, specifically when
@@ -780,9 +817,13 @@ function stripTrailingSizeCode(text: string): string {
 // name anywhere near it (a blank/number-only shirt) - without it, the
 // team-name word immediately preceding the marker could otherwise
 // survive as a false "player name" whenever team detection didn't happen
-// to use the exact same abbreviated form as the title.
+// to use the exact same abbreviated form as the title. "Track"/"Pants"/
+// "Bottoms"/"Drill" cover this retailer's training-wear listings the same
+// way - confirmed on a real listing ("... x George Best Track Pants #7
+// *BNIB* IV7536") surviving as player name "Best Track Pants" instead of
+// just "Best".
 const PLAYER_NAME_NOISE_WORDS =
-  /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC)\b/gi;
+  /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC|Track|Pants|Bottoms|Drill)\b/gi;
 
 function cleanPlayerNameCandidate(raw: string): string | null {
   const cleaned = raw.trim().replace(PLAYER_NAME_NOISE_WORDS, '').trim();

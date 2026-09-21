@@ -421,6 +421,55 @@ describe('guessTeamFromTitle', () => {
     // real club number (Hannover 96), so it's left alone.
     expect(guessTeamFromTitle('Arsenal 96')).toBe('Arsenal 96');
   });
+
+  it('strips a club competition name being commemorated, not just a national-team tournament', () => {
+    // Real title from a live listing: "Team: Southampton FA Cup" - a "30th
+    // Anniversary" shirt commemorating an FA Cup win, same bug shape as
+    // the World Cup/Euros strip above but for a club competition instead
+    // of a national tournament.
+    expect(guessTeamFromTitle("2006 Southampton FA Cup 30th Anniversary Home Shirt")).toBe('Southampton');
+  });
+
+  it('strips "Drill" the same way as "Graphic"/"Presentation" - a training-top style word, not the team', () => {
+    // Real title from a live listing: "Team: Manchester United Drill" -
+    // same shape as "Wrexham Anthem Heritage" above, surviving even once
+    // "Top" itself was already being stripped by the garment-word strip.
+    expect(guessTeamFromTitle('1992-93 Manchester United Umbro Drill Top')).toBe('Manchester United');
+  });
+
+  it('does not read a numeric stock code\'s own internal "####-##" run as a season', () => {
+    // Real title from a live listing: "Team: Italy 76" - the retailer's
+    // own numeric SKU "765650-02" happens to contain a run ("5650-02")
+    // shaped exactly like a season span, and an unguarded season regex
+    // was matching and stripping just that middle run, leaving only the
+    // leading "76" of the code behind attached to the team.
+    expect(guessTeamFromTitle('2022-23 Italy Puma Away Shirt *w/tags* 765650-02')).toBe('Italy');
+  });
+
+  it('strips a trailing stock code that mixes letters, digits, and a hyphen', () => {
+    // Real title from a live listing: "Team: Birmingham BM" - same
+    // underlying season-regex bug as "Italy 76" above ("BM0071-459"
+    // contains "0071-459", shaped like a season span), but here the
+    // leftover fragment kept a couple of the code's own leading letters
+    // too, so it needed a real strip for the whole hyphenated shape once
+    // the season regex stopped silently absorbing most of it by accident.
+    expect(guessTeamFromTitle('2025-26 Birmingham Nike Home Shirt *BNIB* BM0071-459')).toBe('Birmingham');
+  });
+
+  it('does not let the "x <collab name>" strip eat into an unrelated trailing stock code', () => {
+    // Real title from a live listing: "Team: Manchester United 7536" -
+    // the collab-name strip's per-word pattern previously allowed a bare
+    // capital letter with nothing after it to count as a whole "word", so
+    // it was greedily eating "I" and "V" off the front of the unrelated
+    // trailing stock code "IV7536" as two more fake collab-name words (on
+    // top of the real "George"), stranding the digits with nothing left
+    // to anchor the later code strips on.
+    expect(
+      guessTeamFromTitle(
+        '2024-25 Manchester United adidas Originals x George Best Track Pants #7 *BNIB* IV7536',
+      ),
+    ).toBe('Manchester United');
+  });
 });
 
 describe('matchKickioTeam', () => {
@@ -548,6 +597,17 @@ describe('extractPlayerNameFromTitle', () => {
 
   it('does not mistake a marketplace trust badge ("No.1 seller") for a player name', () => {
     expect(extractPlayerNameFromTitle('No.1 seller! Man Utd Away Shirt')).toBeNull();
+  });
+
+  it('strips "Track"/"Pants" the same way as "Shirt"/"Top", not just as part of the surname', () => {
+    // Real title from a live listing: player name was surviving as "Best
+    // Track Pants" instead of just "Best" on this training-wear tribute
+    // item, since "Track"/"Pants" weren't in the noise-word list yet.
+    expect(
+      extractPlayerNameFromTitle(
+        '2024-25 Manchester United adidas Originals x George Best Track Pants #7 *BNIB* IV7536',
+      ),
+    ).toBe('Best');
   });
 });
 
