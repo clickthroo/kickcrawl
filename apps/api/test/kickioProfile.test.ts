@@ -470,6 +470,39 @@ describe('guessTeamFromTitle', () => {
       ),
     ).toBe('Manchester United');
   });
+
+  it('strips a size letter + hyphenated letters-then-digits stock code together', () => {
+    // Real title from a live listing: "Team: Rangers M RAN-002SSA" - the
+    // size+code pair strip's character class didn't allow a hyphen, so it
+    // couldn't reach a code shaped like this even with a size letter
+    // right in front of it to anchor on; needed the same generalized
+    // hyphenated-code strip that fixed "Italy 76"/"Birmingham BM" above,
+    // broadened to also cover this "letters-hyphen-alnum" shape (not just
+    // "digits-hyphen-digits").
+    expect(guessTeamFromTitle('2019-20 Rangers Hummel Away Shirt *w/tags* M RAN-002SSA')).toBe('Rangers');
+  });
+
+  it('does not strip "New" out of the manufacturer name "New Balance"', () => {
+    // Real title from a live listing: "Team: Liverpool Balance" - the
+    // condition-word strip's bare "New" alternative was matching inside
+    // "New Balance" before the manufacturer loop ever got a chance to see
+    // the whole phrase, leaving "Balance" behind once "New" alone had
+    // already been removed from it.
+    expect(guessTeamFromTitle('2017-18 Liverpool New Balance Home Shirt')).toBe('Liverpool');
+  });
+
+  it('cleans up an empty quote pair left behind once its content was already stripped', () => {
+    // Real title from a live listing: "Team: Liverpool Balance ''" - the
+    // quoted-aside strip required at least one character between the
+    // quotes ("+"), but the digit+"Years" strip earlier in the chain had
+    // already emptied out "125 Years" from inside the quotes by the time
+    // this one ran, so it couldn't match (let alone remove) the now-empty
+    // pair, leaving the bare quote marks behind as their own leftover
+    // junk on top of the "New Balance" bug above.
+    expect(
+      guessTeamFromTitle("2017-18 Liverpool New Balance '125 Years' Home Shirt Lallana #20 XL"),
+    ).toBe('Liverpool');
+  });
 });
 
 describe('matchKickioTeam', () => {
@@ -514,6 +547,99 @@ describe('matchKickioTeam', () => {
   it('returns null for a blank guess', () => {
     expect(matchKickioTeam('', teams)).toBeNull();
     expect(matchKickioTeam('   ', teams)).toBeNull();
+  });
+
+  describe('containment fallback', () => {
+    it('matches a short form that is unambiguously contained in exactly one canonical name', () => {
+      // Confirmed directly against Kickio's live team list: "Leeds" and
+      // "Blackburn" each match exactly one real team there ("Leeds
+      // United", "Blackburn Rovers") - no other team name contains
+      // either word, so this is safe to accept without a gender
+      // tiebreaker or any other extra evidence.
+      const leedsTeams = [{ name: 'Leeds United', slug: 'leeds-united' }, { name: 'Arsenal', slug: 'arsenal' }];
+      expect(matchKickioTeam('Leeds', leedsTeams)).toEqual({
+        name: 'Leeds United',
+        slug: 'leeds-united',
+        matchType: 'contained',
+      });
+
+      const blackburnTeams = [{ name: 'Blackburn Rovers', slug: 'blackburn-rovers' }];
+      expect(matchKickioTeam('Blackburn', blackburnTeams)).toEqual({
+        name: 'Blackburn Rovers',
+        slug: 'blackburn-rovers',
+        matchType: 'contained',
+      });
+    });
+
+    it('breaks a tie between a men\'s and women\'s team of the same name using the profile\'s own gender', () => {
+      // Confirmed directly against Kickio's live team list: "Tottenham"
+      // alone matches BOTH "Tottenham Hotspur" and "Tottenham Hotspur
+      // Women" there - genuinely ambiguous by containment alone, so the
+      // already-resolved gender field is used to pick between them
+      // rather than guessing.
+      const spursTeams = [
+        { name: 'Tottenham Hotspur', slug: 'tottenham-hotspur' },
+        { name: 'Tottenham Hotspur Women', slug: 'tottenham-hotspur-women' },
+      ];
+      expect(matchKickioTeam('Tottenham', spursTeams, 'Mens')).toEqual({
+        name: 'Tottenham Hotspur',
+        slug: 'tottenham-hotspur',
+        matchType: 'contained',
+      });
+      expect(matchKickioTeam('Tottenham', spursTeams, 'Womens')).toEqual({
+        name: 'Tottenham Hotspur Women',
+        slug: 'tottenham-hotspur-women',
+        matchType: 'contained',
+      });
+    });
+
+    it('resolves "Rangers" via normalized equality, not containment, despite 9+ real teams sharing the word', () => {
+      // Confirmed directly against Kickio's live team list: "Rangers"
+      // alone is a SUBSTRING of 9+ real, unrelated teams there (Carrick
+      // Rangers, Queens Park Rangers, Rangers FC (HK), Rangers du Congo,
+      // ...), which would make blind containment matching genuinely
+      // ambiguous - but "Rangers FC" is the only one of them whose name
+      // normalizes down to exactly "rangers" (stripping "FC" as a bare
+      // club-designator suffix; none of the others have just a
+      // designator word and nothing else), so the existing normalized-
+      // equality step above already resolves this correctly on its own,
+      // before containment ever needs to run.
+      const rangersTeams = [
+        { name: 'Rangers FC', slug: 'rangers-fc' },
+        { name: 'Queens Park Rangers', slug: 'queens-park-rangers' },
+        { name: 'Carrick Rangers', slug: 'carrick-rangers' },
+        { name: 'Rangers du Congo', slug: 'rangers-du-congo' },
+      ];
+      expect(matchKickioTeam('Rangers', rangersTeams, 'Mens')).toEqual({
+        name: 'Rangers FC',
+        slug: 'rangers-fc',
+        matchType: 'normalized',
+      });
+    });
+
+    it('stays unmatched when a short form is genuinely ambiguous by containment, even with a gender hint', () => {
+      // Unlike "Rangers" above, none of these normalize down to bare
+      // "real" (each keeps its own distinguishing second word), so this
+      // reaches the containment step - where it's genuinely ambiguous
+      // among three real, unrelated clubs, and none of them differ by
+      // "Women" either, so the gender tiebreaker can't help. Guessing
+      // among them would risk a confidently-wrong match, worse than
+      // staying unmatched.
+      const realTeams = [
+        { name: 'Real Madrid', slug: 'real-madrid' },
+        { name: 'Real Sociedad', slug: 'real-sociedad' },
+        { name: 'Real Betis', slug: 'real-betis' },
+      ];
+      expect(matchKickioTeam('Real', realTeams, 'Mens')).toBeNull();
+    });
+
+    it('does not match a canonical name shorter than the containment length floor', () => {
+      // Same length guard match_team_smart's own containment step uses -
+      // a very short canonical name is too easy to coincidentally contain
+      // (or be contained by) an unrelated guess.
+      const shortNameTeams = [{ name: 'PSV', slug: 'psv' }];
+      expect(matchKickioTeam('PSV Eindhoven', shortNameTeams)).toBeNull();
+    });
   });
 });
 
