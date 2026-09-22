@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { ACCEPT_HEADER, ACCEPT_LANGUAGE, randomUserAgent } from './userAgents.js';
 import { isBlockPage } from './blockDetector.js';
-import { closeBrowser, getBrowser, withBrowserSlot } from './browser.js';
+import { closeBrowser, getBrowser, RELAUNCH_BACKOFF_MS, withBrowserSlot } from './browser.js';
 import { acquireSlot } from './rateLimiter.js';
 import { getCrawlDelay, isAllowedByRobots } from './robots.js';
 import { assertSafeUrl, safeFetch, UnsafeUrlError } from './urlSafety.js';
@@ -208,6 +208,17 @@ export async function fetchWithBrowser(
       const message = err instanceof Error ? err.message : String(err);
       if (BROWSER_FATAL_PATTERN.test(message)) {
         await closeBrowser().catch(() => undefined);
+        // Applied here, unconditionally, rather than inside closeBrowser()
+        // itself - a chromium.launch() failure (getBrowser(), browser.ts)
+        // already nulls the memoized browser in its OWN catch handler
+        // before this code ever runs, so closeBrowser() sees nothing to
+        // close and returns immediately; a backoff placed only inside it
+        // would silently never fire for that exact failure mode. Confirmed
+        // in production: that's precisely what happened - launch failures
+        // were the majority of the crash-storm failures (45 of 59 in one
+        // job) and kept retrying every ~2s with no pause at all, even
+        // after a first attempt at this fix had already shipped.
+        await new Promise((resolve) => setTimeout(resolve, RELAUNCH_BACKOFF_MS));
       }
       throw err;
     }

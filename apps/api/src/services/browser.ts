@@ -39,20 +39,18 @@ export function getBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
-// Both callers of closeBrowser() (fetcher.ts) are already crash/timeout
-// recovery paths, never a routine close - so a brief pause here, after
-// every one of them, is never slowing down a healthy crawl. Confirmed in
-// production: a single crawl job hit ~46 consecutive "browserType.launch:
-// ... browser has been closed" failures in under two minutes (Chromium's
-// own "Failed to launch zygote process" underneath each one), one
-// immediate relaunch attempt right after the previous failure, before
-// finally recovering on its own. That shape - every single relaunch
-// failing the instant the last one did - points at container-level
-// resource pressure (likely leftover Chromium sub-processes from the
-// rapid crash/relaunch cycle itself not yet reaped) that an immediate
-// retry only piles onto harder. Giving the OS a moment before the next
-// launch attempt lets whatever it was short on actually clear.
-const RELAUNCH_BACKOFF_MS = 3_000;
+// Exported so fetcher.ts's fatal-crash catch block can apply this same
+// pause unconditionally, once, regardless of which internal path already
+// reset the memoized browser (see RELAUNCH_BACKOFF_MS below for why a
+// pause is needed at all - a first attempt at this, entirely inside
+// closeBrowser() below, silently did nothing on a chromium.launch()
+// failure specifically: getBrowser()'s own catch above already nulls
+// browserPromise before closeBrowser() ever runs, so its `if
+// (!browserPromise) return;` guard skipped the wait every time - which,
+// confirmed in production, was exactly the most common failure mode (45
+// of 59 browser-crash failures in one job were launch failures), so the
+// backoff was effectively never firing).
+export const RELAUNCH_BACKOFF_MS = 3_000;
 
 export async function closeBrowser(): Promise<void> {
   if (!browserPromise) return;
@@ -74,7 +72,6 @@ export async function closeBrowser(): Promise<void> {
     // Already gone - nothing left to close, and the reset above already
     // guarantees the next getBrowser() launches a fresh instance.
   }
-  await new Promise((resolve) => setTimeout(resolve, RELAUNCH_BACKOFF_MS));
 }
 
 /**
