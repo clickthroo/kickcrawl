@@ -39,6 +39,19 @@ export function getBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
+// Exported so fetcher.ts's fatal-crash catch block can apply this same
+// pause unconditionally, once, regardless of which internal path already
+// reset the memoized browser (see RELAUNCH_BACKOFF_MS below for why a
+// pause is needed at all - a first attempt at this, entirely inside
+// closeBrowser() below, silently did nothing on a chromium.launch()
+// failure specifically: getBrowser()'s own catch above already nulls
+// browserPromise before closeBrowser() ever runs, so its `if
+// (!browserPromise) return;` guard skipped the wait every time - which,
+// confirmed in production, was exactly the most common failure mode (45
+// of 59 browser-crash failures in one job were launch failures), so the
+// backoff was effectively never firing).
+export const RELAUNCH_BACKOFF_MS = 3_000;
+
 export async function closeBrowser(): Promise<void> {
   if (!browserPromise) return;
   // Clear the memoized reference before even attempting to close - a

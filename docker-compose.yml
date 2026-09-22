@@ -45,7 +45,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       PROXY_URL: ${PROXY_URL:-}
-      DEFAULT_USER_AGENT: ${DEFAULT_USER_AGENT:-KickioBot/1.0 (+https://kickio.com/bot)}
+      DEFAULT_USER_AGENT: ${DEFAULT_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@kickio.com}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret-change-me}

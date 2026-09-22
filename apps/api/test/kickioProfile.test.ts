@@ -1039,6 +1039,32 @@ describe('extractSizeFromTitle', () => {
     expect(extractSizeFromTitle('(XXS)')).toBe('9-10 Years');
     expect(extractSizeFromTitle('XXS')).toBe('9-10 Years');
   });
+
+  it('recognises a bare single-letter size (S/M/L) right after this retailer\'s own condition marker', () => {
+    // Real listing that was mapping no size at all: "2022-23 England Nike
+    // Away Shirt *w/tags* M" - every check above requires a label,
+    // brackets, a spelled-out word, or (the unconditional bare check) a
+    // 2+ character code, so a bare "M" with none of those fell through to
+    // null.
+    expect(extractSizeFromTitle('2022-23 England Nike Away Shirt *w/tags* M')).toBe('M');
+    // Same shape, size followed by this retailer's own retro/SKU code.
+    expect(extractSizeFromTitle('2022-23 Tottenham Nike Player Issue Third Shirt *w/tags* M Retro DN')).toBe('M');
+    expect(extractSizeFromTitle('2016-17 England Nike Away Shirt *w/tags* XL Retro 72')).toBe('XL');
+  });
+
+  it('does not mistake this retailer\'s "L/S" (long-sleeve) marker for a size L', () => {
+    // Real listing with no size in the title at all: "2025-26 Manchester
+    // City Puma Home Shirt L/S *w/tags* 78" - "L/S" sits BEFORE the
+    // condition marker, and "78" (this retailer's own stock code) sits
+    // after it but isn't one of the known size tokens, so this correctly
+    // finds no size rather than misreading "L/S" as "L".
+    expect(extractSizeFromTitle('2025-26 Manchester City Puma Home Shirt L/S *w/tags* 78')).toBeNull();
+  });
+
+  it('recognises a bare single-letter size as the very last word of the title, with no condition marker', () => {
+    expect(extractSizeFromTitle('2013-14 Leeds Macron Home Shirt S')).toBe('S');
+    expect(extractSizeFromTitle('2013-14 Leeds Macron Home Shirt L')).toBe('L');
+  });
 });
 
 describe('extractSizeFromVariant', () => {

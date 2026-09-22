@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import { redisConnection, recheckQueue } from '../queue.js';
 import { pool } from '../db.js';
 import { scrapePage } from '../lib/scrapeCore.js';
+import { fetchPage } from '../services/fetcher.js';
 import { markUrlFetched } from '../lib/urlStore.js';
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { createJob, failJob } from '../lib/jobRecords.js';
@@ -102,6 +103,45 @@ export async function recheckSite(
         }
 
         await pool.query(`UPDATE urls SET stock_status = $2 WHERE id = $1`, [urlId, newStatus]);
+
+        // TEMP DIAGNOSTIC - see session notes. Verifying, against a real
+        // production request rather than guessing, whether Shopify's
+        // standard <product-url>.json endpoint (present by default on every
+        // Shopify store unless explicitly disabled) exposes per-size
+        // variant availability for this retailer - the data source the
+        // "one card per size" feature needs, before building on top of it.
+        if (item.url.includes('vintagefootballshirts.com') && item.url.includes('/products/')) {
+          try {
+            const jsonUrl = `${item.url.replace(/\/+$/, '')}.json`;
+            const jsonRes = await fetchPage(jsonUrl, { useBrowser: false, respectRobots: false });
+            let variantsSummary: unknown = null;
+            if (jsonRes.html) {
+              try {
+                const parsed = JSON.parse(jsonRes.html);
+                variantsSummary = Array.isArray(parsed?.product?.variants)
+                  ? parsed.product.variants.map((v: Record<string, unknown>) => ({
+                      title: v.title,
+                      available: v.available,
+                      price: v.price,
+                      sku: v.sku,
+                    }))
+                  : null;
+              } catch {
+                variantsSummary = 'unparseable';
+              }
+            }
+            console.log(
+              '[variant-diag]',
+              JSON.stringify({ url: item.url, statusCode: jsonRes.statusCode, variantsSummary }),
+            );
+          } catch (err) {
+            console.log(
+              '[variant-diag] error',
+              item.url,
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        }
       }
     } catch (err) {
       progress.errors.push(`${item.url}: ${err instanceof Error ? err.message : String(err)}`);

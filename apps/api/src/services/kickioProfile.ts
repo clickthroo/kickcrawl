@@ -1246,6 +1246,38 @@ export function extractSizeFromTitle(text: string | null | undefined): string | 
   }
   const bare = text.match(/(?:^|\s)(XXS|XS|XL|XXL|XXXL)(?:\s|$|[,./])/);
   if (bare) return norm(bare[1]);
+
+  // A bare single-letter size (S/M/L) with no "Size:" label, brackets, or
+  // spelled-out word - confirmed on a real listing ("2022-23 England Nike
+  // Away Shirt *w/tags* M") that was mapping no size at all, since every
+  // check above requires either a label, brackets, a spelled-out word, or
+  // (the unconditional check just above) a 2+ character code. A bare
+  // single letter is genuinely ambiguous anywhere else in a title (an
+  // initial, an abbreviation - "L/S" for long-sleeve is the real trap:
+  // "Manchester City Puma Home Shirt L/S *w/tags* 78" has no size in the
+  // title at all), so this is deliberately anchored to the one place this
+  // retailer's own title shape actually puts it: right after its own
+  // condition marker ("*w/tags*"/"*BNIB*"/etc - "L/S" sits BEFORE that
+  // marker, so it's never a candidate here), optionally followed by its
+  // own retro/SKU code ("*w/tags* M Retro DN", "*w/tags* XL Retro 72").
+  const afterCondition = text.match(
+    /\*?\s*(?:w\/o?\s*tags?|bnwt|bnib|bnwot)\s*\*?\s+(xxs|xs|s|m|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl|6xl)\b/i,
+  );
+  if (afterCondition) {
+    const s = norm(afterCondition[1]);
+    if (s) return s;
+  }
+  // Same ambiguity concern, same fix, for a title with no condition
+  // marker at all: a bare size is unambiguous when it's the very last
+  // word of the title - the same word-order convention this file already
+  // relies on elsewhere for this retailer's own trailing stock codes (see
+  // guessTeamFromTitle) - a real stock code never happens to equal one of
+  // these exact size tokens.
+  const trailingBare = text.trim().match(/\b(xxs|xs|s|m|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl|6xl)$/i);
+  if (trailingBare) {
+    const s = norm(trailingBare[1]);
+    if (s) return s;
+  }
   return null;
 }
 
@@ -2104,6 +2136,24 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       )
     : stockBareWordText;
   const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText, stockPhraseText);
+  // TEMP DIAGNOSTIC - see session notes. The "Unknown" cases after the
+  // Unit-price fix are genuinely in-stock listings whose real "Add to
+  // Bag" text apparently falls outside the +/-500 char price window -
+  // measuring the REAL distance directly rather than guessing a new
+  // window size again.
+  if (stockStatus === 'Unknown' && input.url?.includes('vintagefootballshirts.com') && priceMatchInHaystack) {
+    const addToBagIdx = haystack.search(/add to (cart|basket|bag)/i);
+    console.log(
+      '[stock-diag2]',
+      JSON.stringify({
+        url: input.url,
+        priceIndex: priceMatchInHaystack.index,
+        addToBagIndex: addToBagIdx,
+        distanceAfterPrice: addToBagIdx >= 0 ? addToBagIdx - (priceMatchInHaystack.index + priceMatchInHaystack.length) : null,
+        haystackLength: haystack.length,
+      }),
+    );
+  }
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};
