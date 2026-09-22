@@ -2136,21 +2136,22 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       )
     : stockBareWordText;
   const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText, stockPhraseText);
-  // TEMP DIAGNOSTIC - see session notes. The "Unknown" cases after the
-  // Unit-price fix are genuinely in-stock listings whose real "Add to
-  // Bag" text apparently falls outside the +/-500 char price window -
-  // measuring the REAL distance directly rather than guessing a new
-  // window size again.
-  if (stockStatus === 'Unknown' && input.url?.includes('vintagefootballshirts.com') && priceMatchInHaystack) {
-    const addToBagIdx = haystack.search(/add to (cart|basket|bag)/i);
+  // TEMP DIAGNOSTIC - see session notes. The form-stripping fix (already
+  // shipped) was expected to make "add to (cart|basket|bag)" findable
+  // again, but it's STILL not appearing anywhere in the full haystack for
+  // at least one confirmed real, non-truncated case (haystackLength well
+  // under the 4000-char cap, so nothing's being cut off this time). Since
+  // guessing a second cause blind already went wrong once this session,
+  // this logs the actual raw text itself - the end of the haystack, where
+  // a buy button/CTA would sit - instead of just another index/distance
+  // number, so the real cause can be read directly rather than inferred.
+  if (stockStatus === 'Unknown' && input.url?.includes('vintagefootballshirts.com')) {
     console.log(
-      '[stock-diag2]',
+      '[stock-diag3]',
       JSON.stringify({
         url: input.url,
-        priceIndex: priceMatchInHaystack.index,
-        addToBagIndex: addToBagIdx,
-        distanceAfterPrice: addToBagIdx >= 0 ? addToBagIdx - (priceMatchInHaystack.index + priceMatchInHaystack.length) : null,
         haystackLength: haystack.length,
+        haystackTail: haystack.slice(-1500),
       }),
     );
   }
