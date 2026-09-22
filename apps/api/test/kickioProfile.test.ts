@@ -1296,6 +1296,61 @@ describe('detectStockStatus', () => {
     // other call site/test that doesn't pass a 4th argument).
     expect(detectStockStatus('£25 Sold out')).toBe('Out of Stock');
   });
+
+  it('reads a "sold out" right next to a size word as describing that one variant, not the whole product', () => {
+    // Real bug: "Nike TM Swoosh Fleece Hoodie *w/tags*" is a live,
+    // purchasable page (real "Add to Bag"/Apple Pay checkout) - this
+    // codebase STILL reported "Out of Stock" even after the price-window
+    // fix above had shipped and had actually gone live for this exact
+    // crawl (confirmed via Railway deploy/crawl timestamps). Checked the
+    // real page's full visible text (description, reviews, "you may also
+    // like") and none of it mentions stock/sold/unavailable anywhere -
+    // ruling out sitewide boilerplate, the cause of every earlier case
+    // this session. The one real signal on the page: its "Large" size
+    // swatch was greyed out (disabled) while "Medium" stayed selectable -
+    // a Shopify theme almost always pairs a disabled variant swatch with
+    // a hidden "Sold out" accessibility label right next to it, which
+    // would land inside the price-window text without being visible in a
+    // screenshot. That's a per-SIZE signal, not a per-PRODUCT one.
+    const nearSizeSoldOut = 'Size Medium Large Sold out Add to Bag Buy with Apple Pay';
+    expect(detectStockStatus(nearSizeSoldOut, null, nearSizeSoldOut, nearSizeSoldOut)).toBe('In Stock');
+
+    // A genuine whole-product "Sold Out"/"out of stock" with no size word
+    // anywhere nearby must still be trusted, in both the bare-word and
+    // phrase tiers.
+    expect(detectStockStatus('Reserved for another buyer', null, 'Reserved for another buyer')).toBe(
+      'Out of Stock',
+    );
+    expect(detectStockStatus('£30 Sold Out', null, null, '£30 Sold Out')).toBe('Out of Stock');
+  });
+
+  it('does not read this retailer\'s own "Unit price / Unavailable" boilerplate as a real stock signal', () => {
+    // The actual root cause behind nearly every VFS false "Out of Stock"
+    // this session, found by temporarily logging the real text behind one
+    // straight from production (not guessed): this retailer's theme has a
+    // "Unit price" line under the price (the per-kg/per-item price-
+    // breakdown feature many Shopify themes ship) that reads "Unit price
+    // / **Unavailable**" as its own placeholder on literally every
+    // product that doesn't have unit pricing configured - confirmed
+    // present, in that exact position, on every single one of 400+ real
+    // listings pulled from a live crawl, with zero connection to the
+    // product's real availability (many were confirmed purchasable with
+    // a live "Add to Bag" button on the same real page). It sits right
+    // next to the price, so it always fell inside the price-window
+    // phraseText already narrows to, and OUT_OF_STOCK_PHRASES' bare
+    // "unavailable" alternative was matching it every time.
+    const realPageText =
+      '2003-05 Portsmouth Home Shirt XL\n\nDHL Express Delivery Available\n\n£103.00\n\n' +
+      'Unit price /\n\n**Unavailable**\n\nBy Pompey Sport\n\nTeam\n\n Portsmouth\n\n' +
+      'Condition\n\n Mint\n\nSize\n\n XL\n\nADD TO BAG Buy with Apple Pay';
+    expect(detectStockStatus(realPageText, null, 'Portsmouth Home Shirt', realPageText)).toBe('In Stock');
+
+    // A genuine "unavailable" NOT part of this exact "Unit price /"
+    // boilerplate must still be trusted as a real signal.
+    expect(detectStockStatus('£50 This item is currently unavailable', null, null, '£50 This item is currently unavailable')).toBe(
+      'Out of Stock',
+    );
+  });
 });
 
 describe('buildKickioProfile', () => {
@@ -1402,6 +1457,54 @@ describe('buildKickioProfile', () => {
     });
     expect(profile.listing.stock_status).toBe('In Stock');
     expect(profile.listing.price).toBe(60);
+  });
+
+  it('does not report a genuinely purchasable listing as Out of Stock because of a disabled SIZE swatch, not the product itself', () => {
+    // Real bug: "Nike TM Swoosh Fleece Hoodie *w/tags*" (VFS Studio
+    // clearance) - a live, purchasable page (real "Add to Bag"/Apple Pay
+    // checkout, £30.00 was £60.00) still reported "Out of Stock" even
+    // though nothing readable anywhere on the real page (description,
+    // reviews, "you may also like") mentions stock/sold at all - the only
+    // real signal was its "Large" size option being greyed out/disabled
+    // while "Medium" stayed selectable. Reproduced here with a
+    // screen-reader-style "Sold out" label sitting right next to the
+    // size selector, the same spot it would occupy in the real scraped
+    // text even though it's never visible in a screenshot.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/collections/vfs-studio-clearance-sportswear/products/nike-tm-swoosh-fleece-hoodie-w-tags',
+      title: 'Nike TM Swoosh Fleece Hoodie *w/tags* DR8921-100',
+      description:
+        'Home VFS Studio Nike TM Swoosh Fleece Hoodie *w/tags* Previous Next ' +
+        '50% off £30.00 £60.00 Pay in 3 interest-free instalments for orders over £50.00 with shop ' +
+        'Next Day Express Delivery Available By Nike ' +
+        'Condition w/tags Size Medium Large Sold out ' +
+        'ADD TO BAG Buy with Apple Pay More payment options ' +
+        'See our 701 reviews on Trustpilot SKU: NIKETM089R-M DR8921-100',
+    });
+    expect(profile.listing.stock_status).toBe('In Stock');
+    expect(profile.listing.price).toBe(30);
+  });
+
+  it('does not report a genuinely purchasable listing as Out of Stock because of this retailer\'s own "Unit price / Unavailable" boilerplate', () => {
+    // Real, root-caused bug behind nearly every VFS false "Out of Stock"
+    // this session (see detectStockStatus's own test for the full
+    // explanation): every product page on this retailer has a "Unit
+    // price / **Unavailable**" placeholder line under the price,
+    // completely unrelated to real availability, that OUT_OF_STOCK_PHRASES'
+    // bare "unavailable" alternative was matching every time. Reproduced
+    // here with the real text captured directly from a live crawl via
+    // Railway logs (a genuinely purchasable Portsmouth shirt listing).
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/collections/new-in/products/2003-05-portsmouth-home-shirt-xl',
+      title: '2003-05 Portsmouth Home Shirt XL',
+      description:
+        '2003-05 Portsmouth Home Shirt XL | Vintage Football Shirts\n\n' +
+        '# 2003-05 Portsmouth Home Shirt XL\n\nDHL Express Delivery Available\n\n£103.00\n\n' +
+        'Unit price /\n\n**Unavailable**\n\nBy Pompey Sport\n\nTeam\n\n Portsmouth\n\n' +
+        'Condition\n\n Mint\n\nSize\n\n XL\n\nADD TO BAG Buy with Apple Pay',
+    });
+    expect(profile.listing.stock_status).toBe('In Stock');
+    expect(profile.listing.price).toBe(103);
   });
 
   it('sets team_kickio_match when a live Kickio team list is supplied and the resolved team matches', () => {
