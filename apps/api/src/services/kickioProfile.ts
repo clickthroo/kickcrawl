@@ -1390,16 +1390,38 @@ export function gradeConditionText(raw: string | null | undefined, hostname?: st
 
 const CURRENCY_SYMBOLS: Record<string, string> = { '£': 'GBP', $: 'USD', '€': 'EUR' };
 
-export function extractPriceFromText(text: string): { price: number; currency: string } | null {
+// `index`/`length` locate the matched price within `text` - used
+// elsewhere (see buildKickioProfile's stock-status section) to pull a
+// window of text immediately around a listing's own price, rather than
+// trusting an entire page's worth of scraped markdown, when looking for
+// stock-status wording that's specific to THIS product rather than
+// sitewide boilerplate elsewhere on the page.
+export function extractPriceFromText(
+  text: string,
+): { price: number; currency: string; index: number; length: number } | null {
   const symbolMatch = text.match(/([£$€])\s*(\d{1,6}(?:[.,]\d{2})?)\b/);
   if (symbolMatch) {
     const amount = parseFloat(symbolMatch[2].replace(',', '.'));
-    if (Number.isFinite(amount)) return { price: amount, currency: CURRENCY_SYMBOLS[symbolMatch[1]] };
+    if (Number.isFinite(amount)) {
+      return {
+        price: amount,
+        currency: CURRENCY_SYMBOLS[symbolMatch[1]],
+        index: symbolMatch.index!,
+        length: symbolMatch[0].length,
+      };
+    }
   }
   const codeMatch = text.match(/\b(\d{1,6}(?:[.,]\d{2})?)\s*(GBP|USD|EUR)\b/i);
   if (codeMatch) {
     const amount = parseFloat(codeMatch[1].replace(',', '.'));
-    if (Number.isFinite(amount)) return { price: amount, currency: codeMatch[2].toUpperCase() };
+    if (Number.isFinite(amount)) {
+      return {
+        price: amount,
+        currency: codeMatch[2].toUpperCase(),
+        index: codeMatch.index!,
+        length: codeMatch[0].length,
+      };
+    }
   }
   return null;
 }
@@ -1496,8 +1518,8 @@ const LAST_ONE_PATTERN = /\b(last one|last item|final one|only one left)\b/i;
  *  1. An explicit numeric quantity (0 is decisive either way).
  *  2. A "<N> left/remaining/in stock/available" count in `text`.
  *  3. "Last one" / "only one left" in `text` - still purchasable, just low stock.
- *  4. schema.org's Offer.availability enum, in URL or bare-token form, in `text`.
- *  5. A specific out-of-stock phrase, then a specific in-stock phrase, in `text`.
+ *  4. schema.org's Offer.availability enum, in URL or bare-token form, in `phraseText`.
+ *  5. A specific out-of-stock phrase, then a specific in-stock phrase, in `phraseText`.
  *  6. A bare marketplace marker ("SOLD", "Reserved") in `bareWordText`.
  * "Sold out"/"out of stock" wins over a lingering "Add to cart" button when
  * both are present, since disabled buttons commonly stay in the markup
@@ -1505,37 +1527,48 @@ const LAST_ONE_PATTERN = /\b(last one|last item|final one|only one left)\b/i;
  * there was no text to check at all, 'Unknown' means there was text but
  * none of the above signals matched it.
  *
- * Step 6 alone checks `bareWordText` (title + any explicit stock field)
- * rather than `text` (which also carries the page's full description/
- * markdown, up to 4000 chars) - confirmed on a real, genuinely-in-stock
- * listing ("2021-22 Liverpool Nike Away Shirt *w/tags* XXXL", live "Add
- * to Bag"/Apple Pay checkout buttons on the page, no structured
+ * Steps 4-6 deliberately do NOT scan the raw, full `text` (which also
+ * carries a scraped page's full description/markdown, up to 4000 chars) -
+ * confirmed on multiple real, genuinely-in-stock listings ("2021-22
+ * Liverpool Nike Away Shirt", "2012-13 Tottenham Under Armour Away
+ * Shirt", "2020-21 Scotland adidas Home Shirt", all with live "Add to
+ * Bag"/Apple Pay checkout buttons on the page, none with structured
  * availability data for this codebase to fall back to instead) that this
- * codebase reported "Out of Stock" for: this retailer's own sitewide
- * boilerplate (getContentHtml() in services/mainContent.ts only strips
- * literal <nav>/<header>/<footer> tags, and this retailer's theme wraps
- * its real nav/footer/trust-badge/chat-widget markup in plain <div>s
- * instead, so sitewide text survives into every page's description - the
- * same contamination this file already found and fixed for shirt_type/
- * issue/specialEdition on this exact retailer) only needs ONE stray
- * bare "sold" anywhere in up to 4000 characters of that boilerplate
- * (e.g. a "12 shirts sold this month" trust badge, or an unrelated
- * recommended item shown as sold out) to false-positive a real,
- * purchasable listing - this codebase's own comment on
- * OUT_OF_STOCK_BARE_WORDS already flagged it as the single riskiest,
- * most guessable signal here, checked last for that reason.
- * Steps 4-5 (the full phrases/schema tokens) are deliberately left
- * scanning the full `text`, not narrowed the same way: an actual page-
- * body "Sold Out"/"£25 Sold out" near a product's own price is a real,
- * necessary signal recheckWorker's own sale-detection relies on for
- * retailers with no dedicated title marker, and a complete, specific
- * phrase like that is far less likely to be incidental sitewide
- * boilerplate than the single common word "sold" alone.
+ * codebase kept reporting "Out of Stock" for: this retailer's own
+ * sitewide boilerplate (getContentHtml() in services/mainContent.ts only
+ * strips literal <nav>/<header>/<footer> tags, and this retailer's theme
+ * wraps its real nav/footer/trust-badge/chat-widget markup in plain
+ * <div>s instead, so sitewide text survives into every page's
+ * description - the same contamination this file already found and
+ * fixed for shirt_type/issue/specialEdition on this exact retailer) only
+ * needs ONE stray out-of-stock-sounding word or phrase anywhere in up to
+ * 4000 characters of that boilerplate (a "12 shirts sold this month"
+ * trust badge, an unrelated recommended item shown as sold out, a chat
+ * widget reading "Agents currently unavailable") to false-positive a
+ * real, purchasable listing.
+ *  - `bareWordText` (title + any explicit stock field only) is the
+ *    narrowest scope, for the single riskiest signal - a bare "sold"/
+ *    "reserved" with zero surrounding context, already flagged by this
+ *    file's own OUT_OF_STOCK_BARE_WORDS comment as its most guessable
+ *    pattern.
+ *    (omitting it falls back to the full `text`, same as before this
+ *    param existed). Built by buildKickioProfile as a window of text
+ *    immediately around the listing's own detected price (see its own
+ *    use of extractPriceFromText's match position) rather than the full
+ *    page, or the same narrow scope as `bareWordText` when no price
+ *    position is available to window around. A specific, complete phrase like
+ *    "Sold Out"/"£25 Sold out" sitting right next to a product's own
+ *    price is real, necessary signal recheckWorker's own sale-detection
+ *    relies on for retailers with no dedicated title marker (confirmed
+ *    by its own existing test) - but that locality (price-adjacent, not
+ *    page-wide) is exactly what distinguishes a real per-product signal
+ *    from incidental sitewide text describing something else entirely.
  */
 export function detectStockStatus(
   text: string | null | undefined,
   quantity?: number | null,
   bareWordText?: string | null,
+  phraseText?: string | null,
 ): 'In Stock' | 'Out of Stock' | 'Unknown' | null {
   if (typeof quantity === 'number' && Number.isFinite(quantity)) {
     return quantity <= 0 ? 'Out of Stock' : 'In Stock';
@@ -1546,11 +1579,12 @@ export function detectStockStatus(
   if (countMatch) return parseInt(countMatch[1], 10) > 0 ? 'In Stock' : 'Out of Stock';
   if (LAST_ONE_PATTERN.test(text)) return 'In Stock';
 
-  if (SCHEMA_OUT_OF_STOCK.test(text)) return 'Out of Stock';
-  if (SCHEMA_IN_STOCK.test(text)) return 'In Stock';
+  const p = phraseText ?? text;
+  if (SCHEMA_OUT_OF_STOCK.test(p)) return 'Out of Stock';
+  if (SCHEMA_IN_STOCK.test(p)) return 'In Stock';
 
-  if (OUT_OF_STOCK_PHRASES.test(text)) return 'Out of Stock';
-  if (IN_STOCK_PHRASES.test(text)) return 'In Stock';
+  if (OUT_OF_STOCK_PHRASES.test(p)) return 'Out of Stock';
+  if (IN_STOCK_PHRASES.test(p)) return 'In Stock';
 
   if (OUT_OF_STOCK_BARE_WORDS.test(bareWordText ?? text)) return 'Out of Stock';
 
@@ -1909,11 +1943,16 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
 
   let rawPrice = explicitPrice;
   let rawCurrency = (input.currency ?? caseInsensitiveGet(extracted, 'currency') ?? 'GBP').toUpperCase();
+  // Kept outside the block below (not just a local) so the stock-status
+  // section further down can window around WHERE in the haystack the
+  // price actually sat, not just what it was - see its own comment.
+  let priceMatchInHaystack: { index: number; length: number } | null = null;
   if (rawPrice == null) {
     const textPrice = extractPriceFromText(haystack);
     if (textPrice) {
       rawPrice = textPrice.price;
       rawCurrency = textPrice.currency;
+      priceMatchInHaystack = { index: textPrice.index, length: textPrice.length };
       confidence.price = 'inferred';
       reviewReasons.push('price read from page text - no explicit price field or structured product data was found');
     }
@@ -1971,19 +2010,34 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     'stockLevel',
     'productAvailability',
   );
-  // `stockText` (counts, schema tokens, and full out-of-stock/in-stock
-  // phrases) still scans the full haystack - a real per-product inventory
-  // count or a genuine page-body "Sold Out" near the price is a real
-  // signal recheckWorker's own sale detection relies on for retailers
-  // with no dedicated title marker. `bareWordText` (the single riskiest
-  // signal - a bare "sold"/"reserved" with no other context, see
-  // detectStockStatus's own comment) is deliberately narrower: the
-  // explicit field plus the TITLE only, never `description`/the rest of
-  // the page markdown, which this retailer's own sitewide boilerplate has
-  // already been confirmed (for other fields) to leak into.
+  // `stockText` (counts only - the single lowest false-positive-risk
+  // signal, a real per-product inventory count) still scans the full
+  // haystack. `stockBareWordText` (the single highest-risk signal - a
+  // bare "sold"/"reserved" with no other context, see detectStockStatus's
+  // own comment) is the narrowest: the explicit field plus the TITLE
+  // only, never `description`/the rest of the page markdown, which this
+  // retailer's own sitewide boilerplate has already been confirmed (for
+  // other fields) to leak into.
   const stockText = explicitStock ? `${explicitStock} ${haystack}` : haystack;
   const stockBareWordText = explicitStock ? `${explicitStock} ${title}` : title;
-  const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText);
+  // `stockPhraseText` (schema tokens + full phrases like "Sold Out") is a
+  // window of the haystack immediately around this listing's OWN detected
+  // price, not the full page - real per-product commerce text (price, buy
+  // button, delivery banner) sits together on the page, while this
+  // retailer's sitewide boilerplate (nav, trust badges, chat widgets,
+  // unrelated recommended items) generally doesn't. Falls back to the
+  // same narrow scope as stockBareWordText when there's no price position
+  // to window around (an explicit price field, or no price found at all)
+  // - without a price to anchor on, there's no way to tell a real
+  // per-product phrase apart from incidental sitewide text either.
+  const PRICE_PROXIMITY_WINDOW = 500;
+  const stockPhraseText = priceMatchInHaystack
+    ? haystack.slice(
+        Math.max(0, priceMatchInHaystack.index - PRICE_PROXIMITY_WINDOW),
+        priceMatchInHaystack.index + priceMatchInHaystack.length + PRICE_PROXIMITY_WINDOW,
+      )
+    : stockBareWordText;
+  const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText, stockPhraseText);
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};
