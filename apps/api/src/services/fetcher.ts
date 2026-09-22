@@ -136,7 +136,16 @@ export async function fetchWithBrowser(
       try {
         const page = await context.newPage();
         await guardNavigation(page, { blockMedia: true });
-        const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        // TEMP DIAGNOSTIC - see session notes. Testing whether Shopify's
+        // Markets/Geolocation feature is serving this Railway-hosted
+        // service (a US datacenter IP) a US-market page variant (USD
+        // pricing, a literal "Unavailable" status) instead of the real
+        // UK/GBP storefront - `?country=GB` is Shopify's own documented
+        // mechanism for forcing a specific market regardless of the
+        // visitor's real IP. Will be reverted once confirmed either way.
+        const diagUrl = new URL(url);
+        diagUrl.searchParams.set('country', 'GB');
+        const response = await page.goto(diagUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
         if (waitFor > 0) await page.waitForTimeout(waitFor);
         const html = await page.content();
         // Diagnostic for the repeated Vinted OOM crash - concurrency capping,
