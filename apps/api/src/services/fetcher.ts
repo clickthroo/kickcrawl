@@ -116,7 +116,11 @@ const BROWSER_FETCH_TIMEOUT_MS = 45_000;
 // closed"). Kept as a single source of truth here so the recycling
 // decision below and crawlWorker.ts's test for the same failure agree on
 // what counts as fatal.
-const BROWSER_FATAL_PATTERN = /page crashed|target closed|browser has been closed/i;
+// Exported so callers above this (crawlWorker.ts) can recognise the same
+// failure shape in a ScrapeCoreResult's `error` string, to decide whether
+// a fresh retry (after the recycling + backoff below have already run) is
+// worth attempting rather than leaving that one page permanently failed.
+export const BROWSER_FATAL_PATTERN = /page crashed|target closed|browser has been closed/i;
 
 export async function fetchWithBrowser(
   url: string,

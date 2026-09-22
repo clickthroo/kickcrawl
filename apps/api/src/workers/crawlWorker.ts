@@ -7,6 +7,7 @@ import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlS
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
 import { detectSellerSignals } from '../services/sellerSignals.js';
+import { BROWSER_FATAL_PATTERN } from '../services/fetcher.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 
@@ -175,7 +176,7 @@ async function recordPageResult(
 // blocked-page browser retry) without masking a real hang for long.
 export const PAGE_TIMEOUT_MS = 90_000;
 
-export async function scrapePageWithTimeout(
+async function scrapePageOnce(
   url: string,
   opts: Parameters<typeof scrapePage>[1],
   site: Parameters<typeof scrapePage>[2],
@@ -206,6 +207,30 @@ export async function scrapePageWithTimeout(
       }, PAGE_TIMEOUT_MS),
     ),
   ]);
+}
+
+export async function scrapePageWithTimeout(
+  url: string,
+  opts: Parameters<typeof scrapePage>[1],
+  site: Parameters<typeof scrapePage>[2],
+): Promise<ScrapeCoreResult> {
+  const result = await scrapePageOnce(url, opts, site);
+  // A fatal browser crash (BROWSER_FATAL_PATTERN, fetcher.ts) has already
+  // backed off and gotten a fresh Chromium instance by the time this
+  // promise settles - so one retry here has a real chance of succeeding,
+  // rather than leaving this page permanently failed. Confirmed in
+  // production as a real, separate cost of the crash itself: a crawl
+  // job's SEED page (depth 0, the only URL queued at that point) hit
+  // exactly one of these crashes and the whole job ended there - zero
+  // pages ever fetched, no links ever discovered to try instead, nothing
+  // left in queue to fall back to. Scoped to this one pattern rather than
+  // every failure - an ordinary 404, a real site outage, or a
+  // robots.txt/seller-filter rejection all deserve to fail once and stay
+  // failed, not be retried against odds that haven't actually improved.
+  if (!result.success && result.error && BROWSER_FATAL_PATTERN.test(result.error)) {
+    return await scrapePageOnce(url, opts, site);
+  }
+  return result;
 }
 
 async function fireWebhook(jobId: string, status: string): Promise<void> {
