@@ -2104,6 +2104,24 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       )
     : stockBareWordText;
   const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText, stockPhraseText);
+  // TEMP DIAGNOSTIC - see session notes. The "Unknown" cases after the
+  // Unit-price fix are genuinely in-stock listings whose real "Add to
+  // Bag" text apparently falls outside the +/-500 char price window -
+  // measuring the REAL distance directly rather than guessing a new
+  // window size again.
+  if (stockStatus === 'Unknown' && input.url?.includes('vintagefootballshirts.com') && priceMatchInHaystack) {
+    const addToBagIdx = haystack.search(/add to (cart|basket|bag)/i);
+    console.log(
+      '[stock-diag2]',
+      JSON.stringify({
+        url: input.url,
+        priceIndex: priceMatchInHaystack.index,
+        addToBagIndex: addToBagIdx,
+        distanceAfterPrice: addToBagIdx >= 0 ? addToBagIdx - (priceMatchInHaystack.index + priceMatchInHaystack.length) : null,
+        haystackLength: haystack.length,
+      }),
+    );
+  }
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};
