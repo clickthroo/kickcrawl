@@ -1513,8 +1513,50 @@ const SCHEMA_IN_STOCK = /\b(instock|limitedavailability)\b/i;
 const STOCK_COUNT_PATTERN = /\b(\d+)\s*(?:x\s*)?(?:in stock|left(?:\s+in\s+stock)?|remaining|available)\b/i;
 const LAST_ONE_PATTERN = /\b(last one|last item|final one|only one left)\b/i;
 
+// A size swatch a Shopify theme disables on the page also carries a
+// "Sold out" label right next to it for screen-reader accessibility - a
+// real, but per-SIZE, signal, not a per-PRODUCT one. Confirmed on a real
+// listing ("Nike TM Swoosh Fleece Hoodie *w/tags*") whose Large size was
+// greyed out while Medium stayed selectable, with a live "Add to Bag"/
+// Apple Pay checkout on the page - and neither its description, reviews,
+// nor "you may also like" section (everything visibly readable on the
+// page) mentioned stock/sold/unavailable anywhere at all, ruling out
+// sitewide boilerplate as the cause the same way it explained every
+// earlier case this session. Since Kickio's own listing model captures
+// one size per entry, what matters is whether THAT size is purchasable,
+// not whether every size on the page is - so an out-of-stock word/phrase
+// sitting right next to a size word is read as describing that one
+// variant and stripped before the decisive checks below ever see it,
+// rather than sinking the whole listing over an unrelated sold-out size.
+//
+// Deliberately requires TWO OR MORE consecutive size words (only
+// whitespace between them, no dash) immediately before/after the stock
+// wording, not just one - a real single-item marketplace listing's own
+// size sitting next to a genuine "SOLD" stamp ("Arsenal Home Shirt M -
+// SOLD") must still be trusted (confirmed by this file's own existing
+// test), and that shape has exactly one size word, normally separated
+// from "SOLD" by a dash rather than running straight into it. Multiple
+// consecutive size words with nothing between them is specifically what
+// a Shopify variant-swatch list looks like once flattened to text - a
+// shape a single-item listing's own size mention essentially never has.
+const SIZE_WORD_FOR_VARIANT_NOISE =
+  '(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL|6XL|Small|Medium|Large|Extra[- ]?Small|Extra[- ]?Large)';
+const TWO_OR_MORE_SIZE_WORDS = `\\b${SIZE_WORD_FOR_VARIANT_NOISE}\\b(?:\\s+\\b${SIZE_WORD_FOR_VARIANT_NOISE}\\b)+`;
+const VARIANT_STOCK_NOISE = new RegExp(
+  `${TWO_OR_MORE_SIZE_WORDS}\\s+\\b(sold\\s*out|sold|reserved|unavailable|out of stock)\\b` +
+    `|\\b(sold\\s*out|sold|reserved|unavailable|out of stock)\\b\\s+${TWO_OR_MORE_SIZE_WORDS}`,
+  'gi',
+);
+function stripVariantStockNoise(s: string): string {
+  return s.replace(VARIANT_STOCK_NOISE, ' ');
+}
+
 /**
- * Availability signal, checked in order of how decisive/specific it is:
+ * Availability signal, checked in order of how decisive/specific it is.
+ * `phraseText`/`bareWordText` have any size-adjacent "sold"/"out of
+ * stock" wording (a per-variant signal, not a per-product one - see
+ * stripVariantStockNoise's own comment) stripped before any of steps 4-6
+ * below ever see them:
  *  1. An explicit numeric quantity (0 is decisive either way).
  *  2. A "<N> left/remaining/in stock/available" count in `text`.
  *  3. "Last one" / "only one left" in `text` - still purchasable, just low stock.
@@ -1579,14 +1621,14 @@ export function detectStockStatus(
   if (countMatch) return parseInt(countMatch[1], 10) > 0 ? 'In Stock' : 'Out of Stock';
   if (LAST_ONE_PATTERN.test(text)) return 'In Stock';
 
-  const p = phraseText ?? text;
+  const p = stripVariantStockNoise(phraseText ?? text);
   if (SCHEMA_OUT_OF_STOCK.test(p)) return 'Out of Stock';
   if (SCHEMA_IN_STOCK.test(p)) return 'In Stock';
 
   if (OUT_OF_STOCK_PHRASES.test(p)) return 'Out of Stock';
   if (IN_STOCK_PHRASES.test(p)) return 'In Stock';
 
-  if (OUT_OF_STOCK_BARE_WORDS.test(bareWordText ?? text)) return 'Out of Stock';
+  if (OUT_OF_STOCK_BARE_WORDS.test(stripVariantStockNoise(bareWordText ?? text))) return 'Out of Stock';
 
   return 'Unknown';
 }
