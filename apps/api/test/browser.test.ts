@@ -74,7 +74,11 @@ describe('closeBrowser', () => {
     const first = await getBrowser();
     expect(first).toEqual(expect.objectContaining({ marker: 'browser-1' }));
 
-    await closeBrowser();
+    vi.useFakeTimers();
+    const closed = closeBrowser();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await closed;
+    vi.useRealTimers();
 
     const second = await getBrowser();
     expect(second).toEqual(expect.objectContaining({ marker: 'browser-2' }));
@@ -101,11 +105,51 @@ describe('closeBrowser', () => {
     const { getBrowser, closeBrowser } = await import('../src/services/browser.js');
 
     await getBrowser();
-    await closeBrowser();
+    vi.useFakeTimers();
+    const closed = closeBrowser();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await closed;
+    vi.useRealTimers();
 
     expect(close).toHaveBeenCalledTimes(1);
     const second = await getBrowser();
     expect(second).toEqual(expect.objectContaining({ marker: 'browser-2' }));
+  });
+
+  it('pauses briefly before the reset takes effect, instead of letting the very next getBrowser() relaunch immediately', async () => {
+    // The actual fix: a crawl job in production hit ~46 consecutive
+    // "browser has been closed" launch failures in under two minutes,
+    // one immediate relaunch attempt right after the previous one failed
+    // - this is what stops that immediate-retry storm from hammering an
+    // already resource-starved container.
+    let launches = 0;
+    const close = vi.fn(() => Promise.resolve());
+    vi.doMock('playwright', () => ({
+      chromium: {
+        launch: vi.fn(() => {
+          launches += 1;
+          return Promise.resolve({ marker: `browser-${launches}`, close });
+        }),
+      },
+    }));
+
+    const { getBrowser, closeBrowser } = await import('../src/services/browser.js');
+
+    await getBrowser();
+
+    vi.useFakeTimers();
+    let resolved = false;
+    const closed = closeBrowser().then(() => {
+      resolved = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(resolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await closed;
+    expect(resolved).toBe(true);
+    vi.useRealTimers();
   });
 });
 
