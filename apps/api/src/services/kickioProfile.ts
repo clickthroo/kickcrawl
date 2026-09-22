@@ -1551,6 +1551,30 @@ function stripVariantStockNoise(s: string): string {
   return s.replace(VARIANT_STOCK_NOISE, ' ');
 }
 
+// The actual root cause of nearly every VFS false "Out of Stock" this
+// session, found by temporarily logging the real text behind one and
+// reading it directly (not guessed): this retailer's theme has a "Unit
+// price" line under the price (the per-kg/per-item price-breakdown
+// feature many Shopify themes ship, e.g. "£3.00 / 100g") that reads
+// "Unit price / **Unavailable**" as its own placeholder on literally
+// every product that doesn't have unit pricing configured - which is
+// nearly all of them here - confirmed present, in that exact position,
+// on every single one of 400+ real listings pulled from a live crawl,
+// with zero connection to the product's real availability (many were
+// confirmed purchasable with a live "Add to Bag" button on the same real
+// page). OUT_OF_STOCK_PHRASES has a bare "unavailable" alternative, and
+// because this boilerplate sits immediately next to the price, it always
+// fell inside the price-window this file already narrows phraseText to,
+// so it was never excluded by any earlier fix here. Stripped as its own
+// exact, anchored phrase ("Unit price" + optional "/" + "Unavailable")
+// rather than by loosening/removing "unavailable" from OUT_OF_STOCK_PHRASES
+// itself, since a genuine "This item is unavailable" elsewhere in real
+// page text is still a real signal worth keeping.
+const UNIT_PRICE_UNAVAILABLE_NOISE = /\bunit\s*price\b\s*\/?\s*\*{0,2}unavailable\*{0,2}/gi;
+function stripUnitPriceNoise(s: string): string {
+  return s.replace(UNIT_PRICE_UNAVAILABLE_NOISE, ' ');
+}
+
 /**
  * Availability signal, checked in order of how decisive/specific it is.
  * `phraseText`/`bareWordText` have any size-adjacent "sold"/"out of
@@ -1621,7 +1645,7 @@ export function detectStockStatus(
   if (countMatch) return parseInt(countMatch[1], 10) > 0 ? 'In Stock' : 'Out of Stock';
   if (LAST_ONE_PATTERN.test(text)) return 'In Stock';
 
-  const p = stripVariantStockNoise(phraseText ?? text);
+  const p = stripUnitPriceNoise(stripVariantStockNoise(phraseText ?? text));
   if (SCHEMA_OUT_OF_STOCK.test(p)) return 'Out of Stock';
   if (SCHEMA_IN_STOCK.test(p)) return 'In Stock';
 
@@ -2080,18 +2104,6 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       )
     : stockBareWordText;
   const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText, stockPhraseText);
-  // TEMP DIAGNOSTIC - see session notes, remove after root-causing the
-  // still-recurring VFS false "Out of Stock" reports.
-  if (stockStatus === 'Out of Stock' && input.url?.includes('vintagefootballshirts.com')) {
-    console.log(
-      '[stock-diag]',
-      JSON.stringify({
-        url: input.url,
-        stockBareWordText: stockBareWordText?.slice(0, 300),
-        stockPhraseText: stockPhraseText?.slice(0, 600),
-      }),
-    );
-  }
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};

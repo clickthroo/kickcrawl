@@ -1323,6 +1323,34 @@ describe('detectStockStatus', () => {
     );
     expect(detectStockStatus('£30 Sold Out', null, null, '£30 Sold Out')).toBe('Out of Stock');
   });
+
+  it('does not read this retailer\'s own "Unit price / Unavailable" boilerplate as a real stock signal', () => {
+    // The actual root cause behind nearly every VFS false "Out of Stock"
+    // this session, found by temporarily logging the real text behind one
+    // straight from production (not guessed): this retailer's theme has a
+    // "Unit price" line under the price (the per-kg/per-item price-
+    // breakdown feature many Shopify themes ship) that reads "Unit price
+    // / **Unavailable**" as its own placeholder on literally every
+    // product that doesn't have unit pricing configured - confirmed
+    // present, in that exact position, on every single one of 400+ real
+    // listings pulled from a live crawl, with zero connection to the
+    // product's real availability (many were confirmed purchasable with
+    // a live "Add to Bag" button on the same real page). It sits right
+    // next to the price, so it always fell inside the price-window
+    // phraseText already narrows to, and OUT_OF_STOCK_PHRASES' bare
+    // "unavailable" alternative was matching it every time.
+    const realPageText =
+      '2003-05 Portsmouth Home Shirt XL\n\nDHL Express Delivery Available\n\n£103.00\n\n' +
+      'Unit price /\n\n**Unavailable**\n\nBy Pompey Sport\n\nTeam\n\n Portsmouth\n\n' +
+      'Condition\n\n Mint\n\nSize\n\n XL\n\nADD TO BAG Buy with Apple Pay';
+    expect(detectStockStatus(realPageText, null, 'Portsmouth Home Shirt', realPageText)).toBe('In Stock');
+
+    // A genuine "unavailable" NOT part of this exact "Unit price /"
+    // boilerplate must still be trusted as a real signal.
+    expect(detectStockStatus('£50 This item is currently unavailable', null, null, '£50 This item is currently unavailable')).toBe(
+      'Out of Stock',
+    );
+  });
 });
 
 describe('buildKickioProfile', () => {
@@ -1455,6 +1483,28 @@ describe('buildKickioProfile', () => {
     });
     expect(profile.listing.stock_status).toBe('In Stock');
     expect(profile.listing.price).toBe(30);
+  });
+
+  it('does not report a genuinely purchasable listing as Out of Stock because of this retailer\'s own "Unit price / Unavailable" boilerplate', () => {
+    // Real, root-caused bug behind nearly every VFS false "Out of Stock"
+    // this session (see detectStockStatus's own test for the full
+    // explanation): every product page on this retailer has a "Unit
+    // price / **Unavailable**" placeholder line under the price,
+    // completely unrelated to real availability, that OUT_OF_STOCK_PHRASES'
+    // bare "unavailable" alternative was matching every time. Reproduced
+    // here with the real text captured directly from a live crawl via
+    // Railway logs (a genuinely purchasable Portsmouth shirt listing).
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/collections/new-in/products/2003-05-portsmouth-home-shirt-xl',
+      title: '2003-05 Portsmouth Home Shirt XL',
+      description:
+        '2003-05 Portsmouth Home Shirt XL | Vintage Football Shirts\n\n' +
+        '# 2003-05 Portsmouth Home Shirt XL\n\nDHL Express Delivery Available\n\n£103.00\n\n' +
+        'Unit price /\n\n**Unavailable**\n\nBy Pompey Sport\n\nTeam\n\n Portsmouth\n\n' +
+        'Condition\n\n Mint\n\nSize\n\n XL\n\nADD TO BAG Buy with Apple Pay',
+    });
+    expect(profile.listing.stock_status).toBe('In Stock');
+    expect(profile.listing.price).toBe(103);
   });
 
   it('sets team_kickio_match when a live Kickio team list is supplied and the resolved team matches', () => {
