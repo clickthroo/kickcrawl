@@ -2080,6 +2080,18 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       )
     : stockBareWordText;
   const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText, stockPhraseText);
+  // TEMP DIAGNOSTIC - see session notes, remove after root-causing the
+  // still-recurring VFS false "Out of Stock" reports.
+  if (stockStatus === 'Out of Stock' && input.url?.includes('vintagefootballshirts.com')) {
+    console.log(
+      '[stock-diag]',
+      JSON.stringify({
+        url: input.url,
+        stockBareWordText: stockBareWordText?.slice(0, 300),
+        stockPhraseText: stockPhraseText?.slice(0, 600),
+      }),
+    );
+  }
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};
