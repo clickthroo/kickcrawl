@@ -1264,6 +1264,38 @@ describe('detectStockStatus', () => {
     // unaffected by this fix, since count detection was never the risky part.
     expect(detectStockStatus('Only 2 left in stock', null, 'Chelsea Home Shirt')).toBe('In Stock');
   });
+
+  it('uses phraseText, not the wide text, for schema tokens and full out-of-stock/in-stock phrases when supplied', () => {
+    // Real bug: 2 more genuinely purchasable listings ("2012-13 Tottenham
+    // Under Armour Away Shirt", "2020-21 Scotland adidas Home Shirt")
+    // reported "Out of Stock" AFTER the bare-word-only fix above had
+    // already shipped - meaning the false-positive signal on at least one
+    // of these was a full PHRASE (not just the bare word), which that
+    // fix's narrowing never touched. buildKickioProfile now builds
+    // phraseText as a window of text around the listing's own price (see
+    // its own comment) instead of the full page - simulated here as a
+    // "sold out" phrase sitting far from the price/buy-button text a real
+    // per-product signal would actually be near.
+    const wideWithDistantPhrase =
+      'Customers also bought: 2022-23 Everton Shirt (sold out this morning). ' +
+      '£60.00 Add to Bag Buy with Apple Pay';
+    const nearPriceWindow = '£60.00 Add to Bag Buy with Apple Pay';
+    expect(
+      detectStockStatus(wideWithDistantPhrase, null, 'Scotland Home Shirt', nearPriceWindow),
+    ).toBe('In Stock');
+
+    // A genuine "Sold Out" actually WITHIN phraseText (i.e. really is
+    // close to this product's own price) must still be trusted.
+    const nearPricePhraseSoldOut = '£60.00 Sold Out';
+    expect(
+      detectStockStatus(wideWithDistantPhrase, null, 'Scotland Home Shirt', nearPricePhraseSoldOut),
+    ).toBe('Out of Stock');
+
+    // Omitting phraseText falls back to the full wide text, same as
+    // before this parameter existed (backwards compatible with every
+    // other call site/test that doesn't pass a 4th argument).
+    expect(detectStockStatus('£25 Sold out')).toBe('Out of Stock');
+  });
 });
 
 describe('buildKickioProfile', () => {
@@ -1344,6 +1376,32 @@ describe('buildKickioProfile', () => {
     // false positive stops overriding it, this correctly resolves to
     // "In Stock", not just "anything other than Out of Stock".
     expect(profile.listing.stock_status).toBe('In Stock');
+  });
+
+  it('does not report a genuinely purchasable listing as Out of Stock because of a "sold"-flavoured PHRASE far from its own price', () => {
+    // Real bug: "2020-21 Scotland adidas Home Shirt *w/tags* XXXL" - a
+    // live, purchasable page ("Add to Bag"/Apple Pay checkout, 20% off
+    // clearance price £60.00 was £75.00) that this codebase STILL
+    // reported "Out of Stock" for even after the bare-word-only fix
+    // above had shipped, meaning the false positive here was a full
+    // phrase (e.g. "X sold this month"/"sold out" somewhere in an
+    // unrelated trust badge or recommended-item card), not just the bare
+    // word - which that earlier, narrower fix never touched. Reproduced
+    // here with the phrase sitting up near the page's own nav (far from
+    // the price/buy-button block that's actually about THIS product),
+    // the same layout shape this retailer's real pages have.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/collections/european-national-teams/products/2020-21-scotland-adidas-home-shirt',
+      title: '2020-21 Scotland adidas Home Shirt *w/tags* XXXL',
+      description:
+        'Club Teams National Teams Clearance Boots Training Brands VFS Studio New In ' +
+        '4,231 shirts sold this month best sellers trending now customers also viewed ' +
+        '£60.00 £75.00 Pay in 3 interest-free instalments of £20.00 with shop ' +
+        'Next Day Express Delivery Available By adidas Team Scotland Condition w/tags Size XXXL ' +
+        'ADD TO BAG Buy with Apple Pay More payment options',
+    });
+    expect(profile.listing.stock_status).toBe('In Stock');
+    expect(profile.listing.price).toBe(60);
   });
 
   it('sets team_kickio_match when a live Kickio team list is supplied and the resolved team matches', () => {
