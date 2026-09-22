@@ -150,7 +150,7 @@ const MANUFACTURERS = [
   'Le Coq Sportif', 'Legea', 'Lotto', 'Luanvi', 'Macron', 'Marathon', 'Masita', 'Meyba',
   'Mitre', 'Mizuno', 'New Balance', 'NR', 'Nike', 'Olympikus', 'Patrick', 'Penalty', 'Pony',
   'Puma', 'Reebok', 'Reusch', 'Robey', 'Saller', 'Score Draw', 'Sergio Tacchini', 'Sondico',
-  'Soka', 'Stanno', 'Toffs', 'Topper', 'Uhlsport', 'Umbro', 'Under Armour', 'Vandanel',
+  'Soka', 'Stanno', 'TFG', 'Toffs', 'Topper', 'Uhlsport', 'Umbro', 'Under Armour', 'Vandanel',
   'Warrior', 'Wilson',
 ];
 
@@ -353,6 +353,17 @@ export function extractSeasonSpan(text: string): SeasonResult {
 // =========================================================================
 // Shirt type (Part 2 "Type" - Goalkeeper checked first, then Training/
 // Pre-Match, then Fourth/Third/Away/Home)
+//
+// Kickio's live "type" product_feature carries 10 variants, not the 8
+// this file originally mapped to - confirmed directly against the admin
+// UI's own Variants list (Home, Away, Third, Fourth, GK Home, GK Away, GK
+// Third, GK Fourth, Pre-Match, Training) and re-verified against the live
+// product_features row itself, which no longer matches the
+// 20260522030000_align_features_to_kickio.sql seed migration's 8-value
+// list this file was previously built from: Kickio has since added
+// "Pre-Match" and "Training" as real, flat Type values (not GK-qualified
+// - there's no "GK Training"), so they're no longer left null/
+// informational the way they were before.
 // =========================================================================
 
 const HOME_TOKEN = /\b(home|1st|primera|casa|domicile|heim|hemma)\b/;
@@ -368,44 +379,45 @@ const PREMATCH_TOKEN = /\b(pre[- ]?match|prematch)\b/;
 export interface ShirtTypeResult {
   type: string | null;
   certain: boolean;
-  informationalOnly: boolean;
 }
 
 export function detectShirtType(text: string): ShirtTypeResult {
   const l = ` ${text.toLowerCase().replace(/[_/|,]+/g, ' ').replace(/\s+/g, ' ')} `;
 
+  // Goalkeeper still takes priority over Training/Pre-Match, same as
+  // before - Kickio has no "GK Training"/"GK Pre-Match" variant, so a
+  // title naming both ("Goalkeeper Training Top") falls back to the
+  // existing GK-qualifier logic below rather than a flat "Training",
+  // pending real evidence either way.
   const goalkeeper = GOALKEEPER_TOKEN.test(l);
   if (goalkeeper) {
-    if (FOURTH_TOKEN.test(l)) return { type: 'GK Fourth', certain: true, informationalOnly: false };
-    if (THIRD_TOKEN.test(l)) return { type: 'GK Third', certain: true, informationalOnly: false };
-    if (AWAY_TOKEN.test(l)) return { type: 'GK Away', certain: true, informationalOnly: false };
-    if (HOME_TOKEN.test(l)) return { type: 'GK Home', certain: true, informationalOnly: false };
+    if (FOURTH_TOKEN.test(l)) return { type: 'GK Fourth', certain: true };
+    if (THIRD_TOKEN.test(l)) return { type: 'GK Third', certain: true };
+    if (AWAY_TOKEN.test(l)) return { type: 'GK Away', certain: true };
+    if (HOME_TOKEN.test(l)) return { type: 'GK Home', certain: true };
     // Goalkeeper confirmed, but no Home/Away/Third/Fourth qualifier found -
     // default to GK Home, but flag it as uncertain per the guide's rule that
     // Type is one of the fields that "must be certain".
-    return { type: 'GK Home', certain: false, informationalOnly: false };
+    return { type: 'GK Home', certain: false };
   }
 
-  // Training/Pre-Match have no dedicated Kickio Type enum value (Part 2) -
-  // don't force them into Home/Away.
-  if (TRAINING_TOKEN.test(l) || PREMATCH_TOKEN.test(l)) {
-    return { type: null, certain: false, informationalOnly: true };
-  }
+  if (PREMATCH_TOKEN.test(l)) return { type: 'Pre-Match', certain: true };
+  if (TRAINING_TOKEN.test(l)) return { type: 'Training', certain: true };
 
   if (FOURTH_TOKEN.test(l) || /\bfourth[- ]?(choice|kit|strip|shirt|jersey|top)\b/.test(l)) {
-    return { type: 'Fourth', certain: true, informationalOnly: false };
+    return { type: 'Fourth', certain: true };
   }
   if (THIRD_TOKEN.test(l) || /\bthird[- ]?(choice|kit|strip|shirt|jersey|top)\b/.test(l)) {
-    return { type: 'Third', certain: true, informationalOnly: false };
+    return { type: 'Third', certain: true };
   }
   if (AWAY_TOKEN.test(l) || /\b2nd\s+(shirt|jersey|kit|top|strip)\b/.test(l)) {
-    return { type: 'Away', certain: true, informationalOnly: false };
+    return { type: 'Away', certain: true };
   }
-  if (HOME_TOKEN.test(l)) return { type: 'Home', certain: true, informationalOnly: false };
+  if (HOME_TOKEN.test(l)) return { type: 'Home', certain: true };
 
   // No explicit token at all - Home is the documented default, but keep it
   // marked uncertain rather than "certain".
-  return { type: 'Home', certain: false, informationalOnly: false };
+  return { type: 'Home', certain: false };
 }
 
 // =========================================================================
@@ -519,7 +531,17 @@ export function guessTeamFromTitle(title: string): string {
     // whitespace or the start of the title, e.g. "2022-23 Italy ..."),
     // never glued directly onto other letters or digits like a code is.
     .replace(/(?<![A-Za-z0-9])\d{4}[-/]\d{2,4}(?![A-Za-z0-9])/g, '')
-    .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}(?![\d/-])/g, '')
+    // A short two-digit retro season ("'94-95'") is sometimes wrapped in
+    // its own quotes on this retailer's titles - the leading "'?" here
+    // was only ever eating the OPENING quote, never the closing one after
+    // the second digit group, so it was leaving that lone trailing quote
+    // behind as orphaned punctuation - confirmed on a real listing
+    // surviving as "Middlesbrough '" (the whole rest of the title,
+    // including the season, stripped cleanly; just that one stray
+    // apostrophe left over). Added the missing "'?" after the second
+    // \d{2} to strip both quotes symmetrically, same as the fully-quoted
+    // shape the later quote-strip below already handles correctly.
+    .replace(/(?<![\d/-])'?\d{2}\s*[/-]\s*'?\d{2}'?(?![\d/-])/g, '')
     .replace(/\b\d{4}\b/g, '')
     .replace(/\b(Home|Away|Third|Fourth|Goalkeeper|GK|Training|Pre[- ]?Match)\b/gi, '')
     // A colour word is a qualifier between the team name and the kit-type
@@ -539,7 +561,14 @@ export function guessTeamFromTitle(title: string): string {
     // real listings surviving as "Manchester United Essentials 1/4 Zip
     // Sweatshirt", "Arsenal Graphic Tee", "Liverpool Presentation
     // Jacket", and "Juventus Staff Issue Padded Rain Coat".
-    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Coats?|Sweatshirts?|Hoodies?|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    // "Shorts"/"Socks"/"Scarves"/"Scarf"/"Boots"/"Pants"/"Trousers"/
+    // "Bottoms"/"Tracksuit" are this retailer's own garment-type words for
+    // Kickio's non-shirt categories (see detectCategoryFromTitle below),
+    // the same shape as "Jacket"/"Coat"/"Sweatshirt"/"Hoodie" already
+    // being stripped here - confirmed on real listings surviving as
+    // "Italy Walk-Out Pants" and "Hull City Tracksuit Bottoms" once every
+    // other noise word around them had already gone.
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Coats?|Sweatshirts?|Hoodies?|Shorts?|Socks?|Scarf|Scarves|Boots?|Pants|Trousers|Bottoms|Tracksuit|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     // "Graphic" and "Presentation" describe the garment style, not the
     // team, on the same casualwear listings above - "Arsenal Graphic Tee"
     // and "Liverpool Presentation Jacket" were otherwise surviving whole.
@@ -560,9 +589,37 @@ export function guessTeamFromTitle(title: string): string {
     // surviving as "Manchester United x Ultimate365 Tour WIND.RDY" once
     // "x adidas" itself was already being stripped (see the collab strip
     // below).
-    .replace(/\b(Graphic|Presentation|Anthem Heritage|Drill|Padded|Rain|Terrace Icons|Ultimate365(?:\s+Tour)?)\b/gi, '')
+    // "Waterproof" is the same style-word shape again, this time on a
+    // training top - confirmed on a real listing surviving as "AC Milan
+    // Waterproof" once "Training Top" itself was already being stripped.
+    // "Walkout"/"Walk-Out" names this retailer's own pre-match-tunnel
+    // jacket/trouser product line, not the team - confirmed on real
+    // listings surviving as "Middlesbrough ' Walkout" (jacket) and "Italy
+    // Walk-Out Pants" (pants). "Academy Pro" is Nike's own kids'-range
+    // product-line name, the same family as "Originals"/"Essentials"
+    // below - confirmed on a real listing surviving as "England Academy
+    // Pro" once "Pre-Match Shirt" itself was already being stripped.
+    .replace(/\b(Graphic|Presentation|Anthem Heritage|Drill|Padded|Rain|Terrace Icons|Ultimate365(?:\s+Tour)?|Waterproof|Walk[- ]?Out|Academy Pro)\b/gi, '')
     .replace(/\bWIND\.RDY\b/gi, '')
-    .replace(/\b1\/4\s*Zip\b/gi, '')
+    // Nike's "Dri-FIT" fabric-technology branding is the same shape as
+    // "Ultimate365"/"WIND.RDY" above, not the team - confirmed on a real
+    // listing that was surviving as "Barcelona FIT": the collab-name
+    // strip further below (anchored to "x <Capitalized word>", up to 3
+    // repetitions) was greedily eating "x Kobe " and then also "Dri-" as
+    // a second fake collab word (its lowercase-letter class matches the
+    // hyphen, so it stops right before the uppercase "FIT"), stranding
+    // "FIT" alone - stripping the whole "Dri-FIT" token here, before that
+    // collab strip ever runs, removes it in one piece instead.
+    .replace(/\bDri-?FIT\b/gi, '')
+    // Generalised from a literal "1/4 Zip" to any "<digit>/<digit> Zip"
+    // shape (still also handles a "CL " tournament-edition marker
+    // directly in front of it, e.g. "adidas CL 1/2 Zip Training Top") -
+    // confirmed on a real listing surviving as "AC Milan CL 1/2 Zip"
+    // because this was hardcoded to "1/4" only and had no "CL" handling,
+    // while other real listings ("Rangers", "Real Madrid", "Aston Villa")
+    // already worked fine because they happened to use "1/4 Zip" with no
+    // "CL" in front.
+    .replace(/\b(?:CL\s+)?\d\/\d\s*Zip\b/gi, '')
     .replace(/\bQuarter[- ]?Zip\b/gi, '')
     // "Match Issue" (no trailing "d") is a distinct phrase from "Match
     // Issued" already covered here, and the correct source for this
@@ -579,7 +636,7 @@ export function guessTeamFromTitle(title: string): string {
     // above), leaving the bare "w/tags" token to catch here.
     .replace(/\bw\/o?\s*tags?\b/gi, '')
     .replace(/\b(Authentic|Stadium|Replica|Retro|Vintage|Classic|Reissue|Special|Version)\b/gi, '')
-    .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic)\b/gi, '')
+    .replace(/\b(Centenary|Anniversary|Commemorative|Jubilee|Basic|Limited Edition)\b/gi, '')
     // A manufacturer's own product-line name ("adidas Originals", "adidas
     // Essentials", "Nike Energy") is not part of the team - confirmed on
     // real listings surviving as "Liverpool Originals LFSTLR", "Manchester
@@ -722,12 +779,15 @@ export function guessTeamFromTitle(title: string): string {
   // Deliberately generic about which side of the hyphen has the letters
   // (this retailer uses both "digits-hyphen-digits" and "letters-hyphen-
   // alnum" shapes) rather than one narrow pattern per shape seen so far,
-  // and generously bounded (up to 8 characters either side) rather than
+  // and generously bounded (originally up to 8 characters either side,
+  // widened to 12 after a real listing - "2025-26 West Ham Umbro Away
+  // Shirt L/S *w/tags* XXXL TM12552NS-030" - surfaced a 9-character
+  // prefix, "TM12552NS", the first version didn't allow for) rather than
   // tuned tightly to only the exact lengths confirmed so far - a real
   // club number or season is never followed by a hyphenated alphanumeric
   // suffix like this at all, regardless of length, so there's no real
   // team name this could accidentally eat into.
-  c = c.replace(/\s+[A-Za-z0-9]{1,8}-[A-Za-z0-9]{2,8}$/, '').trim();
+  c = c.replace(/\s+[A-Za-z0-9]{1,12}-[A-Za-z0-9]{2,12}$/, '').trim();
   // A short (1-4 digit) trailing number, or a short (2-3 letter) all-caps
   // trailing code, is ALSO this retailer's own stock code, not a club
   // number or a real short abbreviation, specifically when
@@ -941,8 +1001,24 @@ function stripTrailingSizeCode(text: string): string {
 // way - confirmed on a real listing ("... x George Best Track Pants #7
 // *BNIB* IV7536") surviving as player name "Best Track Pants" instead of
 // just "Best".
-const PLAYER_NAME_NOISE_WORDS =
-  /\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC|Track|Pants|Bottoms|Drill)\b/gi;
+// "Goalkeeper"/"GK" is the same shape again - confirmed on real listings
+// ("1988-90 England Goalkeeper Shirt #1 M", "2000-01 Everton Goalkeeper
+// Shirt White #1 M") surviving as player "Goalkeeper" and "Goalkeeper
+// White" respectively: #1 is this retailer's own convention for a
+// goalkeeper shirt's number, not a back-printed name, and neither title
+// has a real surname anywhere in it, but with "Goalkeeper" missing from
+// this exclusion list it was being read as if it were one.
+// Also reuses COLOUR_WORDS (same list, same reasoning as its own use in
+// guessTeamFromTitle - see that comment) - confirmed on a real listing
+// ("2000-01 Everton Goalkeeper Shirt White #1 M") surviving as player
+// "White": this retailer's own word order here is "<type> Shirt <colour>
+// #<number>", not a back-printed name, and without the colour word
+// excluded it was the only thing left over once "Goalkeeper"/"Shirt" (see
+// above) were already stripped.
+const PLAYER_NAME_NOISE_WORDS = new RegExp(
+  `\\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Goalkeeper|GK|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC|Track|Pants|Bottoms|Drill|${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`,
+  'gi',
+);
 
 function cleanPlayerNameCandidate(raw: string): string | null {
   const cleaned = raw.trim().replace(PLAYER_NAME_NOISE_WORDS, '').trim();
@@ -1418,20 +1494,48 @@ const LAST_ONE_PATTERN = /\b(last one|last item|final one|only one left)\b/i;
 /**
  * Availability signal, checked in order of how decisive/specific it is:
  *  1. An explicit numeric quantity (0 is decisive either way).
- *  2. A "<N> left/remaining/in stock/available" count in the text.
- *  3. "Last one" / "only one left" - still purchasable, just low stock.
- *  4. schema.org's Offer.availability enum, in URL or bare-token form.
- *  5. A specific out-of-stock phrase, then a specific in-stock phrase.
- *  6. A bare marketplace marker ("SOLD", "Reserved").
+ *  2. A "<N> left/remaining/in stock/available" count in `text`.
+ *  3. "Last one" / "only one left" in `text` - still purchasable, just low stock.
+ *  4. schema.org's Offer.availability enum, in URL or bare-token form, in `text`.
+ *  5. A specific out-of-stock phrase, then a specific in-stock phrase, in `text`.
+ *  6. A bare marketplace marker ("SOLD", "Reserved") in `bareWordText`.
  * "Sold out"/"out of stock" wins over a lingering "Add to cart" button when
  * both are present, since disabled buttons commonly stay in the markup
  * after an item sells out. Never guessed from absence alone: `null` means
  * there was no text to check at all, 'Unknown' means there was text but
  * none of the above signals matched it.
+ *
+ * Step 6 alone checks `bareWordText` (title + any explicit stock field)
+ * rather than `text` (which also carries the page's full description/
+ * markdown, up to 4000 chars) - confirmed on a real, genuinely-in-stock
+ * listing ("2021-22 Liverpool Nike Away Shirt *w/tags* XXXL", live "Add
+ * to Bag"/Apple Pay checkout buttons on the page, no structured
+ * availability data for this codebase to fall back to instead) that this
+ * codebase reported "Out of Stock" for: this retailer's own sitewide
+ * boilerplate (getContentHtml() in services/mainContent.ts only strips
+ * literal <nav>/<header>/<footer> tags, and this retailer's theme wraps
+ * its real nav/footer/trust-badge/chat-widget markup in plain <div>s
+ * instead, so sitewide text survives into every page's description - the
+ * same contamination this file already found and fixed for shirt_type/
+ * issue/specialEdition on this exact retailer) only needs ONE stray
+ * bare "sold" anywhere in up to 4000 characters of that boilerplate
+ * (e.g. a "12 shirts sold this month" trust badge, or an unrelated
+ * recommended item shown as sold out) to false-positive a real,
+ * purchasable listing - this codebase's own comment on
+ * OUT_OF_STOCK_BARE_WORDS already flagged it as the single riskiest,
+ * most guessable signal here, checked last for that reason.
+ * Steps 4-5 (the full phrases/schema tokens) are deliberately left
+ * scanning the full `text`, not narrowed the same way: an actual page-
+ * body "Sold Out"/"£25 Sold out" near a product's own price is a real,
+ * necessary signal recheckWorker's own sale-detection relies on for
+ * retailers with no dedicated title marker, and a complete, specific
+ * phrase like that is far less likely to be incidental sitewide
+ * boilerplate than the single common word "sold" alone.
  */
 export function detectStockStatus(
   text: string | null | undefined,
   quantity?: number | null,
+  bareWordText?: string | null,
 ): 'In Stock' | 'Out of Stock' | 'Unknown' | null {
   if (typeof quantity === 'number' && Number.isFinite(quantity)) {
     return quantity <= 0 ? 'Out of Stock' : 'In Stock';
@@ -1448,7 +1552,7 @@ export function detectStockStatus(
   if (OUT_OF_STOCK_PHRASES.test(text)) return 'Out of Stock';
   if (IN_STOCK_PHRASES.test(text)) return 'In Stock';
 
-  if (OUT_OF_STOCK_BARE_WORDS.test(text)) return 'Out of Stock';
+  if (OUT_OF_STOCK_BARE_WORDS.test(bareWordText ?? text)) return 'Out of Stock';
 
   return 'Unknown';
 }
@@ -1532,6 +1636,24 @@ function detectCategoryFromTitle(title: string): string | null {
   // matched so it can't fire on "Short-Sleeved"/"Short Sleeve" (singular
   // "Short", not "Shorts").
   if (/\bshorts\b/i.test(title)) return 'Shorts';
+  // Same category (and same shirt_type-leak) gap confirmed for the rest
+  // of Kickio's real, live category list (queried directly from its
+  // `categories` table) that this function simply had no branch for yet:
+  // "2016-17 Crystal Palace Macron Away Socks" and "2016-17 Crystal
+  // Palace Macron Goalkeeper Socks" (real listings), "PSV 'Martin Glas'
+  // Scarf" (real listing), "adidas X Speedportal.1 FG Football Boots
+  // *BNIB* GW84428" (real listing).
+  if (/\bsocks?\b/i.test(title)) return 'Socks';
+  if (/\bscarf|scarves\b/i.test(title)) return 'Scarves';
+  if (/\bboots?\b/i.test(title)) return 'Boots';
+  // Tracksuit bottoms/pants have no dedicated Kickio category (checked
+  // against the same live `categories` table - there is no "Trousers" or
+  // "Pants" row) - confirmed on real listings "2009 Italy Puma
+  // Confederations Cup Walk-Out Pants *BNIB* XL 736053-002" and "2024-25
+  // Hull City Kappa Walkout Tracksuit Bottoms *BNIB* 37216IW", both of
+  // which were otherwise defaulting to Football Shirts and picking up a
+  // bogus "Home" shirt_type the same way Shorts/Socks/Scarves/Boots did.
+  if (/\b(tracksuit\s*)?(pants|trousers|bottoms)\b/i.test(title)) return 'Other';
   return null;
 }
 
@@ -1557,6 +1679,19 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     caseInsensitiveGet(extracted, 'category', 'productType', 'productCategory') ?? detectCategoryFromTitle(title),
   );
   const isJacket = category === 'Jackets/Coats';
+  // Type is a *required* Kickio field with no "Not Applicable"-style
+  // escape hatch (its real enum is strictly Home/Away/Third/Fourth/GK
+  // Home/GK Away/GK Third/GK Fourth - confirmed against the live
+  // product_features seed), so defaulting it to "Home" on anything that
+  // isn't actually a shirt is actively wrong, not just uncertain -
+  // confirmed on real listings that were doing exactly that: "Arsenal
+  // Adidas Home Shorts" -> Shorts/Home, "2025-26 Liverpool adidas Home
+  // Socks" -> (mis-categorised as) Football Shirts/Home, "2009 Italy
+  // Puma Confederations Cup Walk-Out Pants" -> (mis-categorised as)
+  // Football Shirts/Home. The isJacket-only guard below already caught
+  // Jackets/Coats; this widens the same guard to every non-shirt
+  // category now that detectCategoryFromTitle recognises all of them.
+  const isShirtCategory = category === 'Football Shirts';
 
   // ---- Team ----
   const explicitTeam = caseInsensitiveGet(extracted, 'team', 'club', 'teamName');
@@ -1626,15 +1761,22 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   // so there's no legitimate signal being given up by not also trawling
   // the rest of the page for these particular fields.
   let shirtType: string | null = null;
-  if (!isJacket) {
+  if (isShirtCategory) {
     const explicitType = caseInsensitiveGet(extracted, 'type', 'shirtType', 'kitType');
     const r = detectShirtType(explicitType ?? title);
     shirtType = r.type;
-    if (r.informationalOnly) {
-      reviewReasons.push('title indicates a Training/Pre-Match kit - Kickio has no dedicated Type value for this');
-    } else if (r.type) {
+    if (r.type) {
       confidence.shirt_type = r.certain ? 'certain' : 'inferred';
-      if (!r.certain) reviewReasons.push('no explicit Home/Away/Third/Fourth/GK keyword found - type defaulted to Home');
+      // Was a hardcoded "defaulted to Home" regardless of what r.type
+      // actually was - confirmed misleading on every real "Goalkeeper
+      // Shirt" listing with no Home/Away/Third/Fourth qualifier (e.g.
+      // "2022-23 Manchester United adidas Goalkeeper Shirt M H64059"):
+      // detectShirtType() correctly defaults an unqualified goalkeeper
+      // shirt to "GK Home", not "Home" (see its own comment), but this
+      // message told a reviewer it had defaulted to "Home" either way.
+      if (!r.certain) {
+        reviewReasons.push(`no explicit Home/Away/Third/Fourth/GK keyword found - type defaulted to ${r.type}`);
+      }
     }
   }
 
@@ -1829,12 +1971,19 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     'stockLevel',
     'productAvailability',
   );
-  // Scan the explicit field (if the site has one) together with the title/
-  // description, not instead of it - a bare "SOLD" stamp is far more likely
-  // to show up in the title itself than in a dedicated stock field, which
-  // most sites Kickcrawl scrapes won't have configured at all.
+  // `stockText` (counts, schema tokens, and full out-of-stock/in-stock
+  // phrases) still scans the full haystack - a real per-product inventory
+  // count or a genuine page-body "Sold Out" near the price is a real
+  // signal recheckWorker's own sale detection relies on for retailers
+  // with no dedicated title marker. `bareWordText` (the single riskiest
+  // signal - a bare "sold"/"reserved" with no other context, see
+  // detectStockStatus's own comment) is deliberately narrower: the
+  // explicit field plus the TITLE only, never `description`/the rest of
+  // the page markdown, which this retailer's own sitewide boilerplate has
+  // already been confirmed (for other fields) to leak into.
   const stockText = explicitStock ? `${explicitStock} ${haystack}` : haystack;
-  const stockStatus = detectStockStatus(stockText, rawQuantity);
+  const stockBareWordText = explicitStock ? `${explicitStock} ${title}` : title;
+  const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText);
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};

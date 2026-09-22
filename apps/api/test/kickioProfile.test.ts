@@ -30,10 +30,59 @@ describe('detectShirtType', () => {
     expect(r.certain).toBe(false);
   });
 
-  it('treats Training/Pre-Match as informational only, no enum value', () => {
-    const r = detectShirtType('Training Top');
-    expect(r.type).toBeNull();
-    expect(r.informationalOnly).toBe(true);
+  it('names the actual defaulted type ("GK Home") in buildKickioProfile\'s review reason, not a hardcoded "Home"', () => {
+    // Real title: "2022-23 Manchester United adidas Goalkeeper Shirt M
+    // H64059" has no Home/Away/Third/Fourth qualifier, so detectShirtType
+    // correctly defaults it to "GK Home" (asserted above) - but the
+    // review-reason message buildKickioProfile pushed for any uncertain
+    // type was a hardcoded "...type defaulted to Home" regardless of what
+    // r.type actually was, misleading a reviewer on every such goalkeeper
+    // listing.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2022-23 Manchester United adidas Goalkeeper Shirt M H64059',
+    });
+    expect(profile.identity.shirt_type).toBe('GK Home');
+    expect(profile.review_reason).toContain(
+      'no explicit Home/Away/Third/Fourth/GK keyword found - type defaulted to GK Home',
+    );
+  });
+
+  it('resolves player to null (not the team name) on a marked-number goalkeeper shirt with no real back-print', () => {
+    // Real title: "1988-90 England Goalkeeper Shirt #1 M" - with the full
+    // team context buildKickioProfile has (unlike bare
+    // extractPlayerNameFromTitle, tested above), normalizePlayerName
+    // recognises "England" as a leftover team-name fragment, not a real
+    // player, and correctly reduces it to null rather than surfacing the
+    // team's own name as if it were a back-printed surname.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '1988-90 England Goalkeeper Shirt #1 M',
+    });
+    expect(profile.identity.player).toBeNull();
+    expect(profile.identity.number).toBe('1');
+  });
+
+  it('maps Training/Pre-Match to their own real Type values, not null', () => {
+    // Kickio's live "type" product_feature was re-checked directly
+    // against its admin UI's own Variants list and now has 10 values, not
+    // the 8 the original 20260522030000_align_features_to_kickio.sql
+    // seed migration had: "Pre-Match" and "Training" have since been
+    // added as real, flat Type values (no "GK Training" - Goalkeeper
+    // still takes priority, tested separately below), so they're no
+    // longer left null/flagged for review the way they used to be.
+    expect(detectShirtType('Training Top').type).toBe('Training');
+    expect(detectShirtType('Training Top').certain).toBe(true);
+    expect(detectShirtType('Pre-Match Shirt').type).toBe('Pre-Match');
+    expect(detectShirtType('Pre-Match Shirt').certain).toBe(true);
+  });
+
+  it('still prefers a GK-qualified type over Training/Pre-Match when both are present', () => {
+    // Kickio has no "GK Training"/"GK Pre-Match" variant, so Goalkeeper
+    // keeps priority over Training/Pre-Match here, same as it already has
+    // over Home/Away/Third/Fourth - pending real evidence that a listing
+    // actually needs a flat "Training" instead when both words appear.
+    expect(detectShirtType('Goalkeeper Training Top').type).toBe('GK Home');
   });
 
   it('detects Away', () => {
@@ -437,6 +486,88 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('1992-93 Manchester United Umbro Drill Top')).toBe('Manchester United');
   });
 
+  it('strips "Waterproof", another training-top style word, the same way', () => {
+    // Real title, found while auditing Kickio's Type enum for training-
+    // shirt coverage: "1990-92 AC Milan adidas Waterproof Training Top M"
+    // was surviving as "AC Milan Waterproof".
+    expect(guessTeamFromTitle('1990-92 AC Milan adidas Waterproof Training Top M')).toBe('AC Milan');
+  });
+
+  it('strips "Walkout"/"Walk-Out", this retailer\'s own pre-match tunnel-wear product line', () => {
+    // Real titles: "2019-20 Liverpool New Balance Walkout Jacket *w/tags*
+    // XL MJ931002" was surviving as "Liverpool Walkout", and "2009 Italy
+    // Puma Confederations Cup Walk-Out Pants *BNIB* XL 736053-002" (the
+    // hyphenated spelling) as "Italy Walk-Out Pants" - same style-word
+    // shape as "Drill"/"Waterproof" above, just spelled two ways.
+    expect(guessTeamFromTitle('2019-20 Liverpool New Balance Walkout Jacket *w/tags* XL MJ931002')).toBe(
+      'Liverpool',
+    );
+    expect(
+      guessTeamFromTitle('2009 Italy Puma Confederations Cup Walk-Out Pants *BNIB* XL 736053-002'),
+    ).toBe('Italy');
+  });
+
+  it('strips "Academy Pro", Nike\'s own kids\'-range product line', () => {
+    // Real title: "2025 England Nike Academy Pro Pre-Match Shirt *w/tags*
+    // FZ9709-407" was surviving as "England Academy Pro".
+    expect(guessTeamFromTitle('2025 England Nike Academy Pro Pre-Match Shirt *w/tags* FZ9709-407')).toBe(
+      'England',
+    );
+  });
+
+  it('strips Nike\'s "Dri-FIT" fabric-technology branding rather than leaking half of it into the team', () => {
+    // Real title: "2025-26 Barcelona Nike x Kobe Dri-FIT 1/4 Zip Training
+    // Top *w/tags* IO4253-085" was surviving as "Barcelona FIT" - the
+    // collab-name strip below (anchored to "x <Capitalized word>", up to
+    // 3 repetitions) was greedily matching "x Kobe " and then also "Dri-"
+    // as a second fake collab word (its lowercase-letter class matches
+    // the hyphen, so it stopped right before the uppercase "FIT"),
+    // stranding "FIT" alone. Stripping "Dri-FIT" as one atomic token
+    // earlier in the chain avoids handing the collab strip anything to
+    // partially eat.
+    expect(
+      guessTeamFromTitle('2025-26 Barcelona Nike x Kobe Dri-FIT 1/4 Zip Training Top *w/tags* IO4253-085'),
+    ).toBe('Barcelona');
+  });
+
+  it('generalises the "1/4 Zip" strip to any "<digit>/<digit> Zip" shape, including a "CL " edition marker in front', () => {
+    // Real title: "2007-08 AC Milan adidas CL 1/2 Zip Training Top *BNIB*
+    // M 689871" was surviving as "AC Milan CL 1/2 Zip" - the old strip
+    // was hardcoded to the literal "1/4 Zip" shape only, so it neither
+    // matched "1/2 Zip" nor had any handling for the "CL" (Champions
+    // League edition) marker directly in front of it.
+    expect(
+      guessTeamFromTitle('2007-08 AC Milan adidas CL 1/2 Zip Training Top *BNIB* M 689871'),
+    ).toBe('AC Milan');
+  });
+
+  it('strips a quoted two-digit retro season symmetrically, including its closing quote', () => {
+    // Real title: "Middlesbrough Errea '94-95' Retro Walkout Jacket
+    // *w/tags* SG6Z6Z00580MDL" was surviving as "Middlesbrough '" - the
+    // short two-digit-season strip's leading "'?" only ever consumed the
+    // OPENING quote, never a closing one after the second digit group, so
+    // the lone trailing quote was left behind as orphaned punctuation
+    // once everything else around it had been correctly stripped.
+    expect(
+      guessTeamFromTitle("Middlesbrough Errea '94-95' Retro Walkout Jacket *w/tags* SG6Z6Z00580MDL"),
+    ).toBe('Middlesbrough');
+  });
+
+  it('strips "Pants"/"Trousers"/"Bottoms"/"Tracksuit" the same way as other garment words', () => {
+    // Real titles: once "Walk-Out"/"Walkout" (above) is stripped, "Italy
+    // Walk-Out Pants" and "2024-25 Hull City Kappa Walkout Tracksuit
+    // Bottoms *BNIB* 37216IW" were still leaking "Pants"/"Tracksuit
+    // Bottoms" into the guess - these garment-type words were simply
+    // missing from the same strip that already covers "Shirt"/"Jacket"/
+    // "Sweatshirt"/"Hoodie".
+    expect(
+      guessTeamFromTitle('2009 Italy Puma Confederations Cup Walk-Out Pants *BNIB* XL 736053-002'),
+    ).toBe('Italy');
+    expect(
+      guessTeamFromTitle('2024-25 Hull City Kappa Walkout Tracksuit Bottoms *BNIB* 37216IW'),
+    ).toBe('Hull City');
+  });
+
   it('does not read a numeric stock code\'s own internal "####-##" run as a season', () => {
     // Real title from a live listing: "Team: Italy 76" - the retailer's
     // own numeric SKU "765650-02" happens to contain a run ("5650-02")
@@ -555,6 +686,33 @@ describe('guessTeamFromTitle', () => {
     expect(
       guessTeamFromTitle('2025-26 Manchester United x adidas Ultimate365 Tour WIND.RDY Hoodie'),
     ).toBe('Manchester United');
+  });
+
+  it('strips "TFG", a manufacturer this retailer\'s own vendor list has but this codebase\'s MANUFACTURERS list was missing', () => {
+    // Real title: "2002-03 Wrexham TFG Match Issue Third Shirt" was
+    // surviving as "Wrexham TFG" - confirmed via
+    // vintagefootballshirts.com/collections/vendors?q=TFG that TFG is one
+    // of this retailer's own vendor/manufacturer facets, not a stray word.
+    expect(guessTeamFromTitle('2002-03 Wrexham TFG Match Issue Third Shirt')).toBe('Wrexham');
+  });
+
+  it('strips "Limited Edition" the same way as "Centenary"/"Anniversary"/"Jubilee"', () => {
+    // Real title: "2013 Madureira Limited Edition 'Che Guevara 50 Years'
+    // GK Shirt" was surviving as "Madureira Limited Edition" once the
+    // quoted aside itself was already being stripped correctly.
+    expect(
+      guessTeamFromTitle("2013 Madureira Limited Edition 'Che Guevara 50 Years' GK Shirt"),
+    ).toBe('Madureira');
+  });
+
+  it('widens the hyphenated stock-code strip to a 9+ character prefix', () => {
+    // Real title: "2025-26 West Ham Umbro Away Shirt L/S *w/tags* XXXL
+    // TM12552NS-030" was surviving as "West Ham TM12552NS-030" - the
+    // 9-character prefix "TM12552NS" exceeded the strip's original 8-
+    // character limit.
+    expect(
+      guessTeamFromTitle('2025-26 West Ham Umbro Away Shirt L/S *w/tags* XXXL TM12552NS-030'),
+    ).toBe('West Ham');
   });
 });
 
@@ -787,6 +945,28 @@ describe('extractPlayerNameFromTitle', () => {
         '2024-25 Manchester United adidas Originals x George Best Track Pants #7 *BNIB* IV7536',
       ),
     ).toBe('Best');
+  });
+
+  it('does not read "Goalkeeper"/"GK" or a colour word right before a shirt number as if it were a player name', () => {
+    // Real titles, found while auditing every real Type value against
+    // live listings: "1988-90 England Goalkeeper Shirt #1 M" was
+    // surviving as player "Goalkeeper", and "2000-01 Everton Goalkeeper
+    // Shirt White #1 M" as "Goalkeeper White" (then, once "Goalkeeper"
+    // alone was excluded, as bare "White") - neither title has a real
+    // back-printed surname anywhere in it: "#1" is this retailer's own
+    // convention for an unqualified goalkeeper shirt's number, and
+    // "White" describes the shirt's colour, not a person. This function
+    // has no team context of its own: for the 3-word England title, what
+    // survives once "Goalkeeper"/"Shirt" are excluded is the bare team
+    // name itself ("England"), within the tail match's own 3-word cap -
+    // buildKickioProfile (tested separately below) is what reduces that
+    // further to null, via normalizePlayerName's own team-context
+    // stripping. The 4-word Everton title falls outside that same 3-word
+    // cap once "Everton" is counted, so "Goalkeeper Shirt White" is all
+    // that's captured, and excluding all three of those noise words
+    // empties the candidate straight to null here already.
+    expect(extractPlayerNameFromTitle('1988-90 England Goalkeeper Shirt #1 M')).toBe('England');
+    expect(extractPlayerNameFromTitle('2000-01 Everton Goalkeeper Shirt White #1 M')).toBeNull();
   });
 });
 
@@ -1053,6 +1233,37 @@ describe('detectStockStatus', () => {
     expect(detectStockStatus('No longer available')).toBe('Out of Stock');
     expect(detectStockStatus('Still available - message to buy')).toBe('In Stock');
   });
+
+  it('ignores a stray bare "sold" in the wide text when a narrower bareWordText is supplied, but still trusts a real phrase there', () => {
+    // Real bug: "2021-22 Liverpool Nike Away Shirt *w/tags* XXXL" is a
+    // genuinely purchasable listing (live "Add to Bag"/Apple Pay checkout
+    // on the page) that this codebase reported "Out of Stock" for. Root
+    // cause: the page had no structured product/availability data (see
+    // buildKickioProfile's own review reason for this exact listing:
+    // "no explicit price field or structured product data was found"),
+    // so stock detection fell back to scanning the full page markdown,
+    // and this retailer's own sitewide boilerplate (a "4,231 shirts sold
+    // this month" trust badge) contains the bare word "sold" - the same
+    // contamination this codebase already found and fixed for
+    // shirt_type/issue/specialEdition on this exact retailer.
+    const bareWordOnlyInWideText = 'Customers also bought: 2022-23 Everton Shirt. 4,231 shirts sold this month.';
+    expect(
+      detectStockStatus(bareWordOnlyInWideText, null, '2021-22 Liverpool Nike Away Shirt *w/tags* XXXL'),
+    ).toBe('Unknown');
+    // A real bare "SOLD" stamp actually IN the narrower bareWordText must still work.
+    expect(detectStockStatus(bareWordOnlyInWideText, null, 'Man Utd Away Shirt SOLD')).toBe('Out of Stock');
+
+    // A genuine "Sold Out" PHRASE (not just the bare word) is a real,
+    // page-body signal recheckWorker's own sale detection relies on for
+    // retailers with no title marker - it's deliberately NOT narrowed the
+    // same way as the bare-word tier, so it must still be read from the
+    // full wide text regardless of what bareWordText says.
+    expect(detectStockStatus('£25 Sold out', null, '1998 France Home Shirt')).toBe('Out of Stock');
+
+    // A numeric count is likewise still read from the full wide text -
+    // unaffected by this fix, since count detection was never the risky part.
+    expect(detectStockStatus('Only 2 left in stock', null, 'Chelsea Home Shirt')).toBe('In Stock');
+  });
 });
 
 describe('buildKickioProfile', () => {
@@ -1084,6 +1295,55 @@ describe('buildKickioProfile', () => {
     expect(profile.confidence.team).toBe('certain');
     expect(profile.confidence.season).toBe('certain');
     expect(profile.needs_review).toBe(false);
+  });
+
+  it('maps a real training-top and pre-match-shirt listing to their own Type values end to end, with no leftover "no dedicated Type value" review reason', () => {
+    // Real titles: "2024-25 Rangers Castore 1/4 Zip Training Top *BNIB*
+    // TM7125-033" and "2025-26 Celtic adidas Pre-Match Shirt *BNIB*
+    // JN4956" - Kickio's live Type variants list now has "Training" and
+    // "Pre-Match" (see detectShirtType's own comment), so these should
+    // resolve to a certain, non-null shirt_type the same as any other
+    // qualifier, not the old null + "no dedicated Type value" review flag.
+    const training = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2024-25 Rangers Castore 1/4 Zip Training Top *BNIB* TM7125-033',
+    });
+    expect(training.identity.shirt_type).toBe('Training');
+    expect(training.confidence.shirt_type).toBe('certain');
+    expect(training.review_reason).not.toContain('no dedicated Type value');
+
+    const preMatch = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2025-26 Celtic adidas Pre-Match Shirt *BNIB* JN4956',
+    });
+    expect(preMatch.identity.shirt_type).toBe('Pre-Match');
+    expect(preMatch.confidence.shirt_type).toBe('certain');
+    expect(preMatch.review_reason).not.toContain('no dedicated Type value');
+  });
+
+  it('does not report a genuinely purchasable listing as Out of Stock because of unrelated sitewide "sold" boilerplate', () => {
+    // Real bug/listing: "2021-22 Liverpool Nike Away Shirt *w/tags*
+    // XXXL" - a live, purchasable page (real "Add to Bag"/Apple Pay
+    // checkout) with no structured product/availability data (reproduced
+    // here via the same review reason the real listing had: no `price`
+    // and no `extracted.availability`), so stock detection fell back to
+    // scanning the full page markdown/description and picked up the bare
+    // word "sold" from unrelated boilerplate elsewhere on the page.
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/2021-22-liverpool-nike-away-shirt-xxxl',
+      title: '2021-22 Liverpool Nike Away Shirt *w/tags* XXXL',
+      description:
+        'Home Shop by Player New In Sale Free UK Delivery over £75 ' +
+        'Customers also bought: 2022-23 Everton Shirt. ' +
+        '4,231 shirts sold this month. Add to Bag Buy with Apple Pay ' +
+        'Trustpilot 4.7 stars 697 reviews',
+    });
+    // "Add to Bag" is a real IN_STOCK_PHRASES match, read from the full
+    // description text same as before (unaffected by this fix, since only
+    // the riskier bare-word tier was narrowed) - so once the bare "sold"
+    // false positive stops overriding it, this correctly resolves to
+    // "In Stock", not just "anything other than Out of Stock".
+    expect(profile.listing.stock_status).toBe('In Stock');
   });
 
   it('sets team_kickio_match when a live Kickio team list is supplied and the resolved team matches', () => {
@@ -1207,14 +1467,19 @@ describe('buildKickioProfile', () => {
     // "Arsenal Adidas Home Shorts" was defaulting to Football Shirts and
     // also picking up shirt_type "Home" as if it were an actual shirt
     // title, since nothing distinguished a shorts listing from a shirt
-    // one. shirt_type is deliberately left as detected here (unlike
-    // jackets) - home/away/third shorts are a real, distinct kit item,
-    // not a nonsensical field the way it is for a jacket.
+    // one. shirt_type is now also left null here, same as for a jacket -
+    // queried Kickio's own live feature_category_links table directly and
+    // confirmed the "type" product_feature is linked ONLY to the Football
+    // Shirts category (Kickio's real Shorts category only carries
+    // manufacturer/colour/signed - no type, no size, no season, nothing
+    // else), so a guessed "Home"/"Away"/"Third" would never even have
+    // anywhere to go on a real Shorts listing there.
     const shorts = buildKickioProfile({
       url: 'https://www.vintagefootballshirts.com/products/arsenal-home-shorts',
       title: '2024-25 Arsenal Adidas Home Shorts',
     });
     expect(shorts.category).toBe('Shorts');
+    expect(shorts.identity.shirt_type).toBeNull();
 
     // Guards the new match against "Short-Sleeved"/"Short Sleeve" -
     // singular "Short", not "Shorts" - being mistaken for a shorts
@@ -1224,6 +1489,48 @@ describe('buildKickioProfile', () => {
       title: '2024-25 Arsenal Adidas Home Short-Sleeved Shirt',
     });
     expect(shortSleeved.category).toBe('Football Shirts');
+  });
+
+  it('infers Socks, Scarves, Boots and Other (tracksuit bottoms/pants) categories too, all with shirt_type left null', () => {
+    // Same gap as Jackets/Hoodies/Shorts above, for the rest of Kickio's
+    // real, live category list (queried directly from its `categories`
+    // table - this codebase's own LIVE_CATEGORIES constant matches it
+    // exactly) that detectCategoryFromTitle simply had no branch for yet.
+    // Real titles: "2016-17 Crystal Palace Macron Away Socks", "PSV
+    // 'Martin Glas' Scarf", "adidas X Speedportal.1 FG Football Boots
+    // *BNIB* GW84428", "2024-25 Hull City Kappa Walkout Tracksuit Bottoms
+    // *BNIB* 37216IW". Also confirmed directly against Kickio's own live
+    // feature_category_links table that the "type" product_feature is
+    // linked ONLY to the Football Shirts category - none of these has
+    // anywhere for a guessed Home/Away/Third to go, so shirt_type must
+    // stay null for every one of them, not just for a jacket.
+    const socks = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2016-17 Crystal Palace Macron Away Socks',
+    });
+    expect(socks.category).toBe('Socks');
+    expect(socks.identity.shirt_type).toBeNull();
+
+    const scarf = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: "PSV 'Martin Glas' Scarf",
+    });
+    expect(scarf.category).toBe('Scarves');
+    expect(scarf.identity.shirt_type).toBeNull();
+
+    const boots = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: 'adidas X Speedportal.1 FG Football Boots *BNIB* GW84428',
+    });
+    expect(boots.category).toBe('Boots');
+    expect(boots.identity.shirt_type).toBeNull();
+
+    const bottoms = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2024-25 Hull City Kappa Walkout Tracksuit Bottoms *BNIB* 37216IW',
+    });
+    expect(bottoms.category).toBe('Other');
+    expect(bottoms.identity.shirt_type).toBeNull();
   });
 
   it('maps a shirt spanning two seasons (real example: "1998-00 Nigeria Home Shirt L")', () => {
