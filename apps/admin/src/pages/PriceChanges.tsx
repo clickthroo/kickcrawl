@@ -41,7 +41,7 @@ export default function PriceChanges() {
     <div className="space-y-4">
       <PageHeader
         title="Price Changes"
-        subtitle="Items whose price moved by more than £0.50 or 1% (whichever is larger) on a scheduled recheck"
+        subtitle="Items whose price moved by more than £2 or 2% (whichever is larger) on a scheduled recheck"
       />
 
       <Card className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

@@ -30,11 +30,20 @@ export function isNewSale(previousStatus: string | null, newStatus: string | nul
 // price converted through the same admin-maintained GBP rate. Needs both
 // a real old and new price in the SAME currency to compare at all - a
 // currency change (or either side missing) isn't a price change, it's a
-// different kind of event this isn't trying to detect. £0.50 or 1% of the
-// old price, whichever is larger, so a rounding wobble on an expensive
-// item doesn't get reported any more readily than one on a cheap item.
-const MIN_PRICE_CHANGE_ABSOLUTE = 0.5;
-const MIN_PRICE_CHANGE_RATIO = 0.01;
+// different kind of event this isn't trying to detect.
+//
+// The original £0.50-or-1% threshold turned out too tight in production:
+// every recorded "price change" so far has been the exact same £0.75
+// delta regardless of the item's own price (£72.00→£71.25, £43.50→
+// £42.75, ...) - a flat amount independent of price is the signature of
+// a shared systematic cause (VFS prices in USD; a small wobble in the
+// admin-maintained USD→GBP rate, or similar rounding, moves every item
+// by the same converted amount at once), not real independent per-item
+// price drops by the retailer. £2 or 2%, whichever is larger, clears
+// that observed noise with real margin while still catching a
+// deliberate markdown.
+const MIN_PRICE_CHANGE_ABSOLUTE = 2;
+const MIN_PRICE_CHANGE_RATIO = 0.02;
 
 export function isPriceChange(
   oldPrice: number | null,

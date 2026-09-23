@@ -35,14 +35,19 @@ describe('isPriceChange', () => {
     expect(isPriceChange(50, 'GBP', 50.1, 'GBP')).toBe(false);
   });
 
-  it('counts a move of at least £0.50 on a cheap item', () => {
-    expect(isPriceChange(10, 'GBP', 10.5, 'GBP')).toBe(true);
-    expect(isPriceChange(10, 'GBP', 10.49, 'GBP')).toBe(false);
+  it('ignores the exact £0.75 move seen for real in production - a flat delta independent of the item price is a shared conversion-rate wobble, not real per-item markdowns', () => {
+    expect(isPriceChange(72, 'GBP', 71.25, 'GBP')).toBe(false);
+    expect(isPriceChange(43.5, 'GBP', 42.75, 'GBP')).toBe(false);
   });
 
-  it('counts a move of at least 1% on an expensive item, since £0.50 alone would be too sensitive there', () => {
-    expect(isPriceChange(500, 'GBP', 505, 'GBP')).toBe(true); // exactly 1%
-    expect(isPriceChange(500, 'GBP', 502, 'GBP')).toBe(false); // 0.4%, under both thresholds
+  it('counts a move of at least £2 on a cheap item', () => {
+    expect(isPriceChange(20, 'GBP', 22.01, 'GBP')).toBe(true);
+    expect(isPriceChange(20, 'GBP', 21.99, 'GBP')).toBe(false);
+  });
+
+  it('counts a move of at least 2% on an expensive item, since £2 alone would be too sensitive there', () => {
+    expect(isPriceChange(500, 'GBP', 510, 'GBP')).toBe(true); // exactly 2%
+    expect(isPriceChange(500, 'GBP', 509, 'GBP')).toBe(false); // 1.8%, under both thresholds
   });
 
   it('counts a price drop the same as a price rise', () => {
@@ -227,7 +232,7 @@ describe('recheckSite', () => {
         success: true,
         markdown: 'Add to Bag',
         metadata: { sourceURL: item.url, statusCode: 200, title: '1998 France Home Shirt', image: null },
-        extracted: { price: '£90.20' }, // a 20p wobble - under the £0.50/1% threshold
+        extracted: { price: '£90.20' }, // a 20p wobble - under the £2/2% threshold
       }),
     }));
     vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(item.id) }));
