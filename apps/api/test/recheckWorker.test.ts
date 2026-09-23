@@ -281,3 +281,57 @@ describe('recheckSite', () => {
     expect(persistScrapeResult).toHaveBeenCalled();
   });
 });
+
+describe('scheduleRecheck', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.doUnmock('../src/queue.js');
+  });
+
+  it('removes every existing "recheck" repeatable schedule before adding the current one, instead of stacking a second schedule alongside it', async () => {
+    // BullMQ keys a repeatable job by name + repeat options (including the
+    // interval), so simply changing RECHECK_INTERVAL_MS and redeploying
+    // would otherwise leave whatever schedule a previous deploy registered
+    // (e.g. every 4 hours) running forever alongside the new one (e.g.
+    // every hour) - two overlapping recheck cycles, not one replaced by
+    // the other.
+    const getRepeatableJobs = vi.fn().mockResolvedValue([
+      { key: 'recheck::old-4h-key', name: 'recheck', every: '14400000' },
+      { key: 'other-queue-job::key', name: 'something-else', every: '60000' },
+    ]);
+    const removeRepeatableByKey = vi.fn().mockResolvedValue(undefined);
+    const add = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/queue.js', () => ({
+      redisConnection: {},
+      recheckQueue: { getRepeatableJobs, removeRepeatableByKey, add },
+    }));
+
+    const { scheduleRecheck, RECHECK_INTERVAL_MS } = await import('../src/workers/recheckWorker.js');
+    await scheduleRecheck();
+
+    expect(removeRepeatableByKey).toHaveBeenCalledTimes(1);
+    expect(removeRepeatableByKey).toHaveBeenCalledWith('recheck::old-4h-key');
+    expect(add).toHaveBeenCalledWith('recheck', {}, { repeat: { every: RECHECK_INTERVAL_MS } });
+  });
+
+  it('adds the schedule even when there is nothing existing to remove - the first-ever boot case', async () => {
+    const getRepeatableJobs = vi.fn().mockResolvedValue([]);
+    const removeRepeatableByKey = vi.fn();
+    const add = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/queue.js', () => ({
+      redisConnection: {},
+      recheckQueue: { getRepeatableJobs, removeRepeatableByKey, add },
+    }));
+
+    const { scheduleRecheck } = await import('../src/workers/recheckWorker.js');
+    await scheduleRecheck();
+
+    expect(removeRepeatableByKey).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledTimes(1);
+  });
+});

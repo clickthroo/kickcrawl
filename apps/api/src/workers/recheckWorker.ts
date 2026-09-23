@@ -14,7 +14,7 @@ import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 import { PAGE_TIMEOUT_MS, passesSellerFilter, resolveUseBrowser } from './crawlWorker.js';
 
-export const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+export const RECHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * A sale is recorded exactly on the In Stock -> Out of Stock transition,
@@ -267,11 +267,24 @@ export function startRecheckWorker(): Worker {
 }
 
 /**
- * Registers the repeatable job that drives the 4-hourly recheck. Safe to
- * call on every boot - BullMQ keys a repeatable job by its name + repeat
- * options, so calling this again with the same interval reuses the
- * existing schedule rather than stacking a duplicate one.
+ * Registers the repeatable job that drives the recheck cycle. Safe to call
+ * on every boot - BullMQ keys a repeatable job by its name + repeat
+ * options (including the interval itself), so calling this again with the
+ * SAME interval reuses the existing schedule rather than stacking a
+ * duplicate one. But that also means simply changing RECHECK_INTERVAL_MS
+ * and redeploying would otherwise leave whatever schedule a previous
+ * deploy registered running forever alongside the new one - two
+ * overlapping recheck cycles, not one replaced by the other. Removing
+ * every existing 'recheck' repeatable job first, unconditionally, before
+ * re-adding the current one guarantees exactly one active schedule after
+ * every boot, regardless of what interval any earlier deploy used.
  */
 export async function scheduleRecheck(): Promise<void> {
+  const existing = await recheckQueue.getRepeatableJobs();
+  for (const job of existing) {
+    if (job.name === 'recheck') {
+      await recheckQueue.removeRepeatableByKey(job.key);
+    }
+  }
   await recheckQueue.add('recheck', {}, { repeat: { every: RECHECK_INTERVAL_MS } });
 }

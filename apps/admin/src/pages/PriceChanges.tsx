@@ -74,7 +74,7 @@ export default function PriceChanges() {
       {priceChanges?.length === 0 && (
         <Card>
           <p className="text-center text-sm text-slate-400">
-            No price changes detected yet - this fills in as rechecks (every 4 hours) catch an item's price moving
+            No price changes detected yet - this fills in as rechecks (every hour) catch an item's price moving
             by more than the noise threshold.
           </p>
         </Card>
