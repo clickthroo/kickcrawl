@@ -6,6 +6,7 @@ import { backfillItemProfiles } from './lib/backfillItemProfiles.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
+import { fetchPage } from './services/fetcher.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -59,6 +60,33 @@ async function main(): Promise<void> {
       if (total > 0) console.log(`[backfillItemProfiles] updated ${total} row(s)`);
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
+
+  // TEMP diagnostic - remove once reviewed. Same check recheckWorker.ts's
+  // own variant-diag already does (Shopify's standard <product>.json
+  // endpoint), but on a single known URL directly at boot instead of
+  // waiting for the next hourly recheck cycle to reach it.
+  (async () => {
+    const jsonUrl =
+      'https://www.vintagefootballshirts.com/collections/german-clubs/products/2009-10-fc-koln-reebok-away-shirt-l-s-bnib-xs.json';
+    try {
+      const res = await fetchPage(jsonUrl, { useBrowser: false, respectRobots: false });
+      let firstVariantRaw: unknown = null;
+      let variantCount: number | null = null;
+      if (res.html) {
+        try {
+          const parsed = JSON.parse(res.html);
+          const variants = Array.isArray(parsed?.product?.variants) ? parsed.product.variants : null;
+          variantCount = variants?.length ?? null;
+          firstVariantRaw = variants?.[0] ?? null;
+        } catch {
+          firstVariantRaw = 'unparseable';
+        }
+      }
+      console.log('[boot-variant-diag]', JSON.stringify({ statusCode: res.statusCode, variantCount, firstVariantRaw }));
+    } catch (err) {
+      console.error('[boot-variant-diag] failed:', err);
+    }
+  })();
 
   const shutdown = async (): Promise<void> => {
     await app.close();
