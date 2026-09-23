@@ -128,6 +128,24 @@ describe('recheckSite', () => {
     expect(progress.errors).toEqual([]);
   });
 
+  it('excludes items already known Out of Stock from the recheck query - once sold, stays sold', async () => {
+    // Once an item has been recorded as sold, there's nothing left for an
+    // hourly recheck to catch by revisiting it forever - excluded at the
+    // query itself so it's never fetched at all, not just skipped after.
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: vi.fn() }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn() }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    await recheckSite(baseSite, 'job-1', {}, progress);
+
+    const [selectSql] = query.mock.calls[0];
+    expect(selectSql).toMatch(/stock_status IS DISTINCT FROM 'Out of Stock'/);
+  });
+
   it('records the full Kickio profile on a sale, not just title/price/currency', async () => {
     // No seller filter configured (unlike baseSite) - this exercises a
     // plain retailer, not a marketplace where a seller's own Pro/feedback

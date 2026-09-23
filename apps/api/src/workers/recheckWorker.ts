@@ -65,12 +65,16 @@ export async function recheckSite(
   kickioTeams: readonly KickioTeamRef[] | null = null,
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
-    `SELECT id, url, path, stock_status, price, currency FROM urls WHERE site_id = $1 AND status = 'fetched'`,
+    `SELECT id, url, path, stock_status, price, currency FROM urls
+     WHERE site_id = $1 AND status = 'fetched' AND stock_status IS DISTINCT FROM 'Out of Stock'`,
     [site.id],
   );
   // Only items (allowed_paths-matched), not the stepping-stone category/
   // listing pages a crawl also fetches along the way - those never carry
   // real stock info, so rechecking them would just burn rate-limit budget.
+  // An item already known Out of Stock is excluded at the query itself
+  // (not filtered here) - once sold, it stays sold, so there's nothing
+  // left for a recheck to catch by revisiting it every hour forever.
   const items = urls.filter((u) => isPathAllowed(u.path, site.allowed_paths, site.denied_paths));
 
   progress.total += items.length;
