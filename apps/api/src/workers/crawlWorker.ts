@@ -120,6 +120,27 @@ async function getJobStatus(jobId: string): Promise<string | undefined> {
 // treating it as stalled the way an unattended fetch would.
 const PAUSE_POLL_INTERVAL_MS = 3_000;
 
+// Confirmed in production on VFS: 75% of already-discovered product urls
+// (5384 of 7200) ended up permanently lost after exactly one failed fetch
+// - overwhelmingly the shared browser instance crashing/closing mid-fetch,
+// the same transient failure scrapePageWithTimeout already knows how to
+// recover from for the NEXT page, just not for this one's own single
+// attempt. A page that fails now gets up to this many total tries before
+// crawl_frontier gives up on it for real.
+const MAX_FRONTIER_ATTEMPTS = 3;
+// Each retry waits longer than the last (attempts * this many minutes) -
+// deferred to later in the queue rather than retried back-to-back, so a
+// crashed browser (which recycles on its own within a couple of minutes,
+// per this same session's own earlier findings) has real time to recover
+// instead of the retry landing in the middle of the same crash.
+const FRONTIER_RETRY_BACKOFF_MINUTES = 2;
+// How long to wait before re-checking for available work when every
+// remaining pending row is deferred for a retry - short relative to the
+// backoff itself; the main loop re-checks cancel/pause status on every
+// pass regardless, so this never blocks a pause/cancel from taking effect
+// for long.
+const FRONTIER_RETRY_POLL_MS = 5_000;
+
 /**
  * Blocks while a job's status is 'paused', re-checking on an interval.
  * Returns the status that ended the wait - either 'cancelled' (the caller
@@ -381,15 +402,26 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       }
     }
 
-    const nextRow = await pool.query<{ id: string; url: string; depth: number }>(
-      `SELECT id, url, depth FROM crawl_frontier WHERE job_id = $1 AND status = 'pending' ORDER BY id ASC LIMIT 1`,
+    const nextRow = await pool.query<{ id: string; url: string; depth: number; attempts: number }>(
+      `SELECT id, url, depth, attempts FROM crawl_frontier
+       WHERE job_id = $1 AND status = 'pending' AND available_at <= now()
+       ORDER BY available_at ASC, id ASC LIMIT 1`,
       [jobId],
     );
-    if (nextRow.rows.length === 0) break;
+    if (nextRow.rows.length === 0) {
+      if (pendingCount > 0) {
+        // Nothing immediately available, but real pending work still
+        // exists - it's just deferred for a retry backoff, not actually
+        // exhausted. Wait a bit and check again rather than concluding
+        // the job is done.
+        await sleep(FRONTIER_RETRY_POLL_MS);
+        continue;
+      }
+      break;
+    }
+    const frontierId = nextRow.rows[0].id;
+    const attemptsSoFar = nextRow.rows[0].attempts;
     const next = { url: nextRow.rows[0].url, depth: nextRow.rows[0].depth };
-    await pool.query(`UPDATE crawl_frontier SET status = 'done' WHERE id = $1`, [nextRow.rows[0].id]);
-    pendingCount -= 1;
-    doneCount += 1;
 
     // The seed (depth 0) is always an item, same as before. Anything else
     // is an item only if it matches allowed_paths - a page that doesn't
@@ -438,7 +470,27 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       site,
     );
     if (!result.success) {
-      console.log(`[crawlWorker] job ${jobId} failed ${next.url}: ${result.error}`);
+      const attemptsMade = attemptsSoFar + 1;
+      if (attemptsMade < MAX_FRONTIER_ATTEMPTS) {
+        // Not given up on yet - stays 'pending' (pendingCount/doneCount
+        // untouched, no error recorded yet) so it's picked up again once
+        // its backoff passes, instead of being thrown away after this one
+        // attempt.
+        console.log(
+          `[crawlWorker] job ${jobId} will retry ${next.url} (attempt ${attemptsMade}/${MAX_FRONTIER_ATTEMPTS} failed: ${result.error})`,
+        );
+        await pool.query(`UPDATE crawl_frontier SET attempts = $2, available_at = $3 WHERE id = $1`, [
+          frontierId,
+          attemptsMade,
+          new Date(Date.now() + attemptsMade * FRONTIER_RETRY_BACKOFF_MINUTES * 60_000),
+        ]);
+        continue;
+      }
+
+      console.log(`[crawlWorker] job ${jobId} failed ${next.url} after ${attemptsMade} attempt(s): ${result.error}`);
+      await pool.query(`UPDATE crawl_frontier SET status = 'done' WHERE id = $1`, [frontierId]);
+      pendingCount -= 1;
+      doneCount += 1;
       // Recorded regardless of isItem - previously a failed fetch on a
       // non-item (nav/category) page was completely silent: no error, no
       // retry, nothing in the job's error count, just a page that
@@ -452,6 +504,9 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
         await recordPageResult(siteId, jobId, next.url, result);
       }
     } else {
+      await pool.query(`UPDATE crawl_frontier SET status = 'done' WHERE id = $1`, [frontierId]);
+      pendingCount -= 1;
+      doneCount += 1;
       if (isItem) {
         // The seller filter only makes sense for a page that's genuinely
         // an item by its own path - a catalog/search seed forced into
