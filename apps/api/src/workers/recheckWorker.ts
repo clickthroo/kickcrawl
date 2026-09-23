@@ -165,35 +165,36 @@ export async function recheckSite(
           JSON.stringify({ url: item.url, stock_status: profile.listing.stock_status }),
         );
 
-        // TEMP DIAGNOSTIC - see session notes. Verifying, against a real
-        // production request rather than guessing, whether Shopify's
-        // standard <product-url>.json endpoint (present by default on every
-        // Shopify store unless explicitly disabled) exposes per-size
-        // variant availability for this retailer - the data source the
-        // "one card per size" feature needs, before building on top of it.
+        // TEMP DIAGNOSTIC - see session notes. The previous version of this
+        // (cherry-picking title/available/price/sku per variant) came back
+        // with `available` silently missing from every single sample -
+        // JSON.stringify drops undefined keys, so that could mean either
+        // "always true, never logged" or "the key isn't in the raw response
+        // at all" and there was no way to tell those apart from the
+        // filtered-down output. Logging the FULL raw first variant object
+        // (whatever keys it actually has) instead of guessing which ones
+        // matter, to see the real shape directly - same reasoning as every
+        // other diagnostic this session that replaced an assumption with
+        // the actual production response.
         if (item.url.includes('vintagefootballshirts.com') && item.url.includes('/products/')) {
           try {
             const jsonUrl = `${item.url.replace(/\/+$/, '')}.json`;
             const jsonRes = await fetchPage(jsonUrl, { useBrowser: false, respectRobots: false });
-            let variantsSummary: unknown = null;
+            let firstVariantRaw: unknown = null;
+            let variantCount: number | null = null;
             if (jsonRes.html) {
               try {
                 const parsed = JSON.parse(jsonRes.html);
-                variantsSummary = Array.isArray(parsed?.product?.variants)
-                  ? parsed.product.variants.map((v: Record<string, unknown>) => ({
-                      title: v.title,
-                      available: v.available,
-                      price: v.price,
-                      sku: v.sku,
-                    }))
-                  : null;
+                const variants = Array.isArray(parsed?.product?.variants) ? parsed.product.variants : null;
+                variantCount = variants?.length ?? null;
+                firstVariantRaw = variants?.[0] ?? null;
               } catch {
-                variantsSummary = 'unparseable';
+                firstVariantRaw = 'unparseable';
               }
             }
             console.log(
               '[variant-diag]',
-              JSON.stringify({ url: item.url, statusCode: jsonRes.statusCode, variantsSummary }),
+              JSON.stringify({ url: item.url, statusCode: jsonRes.statusCode, variantCount, firstVariantRaw }),
             );
           } catch (err) {
             console.log(
