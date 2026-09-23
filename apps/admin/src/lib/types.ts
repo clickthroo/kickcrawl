@@ -40,8 +40,7 @@ export interface UrlRecord {
 
 export interface JobPageItem {
   url: string;
-  last_status_code: number | null;
-  last_error: string | null;
+  status_code: number | null;
   fetched_at: string;
   title: string | null;
   image: string | null;

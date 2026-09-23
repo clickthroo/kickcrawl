@@ -14,6 +14,13 @@ import {
   Thumbnail,
 } from '../components/ui';
 
+// status_code is this job's own fetch outcome (routes/admin/jobs.ts) - 0
+// means no HTTP response at all (network error, timeout), and any 4xx/5xx
+// is a real failure response; everything else is a genuine success.
+function isFetchError(statusCode: number | null): boolean {
+  return statusCode === null || statusCode === 0 || statusCode >= 400;
+}
+
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
   const [job, setJob] = useState<Job | null>(null);
@@ -196,8 +203,8 @@ export default function JobDetail() {
                 <KickioProfilePanel profile={p.profile} />
 
                 <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span className={p.last_error ? 'text-red-600' : ''}>
-                    {p.last_error ? `Error (${p.last_status_code ?? '?'})` : `Status ${p.last_status_code}`}
+                  <span className={isFetchError(p.status_code) ? 'text-red-600' : ''}>
+                    {isFetchError(p.status_code) ? `Error (${p.status_code})` : `Status ${p.status_code}`}
                   </span>
                   <span>{new Date(p.fetched_at).toLocaleString()}</span>
                 </div>
