@@ -6,6 +6,7 @@ import { backfillItemProfiles } from './lib/backfillItemProfiles.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
+import { crawlQueue } from './queue.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -60,28 +61,30 @@ async function main(): Promise<void> {
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
 
-  // TEMP diagnostic - remove once reviewed. Auditing whether sales/price
-  // changes have ever actually been recorded in production (not just
-  // covered by unit tests) - all-time counts plus the most recent few rows
-  // of each, so this is checked against real data rather than assumed.
+  // TEMP diagnostic - remove once reviewed. sales/price_changes audit
+  // already answered (real rows confirmed for both). Checking the actual
+  // crawl job's real state directly - both Postgres and BullMQ's own view
+  // of it - to find out why it's shown no crawlWorker activity for
+  // several minutes despite the new stall-reaction fix.
   pool
-    .query(`SELECT count(*) FROM sales`)
-    .then((res) => console.log('[sales-audit] total', JSON.stringify(res.rows[0])))
-    .catch((err) => console.error('[sales-audit] failed:', err));
-  pool
-    .query(`SELECT id, url_id, title, price, currency, detected_at FROM sales ORDER BY detected_at DESC LIMIT 5`)
-    .then((res) => console.log('[sales-audit] recent', JSON.stringify(res.rows)))
-    .catch((err) => console.error('[sales-audit] failed:', err));
-  pool
-    .query(`SELECT count(*) FROM price_changes`)
-    .then((res) => console.log('[price-changes-audit] total', JSON.stringify(res.rows[0])))
-    .catch((err) => console.error('[price-changes-audit] failed:', err));
-  pool
-    .query(
-      `SELECT id, url_id, title, old_price, new_price, currency, detected_at FROM price_changes ORDER BY detected_at DESC LIMIT 5`,
-    )
-    .then((res) => console.log('[price-changes-audit] recent', JSON.stringify(res.rows)))
-    .catch((err) => console.error('[price-changes-audit] failed:', err));
+    .query(`SELECT id, status, completed_pages, total_pages, started_at, finished_at FROM jobs WHERE type = 'crawl' ORDER BY created_at DESC LIMIT 3`)
+    .then(async (res) => {
+      console.log('[crawl-job-audit] postgres rows', JSON.stringify(res.rows));
+      for (const row of res.rows) {
+        const bullJob = await crawlQueue.getJob(row.id);
+        if (!bullJob) {
+          console.log('[crawl-job-audit] bullmq', row.id, 'no job found in redis');
+          continue;
+        }
+        const state = await bullJob.getState();
+        console.log(
+          '[crawl-job-audit] bullmq',
+          row.id,
+          JSON.stringify({ state, attemptsMade: bullJob.attemptsMade, timestamp: bullJob.timestamp, processedOn: bullJob.processedOn, finishedOn: bullJob.finishedOn }),
+        );
+      }
+    })
+    .catch((err) => console.error('[crawl-job-audit] failed:', err));
 
   const shutdown = async (): Promise<void> => {
     await app.close();
