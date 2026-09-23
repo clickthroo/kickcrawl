@@ -59,6 +59,8 @@ describe('profileToColumns', () => {
       size: 'S',
       manufacturer: 'Adidas',
       condition: 'Brand New (With Tags)',
+      price: 175,
+      currency: 'GBP',
     });
   });
 

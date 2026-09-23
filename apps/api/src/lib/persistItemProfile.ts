@@ -3,9 +3,12 @@ import type { KickioProfile } from '../services/kickioProfile.js';
 
 /**
  * The subset of a KickioProfile's fields that are also persisted as real
- * `urls` columns (see migration 010), specifically so the admin Items list
- * can filter/paginate them in SQL instead of building a profile for every
- * row in the table on every request - see routes/admin/urls.ts.
+ * `urls` columns (see migrations 010 and 011), specifically so the admin
+ * Items list can filter/paginate them in SQL instead of building a profile
+ * for every row in the table on every request (routes/admin/urls.ts), and
+ * so a recheck has a stored price to diff a fresh read against to detect a
+ * real price change (workers/recheckWorker.ts), the same way it already
+ * diffs stock_status to detect a sale.
  */
 export interface ItemProfileColumns {
   stock_status: string | null;
@@ -19,6 +22,8 @@ export interface ItemProfileColumns {
   size: string | null;
   manufacturer: string | null;
   condition: string | null;
+  price: number | null;
+  currency: string | null;
 }
 
 export function profileToColumns(profile: KickioProfile): ItemProfileColumns {
@@ -34,6 +39,8 @@ export function profileToColumns(profile: KickioProfile): ItemProfileColumns {
     size: profile.listing.size,
     manufacturer: profile.listing.manufacturer,
     condition: profile.listing.condition,
+    price: profile.listing.price,
+    currency: profile.listing.currency,
   };
 }
 
@@ -43,7 +50,7 @@ export async function persistItemProfileColumns(urlId: string, profile: KickioPr
     `UPDATE urls SET
        stock_status = $2, team = $3, season = $4, shirt_type = $5,
        player = $6, player_number = $7, colour = $8, colour_secondary = $9,
-       size = $10, manufacturer = $11, condition = $12
+       size = $10, manufacturer = $11, condition = $12, price = $13, currency = $14
      WHERE id = $1`,
     [
       urlId,
@@ -58,6 +65,8 @@ export async function persistItemProfileColumns(urlId: string, profile: KickioPr
       c.size,
       c.manufacturer,
       c.condition,
+      c.price,
+      c.currency,
     ],
   );
 }

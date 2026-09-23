@@ -136,6 +136,21 @@ export interface Sale {
   detected_at: string;
 }
 
+export interface PriceChange {
+  id: string;
+  url_id: string;
+  site_id: string;
+  site_name: string;
+  url: string;
+  title: string | null;
+  old_price: number;
+  new_price: number;
+  currency: string | null;
+  /** Full Kickio profile as it was at the moment the price change was detected. */
+  profile: KickioProfile | null;
+  detected_at: string;
+}
+
 export interface CurrencyRate {
   code: string;
   rate_to_gbp: number;

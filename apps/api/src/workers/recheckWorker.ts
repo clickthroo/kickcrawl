@@ -26,22 +26,47 @@ export function isNewSale(previousStatus: string | null, newStatus: string | nul
   return previousStatus === 'In Stock' && newStatus === 'Out of Stock';
 }
 
+// A "meaningful" price change, not every penny of currency-conversion
+// rounding noise a recheck might otherwise see between two reads of a
+// price converted through the same admin-maintained GBP rate. Needs both
+// a real old and new price in the SAME currency to compare at all - a
+// currency change (or either side missing) isn't a price change, it's a
+// different kind of event this isn't trying to detect. £0.50 or 1% of the
+// old price, whichever is larger, so a rounding wobble on an expensive
+// item doesn't get reported any more readily than one on a cheap item.
+const MIN_PRICE_CHANGE_ABSOLUTE = 0.5;
+const MIN_PRICE_CHANGE_RATIO = 0.01;
+
+export function isPriceChange(
+  oldPrice: number | null,
+  oldCurrency: string | null,
+  newPrice: number | null,
+  newCurrency: string | null,
+): boolean {
+  if (oldPrice == null || newPrice == null) return false;
+  if (oldCurrency !== newCurrency) return false;
+  const threshold = Math.max(MIN_PRICE_CHANGE_ABSOLUTE, oldPrice * MIN_PRICE_CHANGE_RATIO);
+  return Math.abs(newPrice - oldPrice) >= threshold;
+}
+
 interface RecheckableUrl {
   id: string;
   url: string;
   path: string;
   stock_status: string | null;
+  price: number | null;
+  currency: string | null;
 }
 
 export async function recheckSite(
   site: SiteConfig,
   jobId: string,
   currencyRates: Record<string, number>,
-  progress: { checked: number; total: number; sales: number; errors: string[] },
+  progress: { checked: number; total: number; sales: number; priceChanges: number; errors: string[] },
   kickioTeams: readonly KickioTeamRef[] | null = null,
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
-    `SELECT id, url, path, stock_status FROM urls WHERE site_id = $1 AND status = 'fetched'`,
+    `SELECT id, url, path, stock_status, price, currency FROM urls WHERE site_id = $1 AND status = 'fetched'`,
     [site.id],
   );
   // Only items (allowed_paths-matched), not the stepping-stone category/
@@ -103,6 +128,27 @@ export async function recheckSite(
           progress.sales += 1;
         }
 
+        if (isPriceChange(item.price, item.currency, profile.listing.price, profile.listing.currency)) {
+          // Same snapshot reasoning as sales just above: the full profile,
+          // not just the price, so the Price Changes page can show every
+          // feature of the item alongside the change, and stays accurate
+          // even if the source page changes or 404s later.
+          await pool.query(
+            `INSERT INTO price_changes (url_id, site_id, title, old_price, new_price, currency, profile)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              urlId,
+              site.id,
+              result.metadata.title,
+              item.price,
+              profile.listing.price,
+              profile.listing.currency,
+              JSON.stringify(profile),
+            ],
+          );
+          progress.priceChanges += 1;
+        }
+
         // Persists every commonly-filtered profile field (team, season,
         // colour, size, ...), not just stock_status - the admin Items list
         // now filters these in SQL (routes/admin/urls.ts) instead of
@@ -159,7 +205,7 @@ export async function recheckSite(
 
 async function processRecheck(): Promise<void> {
   const jobId = await createJob('recheck', null, {}, 'running');
-  const progress = { checked: 0, total: 0, sales: 0, errors: [] as string[] };
+  const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
 
   try {
     const { rows: sites } = await pool.query<SiteConfig>('SELECT * FROM sites WHERE is_active = true');
@@ -181,7 +227,9 @@ async function processRecheck(): Promise<void> {
         JSON.stringify(progress.errors.map((e) => ({ message: e }))),
       ],
     );
-    console.log(`[recheckWorker] job ${jobId} checked ${progress.checked} item(s), found ${progress.sales} sale(s)`);
+    console.log(
+      `[recheckWorker] job ${jobId} checked ${progress.checked} item(s), found ${progress.sales} sale(s), ${progress.priceChanges} price change(s)`,
+    );
   } catch (err) {
     await failJob(jobId, err instanceof Error ? err.message : String(err));
     throw err;
