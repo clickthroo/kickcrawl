@@ -61,23 +61,24 @@ async function main(): Promise<void> {
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
 
-  // TEMP diagnostic - remove once reviewed. discovery-audit's first pass
-  // already found: 7200 product URLs discovered but 5384 (75%) sit
-  // status='failed' and, per crawl_frontier's own design, are never
-  // retried within the same crawl job once marked - a far higher rate
-  // than the known intermittent browser-crash storm alone would explain.
-  // Reading the ACTUAL error text for a sample, and counting by pattern,
-  // before guessing at a cause. Also getting a real total product count
-  // from the site's own sitemap (extrapolated from real sub-sitemap
-  // sizes, not a guessed URL) to know the true target.
+  // TEMP diagnostic - remove once reviewed. Two things confirmed by the
+  // last pass: (1) the failed-product-url error text is overwhelmingly
+  // "browser has been closed"/launch-failure variants, fragmented into
+  // many near-unique messages (embedded launch command/context ids) so a
+  // plain GROUP BY undercounted how dominant this one cause really is -
+  // the browser is crashing far more persistently than a one-off storm.
+  // (2) extrapolating from a single sub-sitemap's count (612 x 1001 =
+  // 612,000) is obviously wrong for a shop this size - Shopify's
+  // GID-range-based sitemap sharding doesn't mean every shard is equally
+  // full. Sampling more shards (first/middle/last) for a real total, and
+  // checking whether VFS's own site config already has
+  // skip_browser_for_items on - if item pages render fine without a
+  // browser (plausible, Shopify product pages are server-rendered), that
+  // setting alone would remove most fetches from the crash-prone
+  // Playwright path entirely, without any code change.
   pool
-    .query(
-      `SELECT u.last_error, count(*) FROM urls u
-       JOIN sites s ON s.id = u.site_id
-       WHERE s.base_url ILIKE '%vintagefootballshirts%' AND u.status = 'failed' AND u.path LIKE '%/products/%'
-       GROUP BY u.last_error ORDER BY count(*) DESC LIMIT 15`,
-    )
-    .then((res) => console.log('[discovery-audit] failed product urls by error', JSON.stringify(res.rows)))
+    .query(`SELECT skip_browser_for_items, use_browser_default, rate_limit_rps FROM sites WHERE base_url ILIKE '%vintagefootballshirts%'`)
+    .then((res) => console.log('[discovery-audit] browser config', JSON.stringify(res.rows[0])))
     .catch((err) => console.error('[discovery-audit] failed:', err));
   (async () => {
     try {
@@ -87,24 +88,24 @@ async function main(): Promise<void> {
       });
       const locs = [...(indexRes.html?.matchAll(/<loc>(.*?)<\/loc>/g) ?? [])].map((m) => m[1].replace(/&amp;/g, '&'));
       const productSitemaps = locs.filter((l) => l.includes('sitemap_products_'));
-      console.log(
-        '[discovery-audit] sitemap index',
-        JSON.stringify({ statusCode: indexRes.statusCode, totalLocs: locs.length, productSitemapCount: productSitemaps.length }),
-      );
-      if (productSitemaps.length > 0) {
-        const firstRes = await fetchPage(productSitemaps[0], { useBrowser: false, respectRobots: false });
-        const firstCount = firstRes.html ? (firstRes.html.match(/<loc>/g) ?? []).length : 0;
-        console.log(
-          '[discovery-audit] first product sitemap',
-          JSON.stringify({
-            url: productSitemaps[0],
-            statusCode: firstRes.statusCode,
-            productUrlCount: firstCount,
-            estimatedTotal: firstCount * productSitemaps.length,
-            sample: firstRes.html?.slice(0, 500) ?? null,
-          }),
-        );
+      const sampleIndexes = [0, Math.floor(productSitemaps.length / 2), productSitemaps.length - 1];
+      let sampledTotal = 0;
+      for (const i of sampleIndexes) {
+        const url = productSitemaps[i];
+        if (!url) continue;
+        const res = await fetchPage(url, { useBrowser: false, respectRobots: false });
+        const count = res.html ? (res.html.match(/<loc>/g) ?? []).length : 0;
+        sampledTotal += count;
+        console.log('[discovery-audit] sitemap sample', JSON.stringify({ index: i, url, statusCode: res.statusCode, productUrlCount: count }));
       }
+      console.log(
+        '[discovery-audit] sitemap totals',
+        JSON.stringify({
+          productSitemapCount: productSitemaps.length,
+          avgOfSamples: Math.round(sampledTotal / sampleIndexes.filter((i) => productSitemaps[i]).length),
+          roughEstimatedTotal: Math.round((sampledTotal / sampleIndexes.length) * productSitemaps.length),
+        }),
+      );
     } catch (err) {
       console.error('[discovery-audit] sitemap failed:', err);
     }
