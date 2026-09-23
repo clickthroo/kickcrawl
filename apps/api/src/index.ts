@@ -66,6 +66,23 @@ async function main(): Promise<void> {
     .then((res) => console.log('[stock-breakdown]', JSON.stringify(res.rows)))
     .catch((err) => console.error('[stock-breakdown] failed:', err));
 
+  // TEMP diagnostic - remove once reviewed. Checking whether the
+  // schema.org structured "availability" value scraped for VFS items
+  // marked "In Stock" is actually a reliable per-item signal, or a
+  // theme-wide boilerplate value (same shape as the "Unit price /
+  // Unavailable" false-positive found earlier this session).
+  pool
+    .query(
+      `SELECT u.url, sr.content->>'availability' AS availability, sr.content->>'price' AS price
+       FROM urls u
+       JOIN scrape_results sr ON sr.url_id = u.id AND sr.format = 'extracted'
+       WHERE u.stock_status = 'In Stock' AND u.url LIKE '%vintagefootballshirts.com%'
+       ORDER BY sr.fetched_at DESC
+       LIMIT 10`,
+    )
+    .then((res) => console.log('[availability-sample]', JSON.stringify(res.rows)))
+    .catch((err) => console.error('[availability-sample] failed:', err));
+
   const shutdown = async (): Promise<void> => {
     await app.close();
     await worker.close();
