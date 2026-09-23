@@ -155,6 +155,16 @@ export async function recheckSite(
         // building a profile for every row in the table on every request.
         await persistItemProfileColumns(urlId, profile);
 
+        // TEMP DIAGNOSTIC - see session notes. Confirming, against a real
+        // production run rather than assuming, that rechecks are actually
+        // resolving both In Stock and Out of Stock (not just one of the
+        // two, which would mean a detection regression rather than a
+        // real-world stock mix).
+        console.log(
+          '[stock-mix-diag]',
+          JSON.stringify({ url: item.url, stock_status: profile.listing.stock_status }),
+        );
+
         // TEMP DIAGNOSTIC - see session notes. Verifying, against a real
         // production request rather than guessing, whether Shopify's
         // standard <product-url>.json endpoint (present by default on every
