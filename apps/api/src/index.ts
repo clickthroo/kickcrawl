@@ -60,6 +60,29 @@ async function main(): Promise<void> {
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
 
+  // TEMP diagnostic - remove once reviewed. Auditing whether sales/price
+  // changes have ever actually been recorded in production (not just
+  // covered by unit tests) - all-time counts plus the most recent few rows
+  // of each, so this is checked against real data rather than assumed.
+  pool
+    .query(`SELECT count(*) FROM sales`)
+    .then((res) => console.log('[sales-audit] total', JSON.stringify(res.rows[0])))
+    .catch((err) => console.error('[sales-audit] failed:', err));
+  pool
+    .query(`SELECT id, url_id, title, price, currency, detected_at FROM sales ORDER BY detected_at DESC LIMIT 5`)
+    .then((res) => console.log('[sales-audit] recent', JSON.stringify(res.rows)))
+    .catch((err) => console.error('[sales-audit] failed:', err));
+  pool
+    .query(`SELECT count(*) FROM price_changes`)
+    .then((res) => console.log('[price-changes-audit] total', JSON.stringify(res.rows[0])))
+    .catch((err) => console.error('[price-changes-audit] failed:', err));
+  pool
+    .query(
+      `SELECT id, url_id, title, old_price, new_price, currency, detected_at FROM price_changes ORDER BY detected_at DESC LIMIT 5`,
+    )
+    .then((res) => console.log('[price-changes-audit] recent', JSON.stringify(res.rows)))
+    .catch((err) => console.error('[price-changes-audit] failed:', err));
+
   const shutdown = async (): Promise<void> => {
     await app.close();
     await worker.close();
