@@ -12,6 +12,7 @@ import { buildKickioProfile, type KickioTeamRef } from '../services/kickioProfil
 import { persistItemProfileColumns } from '../lib/persistItemProfile.js';
 import { getCurrencyRates } from '../lib/currencyRates.js';
 import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
+import { resumeCrawlJob } from '../lib/jobRecords.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 
@@ -611,6 +612,27 @@ export function startCrawlWorker(): Worker<CrawlJobData> {
   );
   worker.on('failed', (job, err) => {
     console.error(`[crawlWorker] job ${job?.id} failed:`, err);
+    // A stall (maxStalledCount: 0 fails it immediately, see above) means
+    // the process holding this job's lock died without this handler's own
+    // try/catch ever running - Postgres still says 'running' since
+    // nothing else touched it. Distinct from processCrawl actually
+    // throwing, which already updates Postgres to 'failed' itself above
+    // before rethrowing, and which this same resume would wrongly bring
+    // back to life on a genuine, non-transient error. Confirmed in
+    // production as a real, recurring gap: recoverOrphanedJobs() only
+    // ever runs once at boot, and Railway's rolling deploys keep the old
+    // process alive for a stretch after the new one is already up, so a
+    // job can become newly orphaned after that one boot-time check has
+    // already run and before the next deploy ever happens. BullMQ's own
+    // stall detection isn't tied to a boot at all, so reacting to it here
+    // closes that gap continuously instead of leaving it until whatever
+    // deploy happens to come next.
+    if (job && /stalled/i.test(err.message)) {
+      const { jobId, siteId, ...payload } = job.data;
+      resumeCrawlJob(jobId, siteId, payload).catch((resumeErr) =>
+        console.error(`[crawlWorker] job ${jobId} failed to auto-resume after a stall:`, resumeErr),
+      );
+    }
   });
   return worker;
 }
