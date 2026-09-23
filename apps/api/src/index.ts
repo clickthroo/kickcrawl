@@ -6,7 +6,7 @@ import { backfillItemProfiles } from './lib/backfillItemProfiles.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
-import { crawlQueue } from './queue.js';
+import { fetchPage } from './services/fetcher.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -61,30 +61,52 @@ async function main(): Promise<void> {
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
 
-  // TEMP diagnostic - remove once reviewed. sales/price_changes audit
-  // already answered (real rows confirmed for both). Checking the actual
-  // crawl job's real state directly - both Postgres and BullMQ's own view
-  // of it - to find out why it's shown no crawlWorker activity for
-  // several minutes despite the new stall-reaction fix.
+  // TEMP diagnostic - remove once reviewed. crawl-job-audit already
+  // answered (root cause found and fixed - terminal BullMQ record).
+  // Auditing why VFS discovery (~1200 items so far) is far short of the
+  // ~10,000+ items the site is believed to actually have: real site
+  // config (max_depth/allowed_paths/denied_paths), real urls-table
+  // counts by status, and whether the site exposes a sitemap that would
+  // give a direct, complete product-URL count to compare against.
   pool
-    .query(`SELECT id, status, completed_pages, total_pages, started_at, finished_at FROM jobs WHERE type = 'crawl' ORDER BY created_at DESC LIMIT 3`)
-    .then(async (res) => {
-      console.log('[crawl-job-audit] postgres rows', JSON.stringify(res.rows));
-      for (const row of res.rows) {
-        const bullJob = await crawlQueue.getJob(row.id);
-        if (!bullJob) {
-          console.log('[crawl-job-audit] bullmq', row.id, 'no job found in redis');
-          continue;
-        }
-        const state = await bullJob.getState();
+    .query(`SELECT id, name, base_url, max_depth, allowed_paths, denied_paths FROM sites WHERE base_url ILIKE '%vintagefootballshirts%'`)
+    .then((res) => console.log('[discovery-audit] site config', JSON.stringify(res.rows)))
+    .catch((err) => console.error('[discovery-audit] failed:', err));
+  pool
+    .query(
+      `SELECT u.status, count(*) FROM urls u
+       JOIN sites s ON s.id = u.site_id
+       WHERE s.base_url ILIKE '%vintagefootballshirts%'
+       GROUP BY u.status ORDER BY count(*) DESC`,
+    )
+    .then((res) => console.log('[discovery-audit] urls by status', JSON.stringify(res.rows)))
+    .catch((err) => console.error('[discovery-audit] failed:', err));
+  pool
+    .query(
+      `SELECT count(*) FROM urls u
+       JOIN sites s ON s.id = u.site_id
+       WHERE s.base_url ILIKE '%vintagefootballshirts%' AND u.path LIKE '%/products/%'`,
+    )
+    .then((res) => console.log('[discovery-audit] urls matching /products/', JSON.stringify(res.rows[0])))
+    .catch((err) => console.error('[discovery-audit] failed:', err));
+  (async () => {
+    for (const sitemapUrl of [
+      'https://www.vintagefootballshirts.com/sitemap.xml',
+      'https://www.vintagefootballshirts.com/sitemap_products_1.xml',
+    ]) {
+      try {
+        const res = await fetchPage(sitemapUrl, { useBrowser: false, respectRobots: false });
+        const urlCount = res.html ? (res.html.match(/<loc>/g) ?? []).length : 0;
         console.log(
-          '[crawl-job-audit] bullmq',
-          row.id,
-          JSON.stringify({ state, attemptsMade: bullJob.attemptsMade, timestamp: bullJob.timestamp, processedOn: bullJob.processedOn, finishedOn: bullJob.finishedOn }),
+          '[discovery-audit] sitemap',
+          sitemapUrl,
+          JSON.stringify({ statusCode: res.statusCode, bytes: res.html?.length ?? 0, locCount: urlCount, sample: res.html?.slice(0, 800) ?? null }),
         );
+      } catch (err) {
+        console.error('[discovery-audit] sitemap failed:', sitemapUrl, err);
       }
-    })
-    .catch((err) => console.error('[crawl-job-audit] failed:', err));
+    }
+  })();
 
   const shutdown = async (): Promise<void> => {
     await app.close();
