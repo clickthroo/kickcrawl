@@ -6,31 +6,65 @@ describe('recoverOrphanedJobs', () => {
     vi.restoreAllMocks();
   });
 
-  it('marks every still-"running" or "paused" job as failed and returns how many', async () => {
+  it('marks every non-crawl job still "running" or "paused" as failed and returns how many', async () => {
     // A fresh process starting up hasn't touched any job's status yet, so
     // a row still "running" (or "paused" - its own in-process poll loop
     // died with the old process too) at that point belongs to a previous
     // process instance that's gone (a crash, or a redeploy that killed it
-    // mid-job) - without this sweep it would sit stuck forever.
-    const query = vi.fn(async () => ({ rowCount: 2 }));
+    // mid-job) - without this sweep it would sit stuck forever. Crawl jobs
+    // are excluded here - they're resumed instead, see the test below.
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("type = 'crawl'")) return { rows: [] };
+      return { rowCount: 2 };
+    });
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { add: vi.fn() } }));
 
     const { recoverOrphanedJobs } = await import('../src/lib/jobRecords.js');
     const recovered = await recoverOrphanedJobs();
 
     expect(recovered).toBe(2);
-    expect(query).toHaveBeenCalledTimes(1);
-    const [sql] = query.mock.calls[0];
-    expect(sql).toMatch(/UPDATE jobs SET status = 'failed'/);
-    expect(sql).toMatch(/WHERE status IN \('running', 'paused'\)/);
+    const failCall = query.mock.calls.find(([sql]) => sql.includes("UPDATE jobs SET status = 'failed'"));
+    expect(failCall?.[0]).toMatch(/WHERE status IN \('running', 'paused'\) AND type != 'crawl'/);
   });
 
   it('returns 0 when nothing was orphaned', async () => {
-    const query = vi.fn(async () => ({ rowCount: 0 }));
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("type = 'crawl'")) return { rows: [] };
+      return { rowCount: 0 };
+    });
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { add: vi.fn() } }));
 
     const { recoverOrphanedJobs } = await import('../src/lib/jobRecords.js');
     expect(await recoverOrphanedJobs()).toBe(0);
+  });
+
+  it('re-queues an orphaned crawl job to resume instead of failing it', async () => {
+    // crawl_frontier (migration 012) now persists a crawl's own traversal
+    // queue outside the process, so a 'running'/'paused' crawl row at boot
+    // is resumable - re-enqueueing the same jobId with the original
+    // CrawlJobData (reconstructed from the row's own `payload`) lets
+    // processCrawl's resume logic pick the frontier back up, instead of
+    // this sweep permanently failing it the way it still does for every
+    // other job type.
+    const payload = { url: 'https://example.com', limit: 100, maxDepth: 2, includePaths: [], excludePaths: [] };
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("type = 'crawl'")) {
+        return { rows: [{ id: 'job-1', site_id: 'site-1', payload }] };
+      }
+      if (sql.includes("SET status = 'queued'")) return { rowCount: 1 };
+      return { rowCount: 0 }; // the non-crawl fail sweep
+    });
+    const add = vi.fn(async () => undefined);
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { add } }));
+
+    const { recoverOrphanedJobs } = await import('../src/lib/jobRecords.js');
+    expect(await recoverOrphanedJobs()).toBe(0);
+
+    expect(query.mock.calls.some(([sql, params]) => sql.includes("SET status = 'queued'") && params?.[0] === 'job-1')).toBe(true);
+    expect(add).toHaveBeenCalledWith('crawl', { jobId: 'job-1', siteId: 'site-1', ...payload }, { jobId: 'job-1' });
   });
 });
 

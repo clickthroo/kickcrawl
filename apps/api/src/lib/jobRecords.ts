@@ -1,5 +1,5 @@
 import { pool } from '../db.js';
-import { crawlQueue } from '../queue.js';
+import { crawlQueue, type CrawlJobData } from '../queue.js';
 
 export type JobType = 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck';
 export type JobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
@@ -39,26 +39,50 @@ export async function failJob(jobId: string, error: string): Promise<void> {
 }
 
 /**
- * Marks any job still showing 'running' or 'paused' as 'failed', at server
- * boot. A freshly starting process hasn't touched any job's status itself
- * yet, so a row still in either state at that point can only have been
+ * Re-queues any 'crawl' job still showing 'running'/'paused' at server
+ * boot so it resumes instead of being lost, then marks every OTHER job
+ * still in either state as 'failed' the same way this function always
+ * has. A freshly starting process hasn't touched any job's status itself
+ * yet, so a row still 'running'/'paused' at this point can only have been
  * abandoned by a previous process instance that's gone - a crash, or a
  * redeploy that killed it mid-job (this app runs as a single instance, so
  * there's no other live process it could belong to). A 'paused' job is
  * included for the same reason as 'running': its in-process poll loop
  * (crawlWorker.ts, waiting to see the row flip back to 'running' or
  * 'cancelled') dies with the process exactly the same way an active fetch
- * would, so there's nothing left that could ever resume it either. Without
- * this, an interrupted job sits "Running"/"Paused" in the Jobs list
- * forever: nothing else ever updates it again, since the in-memory
- * execution that was tracking its progress no longer exists.
+ * would.
+ *
+ * A crawl job is no longer unrecoverable the way it used to be: its own
+ * traversal queue now lives in crawl_frontier (migration 012), not just an
+ * in-memory array/Set inside processCrawl - so re-enqueueing the same
+ * jobId (reconstructing the original CrawlJobData from the row's own
+ * `payload`, the same shape routes/admin/sites.ts originally built it
+ * from) lets processCrawl's own resume logic pick the frontier back up
+ * from wherever it was left, rather than starting over or giving up.
+ * Every other job type (map/scrape/extract/recheck) has no comparable
+ * persisted mid-run state, so those still fail exactly as before -
+ * without this, an interrupted job would otherwise sit "Running"/"Paused"
+ * in the Jobs list forever, since nothing else ever updates it again once
+ * the in-memory execution that was tracking its progress is gone.
  */
 export async function recoverOrphanedJobs(): Promise<number> {
+  const { rows: resumableCrawls } = await pool.query<{
+    id: string;
+    site_id: string;
+    payload: Omit<CrawlJobData, 'jobId' | 'siteId'>;
+  }>(`SELECT id, site_id, payload FROM jobs WHERE type = 'crawl' AND status IN ('running', 'paused')`);
+
+  for (const { id, site_id, payload } of resumableCrawls) {
+    await pool.query(`UPDATE jobs SET status = 'queued' WHERE id = $1`, [id]);
+    await crawlQueue.add('crawl', { jobId: id, siteId: site_id, ...payload }, { jobId: id });
+    console.log(`[recovery] re-queued crawl job ${id} to resume from where it left off`);
+  }
+
   const { rowCount } = await pool.query(
     `UPDATE jobs SET status = 'failed', error_count = error_count + 1,
        errors = errors || '[{"message":"Job was interrupted by a server restart and could not resume"}]'::jsonb,
        finished_at = now()
-     WHERE status IN ('running', 'paused')`,
+     WHERE status IN ('running', 'paused') AND type != 'crawl'`,
   );
   return rowCount ?? 0;
 }
