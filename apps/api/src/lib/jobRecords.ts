@@ -169,21 +169,42 @@ export async function deduplicateQueuedCrawls(): Promise<number> {
  * This happens if a job's BullMQ entry gets separately removed/expired
  * out from under a still-'queued' row (or was queued before
  * crawlQueue.add() started passing { jobId }, giving it a different id
- * than this row expects). Run once at boot, after
- * deduplicateQueuedCrawls() has already thinned out same-site duplicates -
- * otherwise this would redo the same dead-job check on rows about to be
- * discarded anyway.
+ * than this row expects).
+ *
+ * A BullMQ job that DOES still exist but sits in a terminal state
+ * ('failed' or 'completed') is a different, also-real case, confirmed in
+ * production: resumeCrawlJob() flips the Postgres row to 'queued' and
+ * genuinely gets a fresh run going, but if THAT run later dies again
+ * without a live process ever calling resumeCrawlJob() a second time
+ * (recoverOrphanedJobs() only fires for 'running'/'paused' rows, and a
+ * row already sitting 'queued' never matches it again), the row is left
+ * pointing at a BullMQ job that will never be picked up again - `add()`
+ * with an explicit jobId does not revive an existing terminal job. Since
+ * crawl_frontier still has everything needed to pick up where it left
+ * off, this is resumed the same way, not just failed.
+ *
+ * Run once at boot, after deduplicateQueuedCrawls() has already thinned
+ * out same-site duplicates - otherwise this would redo the same dead-job
+ * check on rows about to be discarded anyway.
  */
 export async function recoverStaleQueuedJobs(): Promise<number> {
-  const { rows } = await pool.query<{ id: string }>(
-    `SELECT id FROM jobs WHERE type = 'crawl' AND status = 'queued'`,
-  );
+  const { rows } = await pool.query<{
+    id: string;
+    site_id: string;
+    payload: Omit<CrawlJobData, 'jobId' | 'siteId'>;
+  }>(`SELECT id, site_id, payload FROM jobs WHERE type = 'crawl' AND status = 'queued'`);
 
   let recovered = 0;
-  for (const { id } of rows) {
+  for (const { id, site_id, payload } of rows) {
     const bullJob = await crawlQueue.getJob(id);
     if (!bullJob) {
       await failJob(id, 'Queued crawl was lost from the job queue and could never run');
+      recovered += 1;
+      continue;
+    }
+    const state = await bullJob.getState();
+    if (state === 'failed' || state === 'completed') {
+      await resumeCrawlJob(id, site_id, payload);
       recovered += 1;
     }
   }

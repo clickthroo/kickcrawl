@@ -163,8 +163,11 @@ describe('recoverStaleQueuedJobs', () => {
     // run - the worker will never pick it up - but hasActiveCrawl()
     // (routes/admin/sites.ts) still treats it as active, so "Run crawl"
     // falsely reports one already queued/running forever.
+    const payload = { url: 'https://example.com', limit: 100, maxDepth: 2, includePaths: [], excludePaths: [] };
     const query = vi.fn(async (sql: string) => {
-      if (sql.includes('SELECT id FROM jobs')) return { rows: [{ id: 'ghost-job' }] };
+      if (sql.includes('SELECT id, site_id, payload FROM jobs')) {
+        return { rows: [{ id: 'ghost-job', site_id: 'site-1', payload }] };
+      }
       return { rowCount: 1 }; // failJob()'s own UPDATE
     });
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
@@ -178,16 +181,46 @@ describe('recoverStaleQueuedJobs', () => {
     expect(failCall?.[1]).toEqual(['ghost-job', expect.any(String)]);
   });
 
-  it('leaves a queued row alone when its BullMQ job still exists', async () => {
+  it('leaves a queued row alone when its BullMQ job is still genuinely live', async () => {
+    const payload = { url: 'https://example.com', limit: 100, maxDepth: 2, includePaths: [], excludePaths: [] };
     const query = vi.fn(async (sql: string) => {
-      if (sql.includes('SELECT id FROM jobs')) return { rows: [{ id: 'real-job' }] };
+      if (sql.includes('SELECT id, site_id, payload FROM jobs')) {
+        return { rows: [{ id: 'real-job', site_id: 'site-1', payload }] };
+      }
       return { rowCount: 1 };
     });
+    const getJob = vi.fn(async () => ({ id: 'real-job', getState: async () => 'waiting' }));
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
-    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob: vi.fn(async () => ({ id: 'real-job' })) } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob } }));
 
     const { recoverStaleQueuedJobs } = await import('../src/lib/jobRecords.js');
     expect(await recoverStaleQueuedJobs()).toBe(0);
+  });
+
+  it('resumes a queued row whose BullMQ job exists but is stuck terminally failed - add() would never revive it on its own', async () => {
+    // Confirmed in production: a row can sit 'queued' pointing at a
+    // BullMQ job that already finished (failed or completed) - add()
+    // with that same jobId is a no-op on the dead job, not a fresh one,
+    // so nothing will ever pick it up again without this.
+    const payload = { url: 'https://example.com', limit: 100, maxDepth: 2, includePaths: [], excludePaths: [] };
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id, site_id, payload FROM jobs')) {
+        return { rows: [{ id: 'stuck-job', site_id: 'site-1', payload }] };
+      }
+      if (sql.includes("SET status = 'queued'")) return { rowCount: 1 };
+      return { rowCount: 0 };
+    });
+    const remove = vi.fn(async () => undefined);
+    const getJob = vi.fn(async () => ({ id: 'stuck-job', getState: async () => 'failed', remove }));
+    const add = vi.fn(async () => undefined);
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob, add } }));
+
+    const { recoverStaleQueuedJobs } = await import('../src/lib/jobRecords.js');
+    expect(await recoverStaleQueuedJobs()).toBe(1);
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(add).toHaveBeenCalledWith('crawl', { jobId: 'stuck-job', siteId: 'site-1', ...payload }, { jobId: 'stuck-job' });
   });
 
   it('returns 0 when there are no queued crawl jobs at all', async () => {
