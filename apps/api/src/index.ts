@@ -60,6 +60,12 @@ async function main(): Promise<void> {
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
 
+  // TEMP diagnostic - remove once reviewed.
+  pool
+    .query(`SELECT stock_status, count(*) FROM urls WHERE status = 'fetched' GROUP BY stock_status ORDER BY count(*) DESC`)
+    .then((res) => console.log('[stock-breakdown]', JSON.stringify(res.rows)))
+    .catch((err) => console.error('[stock-breakdown] failed:', err));
+
   const shutdown = async (): Promise<void> => {
     await app.close();
     await worker.close();
