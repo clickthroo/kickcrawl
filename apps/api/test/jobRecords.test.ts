@@ -57,13 +57,44 @@ describe('recoverOrphanedJobs', () => {
       return { rowCount: 0 }; // the non-crawl fail sweep
     });
     const add = vi.fn(async () => undefined);
+    const getJob = vi.fn(async () => undefined);
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
-    vi.doMock('../src/queue.js', () => ({ crawlQueue: { add } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { add, getJob } }));
 
     const { recoverOrphanedJobs } = await import('../src/lib/jobRecords.js');
     expect(await recoverOrphanedJobs()).toBe(0);
 
     expect(query.mock.calls.some(([sql, params]) => sql.includes("SET status = 'queued'") && params?.[0] === 'job-1')).toBe(true);
+    expect(add).toHaveBeenCalledWith('crawl', { jobId: 'job-1', siteId: 'site-1', ...payload }, { jobId: 'job-1' });
+  });
+
+  it('removes a stale BullMQ job of the same id before re-adding it, so a dead lock cannot swallow the resume', async () => {
+    // Confirmed in production: crawlQueue.add() with an explicit jobId
+    // that already exists in Redis (the previous process's own job,
+    // stuck 'active' under a lock that will never be renewed since that
+    // process is gone) is a no-op on the EXISTING job rather than a fresh
+    // one - the Postgres row flips to 'queued' and this logs, but
+    // processCrawl never actually starts running again until the stale
+    // lock eventually expires on its own. Removing it first guarantees a
+    // genuinely fresh, immediately runnable job every time.
+    const payload = { url: 'https://example.com', limit: 100, maxDepth: 2, includePaths: [], excludePaths: [] };
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("type = 'crawl'")) {
+        return { rows: [{ id: 'job-1', site_id: 'site-1', payload }] };
+      }
+      return { rowCount: 0 };
+    });
+    const remove = vi.fn(async () => undefined);
+    const getJob = vi.fn(async () => ({ remove }));
+    const add = vi.fn(async () => undefined);
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { add, getJob } }));
+
+    const { recoverOrphanedJobs } = await import('../src/lib/jobRecords.js');
+    await recoverOrphanedJobs();
+
+    expect(getJob).toHaveBeenCalledWith('job-1');
+    expect(remove).toHaveBeenCalledTimes(1);
     expect(add).toHaveBeenCalledWith('crawl', { jobId: 'job-1', siteId: 'site-1', ...payload }, { jobId: 'job-1' });
   });
 });

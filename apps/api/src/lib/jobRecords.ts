@@ -73,6 +73,17 @@ export async function recoverOrphanedJobs(): Promise<number> {
   }>(`SELECT id, site_id, payload FROM jobs WHERE type = 'crawl' AND status IN ('running', 'paused')`);
 
   for (const { id, site_id, payload } of resumableCrawls) {
+    // The previous process died mid-job, so its BullMQ counterpart (same
+    // jobId, reused below) is very likely still sitting 'active' in Redis
+    // under a lock that will never be renewed - crawlQueue.add() with an
+    // explicit jobId that already exists is a no-op on the EXISTING job
+    // rather than a fresh one, confirmed in production: the row flips to
+    // 'queued' and this logs, but processCrawl never actually starts
+    // running again until that stale lock eventually expires on its own.
+    // Removing any existing entry for this id first guarantees add() below
+    // always creates a genuinely fresh, immediately runnable job.
+    const stale = await crawlQueue.getJob(id);
+    await stale?.remove().catch(() => undefined);
     await pool.query(`UPDATE jobs SET status = 'queued' WHERE id = $1`, [id]);
     await crawlQueue.add('crawl', { jobId: id, siteId: site_id, ...payload }, { jobId: id });
     console.log(`[recovery] re-queued crawl job ${id} to resume from where it left off`);
