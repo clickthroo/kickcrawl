@@ -9,6 +9,7 @@ import { createJob, failJob } from '../lib/jobRecords.js';
 import { getCurrencyRates } from '../lib/currencyRates.js';
 import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
 import { buildKickioProfile, type KickioTeamRef } from '../services/kickioProfile.js';
+import { persistItemProfileColumns } from '../lib/persistItemProfile.js';
 import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 import { PAGE_TIMEOUT_MS, passesSellerFilter, resolveUseBrowser } from './crawlWorker.js';
@@ -102,7 +103,11 @@ export async function recheckSite(
           progress.sales += 1;
         }
 
-        await pool.query(`UPDATE urls SET stock_status = $2 WHERE id = $1`, [urlId, newStatus]);
+        // Persists every commonly-filtered profile field (team, season,
+        // colour, size, ...), not just stock_status - the admin Items list
+        // now filters these in SQL (routes/admin/urls.ts) instead of
+        // building a profile for every row in the table on every request.
+        await persistItemProfileColumns(urlId, profile);
 
         // TEMP DIAGNOSTIC - see session notes. Verifying, against a real
         // production request rather than guessing, whether Shopify's

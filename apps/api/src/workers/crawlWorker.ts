@@ -8,6 +8,10 @@ import { persistScrapeResult } from '../lib/persistResult.js';
 import { isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
 import { detectSellerSignals } from '../services/sellerSignals.js';
 import { BROWSER_FATAL_PATTERN } from '../services/fetcher.js';
+import { buildKickioProfile, type KickioTeamRef } from '../services/kickioProfile.js';
+import { persistItemProfileColumns } from '../lib/persistItemProfile.js';
+import { getCurrencyRates } from '../lib/currencyRates.js';
+import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 
@@ -160,9 +164,35 @@ async function recordPageResult(
   jobId: string,
   url: string,
   result: ScrapeCoreResult,
-): Promise<void> {
+): Promise<string> {
   const urlId = await markUrlFetched(siteId, url, result.metadata.statusCode, result.error);
   await persistScrapeResult(urlId, jobId, result);
+  return urlId;
+}
+
+// Builds and persists the same profile columns a recheck already does
+// (lib/persistItemProfile.ts), at the point an item is first discovered
+// rather than only hours later on its first recheck - so the admin Items
+// list's SQL-side filters (team, stock status, ...) have real data for a
+// brand new item immediately, not "no value yet" until the next recheck
+// cycle.
+async function recordItemProfile(
+  urlId: string,
+  url: string,
+  result: ScrapeCoreResult,
+  currencyRates: Record<string, number>,
+  kickioTeams: readonly KickioTeamRef[] | null,
+): Promise<void> {
+  const profile = buildKickioProfile({
+    url,
+    title: result.metadata.title,
+    description: result.markdown?.slice(0, 4000) ?? null,
+    images: result.metadata.image ? [result.metadata.image] : [],
+    extracted: result.extracted,
+    currencyRates,
+    kickioTeams,
+  });
+  await persistItemProfileColumns(urlId, profile);
 }
 
 // A catch-all safety net around the per-page fetch. Every individual I/O
@@ -257,6 +287,12 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
   // item seed, or a non-Vinted site), in which case no such scoping
   // applies at all and every traversable link is treated as before.
   const seedCatalogId = catalogIdFromUrl(url);
+
+  // Fetched once per job, not per page - both are small, admin-maintained
+  // lookups (currency_rates table, Kickio's own teams list), the same
+  // pattern recheckWorker.ts already uses.
+  const currencyRates = await getCurrencyRates();
+  const kickioTeams = await getKickioTeamsForMatching();
 
   const visited = new Set<string>();
   const queue: { url: string; depth: number }[] = [{ url: new URL(url).toString(), depth: 0 }];
@@ -362,7 +398,8 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
           !matchesAllowedPaths ||
           passesSellerFilter(result.markdown, site ?? { require_pro_seller: false, min_seller_feedback: null });
         if (passesFilter) {
-          await recordPageResult(siteId, jobId, next.url, result);
+          const urlId = await recordPageResult(siteId, jobId, next.url, result);
+          await recordItemProfile(urlId, next.url, result, currencyRates, kickioTeams);
           completed += 1;
         } else {
           // Fetched, but doesn't meet the site's seller filter - keep

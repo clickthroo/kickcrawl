@@ -135,6 +135,39 @@ describe('recheckSite', () => {
     expect(profile.listing.stock_status).toBe('Out of Stock');
   });
 
+  it('persists the full profile (team, season, colour, size, ...) on every recheck, not just stock_status', async () => {
+    // The admin Items list now filters these fields in SQL (routes/admin/
+    // urls.ts) instead of building a profile for every row on every
+    // request - a recheck is one of the places that data has to actually
+    // get written for that to work.
+    const siteWithoutSellerFilter: SiteConfig = { ...baseSite, require_pro_seller: false, min_seller_feedback: null };
+    const query = vi.fn().mockResolvedValue({ rows: [recheckableItem] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => ({
+        success: true,
+        markdown: 'Add to Bag',
+        metadata: { sourceURL: recheckableItem.url, statusCode: 200, title: '2019-20 Arsenal Adidas Away Shirt M', image: null },
+        extracted: {},
+      }),
+    }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(recheckableItem.id) }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, errors: [] as string[] };
+    await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
+
+    const updateCall = query.mock.calls.find(([sql]) => String(sql).includes('UPDATE urls SET'));
+    expect(updateCall).toBeDefined();
+    const [sql, params] = updateCall!;
+    expect(String(sql)).toContain('team');
+    expect(String(sql)).toContain('colour');
+    expect(params[0]).toBe(recheckableItem.id);
+    expect(params).toContain('Arsenal');
+    expect(params).toContain('M');
+  });
+
   it('keeps refreshing an item that still passes the seller filter, same as before', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [recheckableItem] });
     vi.doMock('../src/db.js', () => ({ pool: { query } }));

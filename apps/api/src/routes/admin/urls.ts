@@ -4,23 +4,13 @@ import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { scrapePage } from '../../lib/scrapeCore.js';
 import { markUrlFetched } from '../../lib/urlStore.js';
 import { persistScrapeResult } from '../../lib/persistResult.js';
-import { buildKickioProfile, type KickioProfile } from '../../services/kickioProfile.js';
+import { buildKickioProfile } from '../../services/kickioProfile.js';
 import { getCurrencyRates } from '../../lib/currencyRates.js';
 import { getKickioTeamsForMatching } from '../../lib/kickioTeams.js';
+import { persistItemProfileColumns } from '../../lib/persistItemProfile.js';
 import { isCrawlItem, passesSellerFilter } from '../../workers/crawlWorker.js';
 
-/**
- * A profile field is free text (team names, player names, colours, etc),
- * so filters match case-insensitively as a substring rather than requiring
- * an exact value - matching how the "Path contains" filter already works.
- */
-function textMatches(value: string | null | undefined, filter: string | undefined): boolean {
-  if (!filter) return true;
-  if (!value) return false;
-  return value.toLowerCase().includes(filter.toLowerCase());
-}
-
-interface ItemFilters {
+export interface ItemFilters {
   stock_status?: string;
   team?: string;
   season?: string;
@@ -33,43 +23,55 @@ interface ItemFilters {
   condition?: string;
 }
 
-function matchesProfileFilters(profile: KickioProfile | null, f: ItemFilters): boolean {
-  const hasProfileFilter =
-    f.stock_status || f.team || f.season || f.shirt_type || f.player || f.number || f.colour || f.size || f.manufacturer || f.condition;
-  if (!hasProfileFilter) return true;
-  if (!profile) return false;
-
-  if (f.stock_status && profile.listing.stock_status !== f.stock_status) return false;
-  if (!textMatches(profile.identity.team, f.team)) return false;
-  if (f.season) {
-    const seasons = [profile.identity.season, ...profile.identity.extra_seasons].filter(Boolean) as string[];
-    if (!seasons.some((s) => s.toLowerCase().includes(f.season!.toLowerCase()))) return false;
+/**
+ * SQL WHERE fragments for the profile fields (team, stock status, ...) -
+ * real `urls` columns since migration 010, kept in sync by
+ * lib/persistItemProfile.ts on every crawl/recheck/rescrape. Filters this
+ * way instead of building a KickioProfile for every candidate row in JS:
+ * that used to mean scanning a capped window of the most-recently-
+ * discovered rows (2000) on every request, silently hiding anything older
+ * once a site's total url count grew past it, with no way to raise that
+ * cap that didn't mean profiling the entire table synchronously in the
+ * same process that also runs the crawl/recheck workers.
+ *
+ * A profile field is free text (team names, player names, colours, etc),
+ * so filters match case-insensitively as a substring (ILIKE) rather than
+ * requiring an exact value - matching how the "Path contains" filter
+ * already works. `stock_status` is the one exact match, same as before.
+ */
+export function profileFilterConditions(f: ItemFilters, params: unknown[]): string[] {
+  const conditions: string[] = [];
+  const ilikeParam = (value: string) => {
+    params.push(`%${value}%`);
+    return `$${params.length}`;
+  };
+  if (f.stock_status) {
+    params.push(f.stock_status);
+    conditions.push(`u.stock_status = $${params.length}`);
   }
-  if (!textMatches(profile.identity.shirt_type, f.shirt_type)) return false;
-  if (!textMatches(profile.identity.player, f.player)) return false;
-  if (!textMatches(profile.identity.number, f.number)) return false;
-  if (
-    f.colour &&
-    !textMatches(profile.listing.colour, f.colour) &&
-    !textMatches(profile.listing.colour_secondary, f.colour)
-  ) {
-    return false;
+  if (f.team) conditions.push(`u.team ILIKE ${ilikeParam(f.team)}`);
+  if (f.season) conditions.push(`u.season ILIKE ${ilikeParam(f.season)}`);
+  if (f.shirt_type) conditions.push(`u.shirt_type ILIKE ${ilikeParam(f.shirt_type)}`);
+  if (f.player) conditions.push(`u.player ILIKE ${ilikeParam(f.player)}`);
+  if (f.number) conditions.push(`u.player_number ILIKE ${ilikeParam(f.number)}`);
+  if (f.colour) {
+    const p = ilikeParam(f.colour);
+    conditions.push(`(u.colour ILIKE ${p} OR u.colour_secondary ILIKE ${p})`);
   }
-  if (!textMatches(profile.listing.size, f.size)) return false;
-  if (!textMatches(profile.listing.manufacturer, f.manufacturer)) return false;
-  if (!textMatches(profile.listing.condition, f.condition)) return false;
-  return true;
+  if (f.size) conditions.push(`u.size ILIKE ${ilikeParam(f.size)}`);
+  if (f.manufacturer) conditions.push(`u.manufacturer ILIKE ${ilikeParam(f.manufacturer)}`);
+  if (f.condition) conditions.push(`u.condition ILIKE ${ilikeParam(f.condition)}`);
+  return conditions;
 }
 
 export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
 
-  // Cross-site item list: every scraped item across every site on one page,
-  // filterable by site plus the mapped Kickio profile fields. Profile
-  // fields aren't stored columns (they're derived on the fly), so the SQL
-  // side only filters what's actually indexed (site/status/path) and the
-  // profile-based filters are applied in JS afterwards, over a capped
-  // window of the most recently discovered rows.
+  // Cross-site item list: every scraped item across every site on one
+  // page, filterable by site plus the mapped Kickio profile fields - all
+  // filtered and paginated in SQL (see profileFilterConditions above), so
+  // this scales to however many rows a site actually has rather than only
+  // ever seeing a capped window of the most recently discovered ones.
   app.get('/api/admin/items', async (req, reply) => {
     const query = req.query as {
       site_id?: string;
@@ -90,6 +92,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
     };
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(Math.max(1, Number(query.pageSize) || 25), 200);
+    const offset = (page - 1) * pageSize;
 
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -105,12 +108,31 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
       params.push(`%${query.path}%`);
       conditions.push(`u.path ILIKE $${params.length}`);
     }
+    conditions.push(
+      ...profileFilterConditions(
+        {
+          stock_status: query.stock_status,
+          team: query.team,
+          season: query.season,
+          shirt_type: query.shirt_type,
+          player: query.player,
+          number: query.number,
+          colour: query.colour,
+          size: query.size,
+          manufacturer: query.manufacturer,
+          condition: query.condition,
+        },
+        params,
+      ),
+    );
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const { rows: countRows } = await pool.query(`SELECT count(*) FROM urls u ${where}`, params);
+    const total = Number(countRows[0].count);
 
     const currencyRates = await getCurrencyRates();
     const kickioTeams = await getKickioTeamsForMatching();
 
-    const SCAN_LIMIT = 2000;
     const { rows } = await pool.query(
       `SELECT u.*, s.name AS site_name,
               m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
@@ -133,49 +155,33 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
          WHERE sr.url_id = u.id AND sr.format = 'markdown'
          ORDER BY sr.fetched_at DESC LIMIT 1
        ) md ON true
-       ${where} ORDER BY u.discovered_at DESC LIMIT ${SCAN_LIMIT}`,
+       ${where} ORDER BY u.discovered_at DESC LIMIT ${pageSize} OFFSET ${offset}`,
       params,
     );
 
-    const filters: ItemFilters = {
-      stock_status: query.stock_status,
-      team: query.team,
-      season: query.season,
-      shirt_type: query.shirt_type,
-      player: query.player,
-      number: query.number,
-      colour: query.colour,
-      size: query.size,
-      manufacturer: query.manufacturer,
-      condition: query.condition,
-    };
+    // Only ever built for this one page of rows (<= 200), never the whole
+    // matched set - filtering/counting above already happened in SQL
+    // against the persisted columns, so this is purely for display.
+    const items = rows.map((u) => ({
+      ...u,
+      preview_profile:
+        u.preview_title || u.preview_extracted || u.preview_markdown
+          ? buildKickioProfile({
+              url: u.url,
+              title: u.preview_title,
+              description: u.preview_markdown?.slice(0, 4000) ?? null,
+              // preview_images is only absent for rows scraped before this
+              // field existed - fall back to the single image they do have.
+              images: u.preview_images ?? [u.preview_image],
+              extracted: u.preview_extracted,
+              scrapedAt: u.last_fetched_at,
+              currencyRates,
+              kickioTeams,
+            })
+          : null,
+    }));
 
-    const items = rows
-      .map((u) => ({
-        ...u,
-        preview_profile:
-          u.preview_title || u.preview_extracted || u.preview_markdown
-            ? buildKickioProfile({
-                url: u.url,
-                title: u.preview_title,
-                description: u.preview_markdown?.slice(0, 4000) ?? null,
-                // preview_images is only absent for rows scraped before this
-                // field existed - fall back to the single image they do have.
-                images: u.preview_images ?? [u.preview_image],
-                extracted: u.preview_extracted,
-                scrapedAt: u.last_fetched_at,
-                currencyRates,
-                kickioTeams,
-              })
-            : null,
-      }))
-      .filter((u) => matchesProfileFilters(u.preview_profile, filters));
-
-    const total = items.length;
-    const offset = (page - 1) * pageSize;
-    const pageItems = items.slice(offset, offset + pageSize);
-
-    return reply.send({ success: true, items: pageItems, total, page, pageSize });
+    return reply.send({ success: true, items, total, page, pageSize });
   });
 
   app.get('/api/admin/sites/:siteId/urls', async (req, reply) => {
@@ -301,6 +307,24 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
 
     const urlId = await markUrlFetched(row.site_id, row.url, result.metadata.statusCode, result.error);
     await persistScrapeResult(urlId, null, result);
+
+    // Keeps the profile columns (team, stock_status, ...) an admin's
+    // manual re-scrape actually refreshed in sync too, the same as a
+    // crawl or recheck already does - otherwise a re-scraped item would
+    // show fresh markdown/metadata but stale filter values until its next
+    // scheduled recheck.
+    if (result.success) {
+      const profile = buildKickioProfile({
+        url: row.url,
+        title: result.metadata.title,
+        description: result.markdown?.slice(0, 4000) ?? null,
+        images: result.metadata.image ? [result.metadata.image] : [],
+        extracted: result.extracted,
+        currencyRates: await getCurrencyRates(),
+        kickioTeams: await getKickioTeamsForMatching(),
+      });
+      await persistItemProfileColumns(urlId, profile);
+    }
 
     return reply.send({ success: result.success, result });
   });
