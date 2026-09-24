@@ -7,6 +7,28 @@ import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
 
+// TEMP DIAGNOSTIC - see session notes. Confirming why the first real sale
+// this fix caught (AC Milan 2024-25 home shirt) shows no price - checking
+// the actual sales.price column, the profile snapshot's own listing.price,
+// and the item's now-current urls.price (post-overwrite) directly, rather
+// than guessing that the source page simply stops showing a price once
+// marked sold out.
+async function auditNullPriceSale(): Promise<void> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT s.id, s.url_id, s.title, s.price, s.currency, s.detected_at,
+              s.profile->'listing'->>'price' AS profile_price,
+              s.profile->'listing'->>'stock_status' AS profile_stock_status,
+              u.price AS current_url_price, u.currency AS current_url_currency, u.stock_status AS current_url_stock_status
+       FROM sales s JOIN urls u ON u.id = s.url_id
+       WHERE s.title ILIKE '%AC Milan%' ORDER BY s.detected_at DESC LIMIT 5`,
+    );
+    console.log('[null-price-audit] sales rows', JSON.stringify(rows));
+  } catch (err) {
+    console.error('[null-price-audit] failed:', err instanceof Error ? err.message : String(err));
+  }
+}
+
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
   const { rows } = await pool.query('SELECT id FROM admin_users LIMIT 1');
@@ -59,6 +81,8 @@ async function main(): Promise<void> {
       if (total > 0) console.log(`[backfillItemProfiles] updated ${total} row(s)`);
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
+
+  auditNullPriceSale().catch((err) => console.error('[null-price-audit] failed:', err));
 
   const shutdown = async (): Promise<void> => {
     await app.close();
