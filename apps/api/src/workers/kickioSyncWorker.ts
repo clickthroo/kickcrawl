@@ -59,6 +59,7 @@ async function processKickioSync(): Promise<void> {
     // deployment doesn't even query the sales table every hour for nothing.
     if (!isKickioSyncConfigured()) {
       await pool.query(`UPDATE jobs SET status = 'completed', finished_at = now() WHERE id = $1`, [jobId]);
+      console.log(`[kickioSyncWorker] job ${jobId} skipped - KICKIO_SUPABASE_SERVICE_ROLE_KEY not configured`);
       return;
     }
 
