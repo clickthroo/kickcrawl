@@ -214,12 +214,6 @@ async function recordItemProfile(
     currencyRates,
     kickioTeams,
   });
-  // TEMP DIAGNOSTIC - see session notes. Confirming, against a real
-  // production run rather than assuming, that this run is actually
-  // resolving both In Stock and Out of Stock (not just one of the two,
-  // which would mean a detection regression rather than a real-world
-  // stock mix).
-  console.log('[stock-mix-diag]', JSON.stringify({ url, stock_status: profile.listing.stock_status }));
   await persistItemProfileColumns(urlId, profile);
 }
 
