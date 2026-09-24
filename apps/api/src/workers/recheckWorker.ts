@@ -22,6 +22,22 @@ export { isNewSale, isPriceChange };
 
 export const RECHECK_INTERVAL_MS = 60 * 60 * 1000;
 
+// How long a status='failed' row sits out before it's eligible for another
+// recheck attempt. Confirmed in production: including all 4,943 'failed'
+// rows unconditionally on every cycle (see the query below) grew a single
+// recheck pass from comfortably under an hour to over 5 hours - BullMQ's
+// repeatable job doesn't start a new run while the previous one is still
+// executing, so the real recheck cadence collapsed from hourly to roughly
+// once every 5-6 hours, and "no sales or price changes detected for most
+// of the day" was that reduced cadence, not a detection-logic bug (the
+// comparison logic itself - detectAndRecordTransition - was unaffected).
+// Most of that backlog is the same browser-crash pattern that clears up on
+// its own; retrying it every single hour was mostly the same URLs failing
+// again for the same reason, at the cost of the whole catalog's recheck
+// frequency. A few hours' backoff still gets every failed row retried
+// several times a day, just not at the expense of the 'fetched' majority.
+const RECHECK_FAILED_BACKOFF_HOURS = 4;
+
 interface RecheckableUrl {
   id: string;
   url: string;
@@ -40,7 +56,8 @@ export async function recheckSite(
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
     `SELECT id, url, path, stock_status, price, currency FROM urls
-     WHERE site_id = $1 AND status IN ('fetched', 'failed') AND stock_status IS NOT NULL AND stock_status != 'Out of Stock'`,
+     WHERE site_id = $1 AND stock_status IS NOT NULL AND stock_status != 'Out of Stock'
+       AND (status = 'fetched' OR (status = 'failed' AND last_fetched_at < now() - interval '${RECHECK_FAILED_BACKOFF_HOURS} hours'))`,
     [site.id],
   );
   // Only items (allowed_paths-matched), not the stepping-stone category/
@@ -61,11 +78,20 @@ export async function recheckSite(
   // never be detected. markUrlFetched (already called below on every
   // outcome) naturally heals a row's status back to 'fetched' on a
   // successful retry, or leaves it 'failed' again to be retried next
-  // cycle - no separate recovery path needed. stock_status IS NOT NULL
-  // excludes urls.status='failed' rows that have NEVER been successfully
-  // fetched at all (nothing to diff against, and no price to recheck the
-  // seller/currency for) - that backlog belongs to crawl's own retry
-  // logic, not this one.
+  // eligible cycle - no separate recovery path needed. stock_status IS NOT
+  // NULL excludes urls.status='failed' rows that have NEVER been
+  // successfully fetched at all (nothing to diff against, and no price to
+  // recheck the seller/currency for) - that backlog belongs to crawl's own
+  // retry logic, not this one.
+  //
+  // RECHECK_FAILED_BACKOFF_HOURS gates the 'failed' half: unconditionally
+  // re-attempting all ~5000 of them every single hourly cycle (as the first
+  // version of this fix did) grew one recheck pass past 5 hours, which cut
+  // the real detection cadence for the ENTIRE catalog - 'fetched' rows
+  // included - from hourly to roughly once every 5-6 hours. A row that
+  // failed recently sits out until it's stale enough to be worth another
+  // try, keeping each cycle's working set close to what actually finishes
+  // inside RECHECK_INTERVAL_MS.
   const items = urls.filter((u) => isPathAllowed(u.path, site.allowed_paths, site.denied_paths));
 
   progress.total += items.length;

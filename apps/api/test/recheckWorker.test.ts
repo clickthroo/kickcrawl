@@ -154,9 +154,33 @@ describe('recheckSite', () => {
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     const [selectSql] = query.mock.calls[0];
-    expect(selectSql).toMatch(/status IN \('fetched', 'failed'\)/);
+    expect(selectSql).toMatch(/status = 'fetched'/);
+    expect(selectSql).toMatch(/status = 'failed'/);
     expect(selectSql).toMatch(/stock_status IS NOT NULL/);
     expect(selectSql).toMatch(/stock_status != 'Out of Stock'/);
+  });
+
+  it('gates status=failed rows behind a backoff, so retrying them cannot balloon a single recheck pass past its own hourly interval', async () => {
+    // Confirmed in production: including all ~5000 'failed' rows
+    // unconditionally on every cycle grew one recheck pass past 5 hours,
+    // collapsing the real detection cadence for the WHOLE catalog (fetched
+    // rows included) from hourly to roughly once every 5-6 hours - "no
+    // sales or price changes for most of the day" traced back to this, not
+    // to the comparison logic itself.
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: vi.fn() }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn() }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    await recheckSite(baseSite, 'job-1', {}, progress);
+
+    const [selectSql] = query.mock.calls[0];
+    expect(selectSql).toMatch(/status = 'failed' AND last_fetched_at < now\(\) - interval '\d+ hours'/);
+    // A 'fetched' row is never gated by this - only the failed backlog.
+    expect(selectSql).not.toMatch(/status = 'fetched' AND last_fetched_at/);
   });
 
   it('records the full Kickio profile on a sale, not just title/price/currency', async () => {
