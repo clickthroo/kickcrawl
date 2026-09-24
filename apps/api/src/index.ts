@@ -7,6 +7,7 @@ import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
 import { scheduleKickioSync, startKickioSyncWorker } from './workers/kickioSyncWorker.js';
+import { kickioSyncQueue } from './queue.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -44,6 +45,13 @@ async function main(): Promise<void> {
   await scheduleRecheck();
   const kickioSyncWorker = startKickioSyncWorker();
   await scheduleKickioSync();
+
+  // TEMP DIAGNOSTIC - see session notes. Firing one immediate one-off
+  // kickio_sync run at boot, on top of the hourly schedule, so the
+  // KICKIO_SUPABASE_SERVICE_ROLE_KEY just added in Railway can be
+  // confirmed working right now instead of waiting for the next
+  // scheduled hourly tick.
+  kickioSyncQueue.add('kickio_sync-now', {}).catch((err) => console.error('[kickio_sync-now] enqueue failed:', err));
 
   const app = await buildApp();
 
