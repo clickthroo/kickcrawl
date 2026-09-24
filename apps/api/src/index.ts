@@ -6,6 +6,100 @@ import { backfillItemProfiles } from './lib/backfillItemProfiles.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
+import { buildKickioProfile } from './services/kickioProfile.js';
+import { getCurrencyRates } from './lib/currencyRates.js';
+
+// TEMP DIAGNOSTIC - see session notes. Auditing whether a specific real
+// item ("Club Almirante Brown 'Pope Francis'", currently reading Out of
+// Stock) should have produced a sales row - reconstructing its real fetch
+// history (every scrape_results row, which job/path touched it, whether
+// any past fetch actually read In Stock) directly, rather than guessing
+// from the single "last known" stock_status column urls stores.
+async function auditSaleCandidate(): Promise<void> {
+  const { rows: matches } = await pool.query<{
+    id: string;
+    url: string;
+    path: string;
+    status: string;
+    discovered_at: string;
+    last_fetched_at: string | null;
+    stock_status: string | null;
+    price: number | null;
+    currency: string | null;
+  }>(
+    `SELECT u.id, u.url, u.path, u.status, u.discovered_at, u.last_fetched_at, u.stock_status, u.price, u.currency
+     FROM urls u JOIN sites s ON s.id = u.site_id
+     WHERE s.base_url ILIKE '%vintagefootballshirts%' AND u.path ILIKE '%almirante-brown%'`,
+  );
+  if (matches.length === 0) {
+    console.log('[sale-audit] no matching url found');
+    return;
+  }
+  for (const row of matches) {
+    console.log('[sale-audit] url row', JSON.stringify(row));
+
+    const { rows: fetches } = await pool.query<{
+      job_id: string | null;
+      job_type: string | null;
+      fetched_at: string;
+    }>(
+      `SELECT sr.job_id, j.type AS job_type, sr.fetched_at
+       FROM scrape_results sr LEFT JOIN jobs j ON j.id = sr.job_id
+       WHERE sr.url_id = $1 AND sr.format = 'metadata'
+       ORDER BY sr.fetched_at ASC`,
+      [row.id],
+    );
+    console.log('[sale-audit] fetch history', JSON.stringify(fetches));
+
+    const { rows: sales } = await pool.query(`SELECT id, title, price, currency, detected_at FROM sales WHERE url_id = $1`, [row.id]);
+    console.log('[sale-audit] sales rows', JSON.stringify(sales));
+
+    const { rows: priceChanges } = await pool.query(
+      `SELECT id, old_price, new_price, currency, detected_at FROM price_changes WHERE url_id = $1`,
+      [row.id],
+    );
+    console.log('[sale-audit] price_change rows', JSON.stringify(priceChanges));
+
+    // Reconstruct the stock_status this app would actually have computed
+    // at each past fetch, from the real markdown/extracted content saved
+    // at the time - not assumed.
+    const { rows: markdownRows } = await pool.query<{ content: string; fetched_at: string; job_id: string | null }>(
+      `SELECT content, fetched_at, job_id FROM scrape_results WHERE url_id = $1 AND format = 'markdown' ORDER BY fetched_at ASC`,
+      [row.id],
+    );
+    const { rows: extractedRows } = await pool.query<{ content: Record<string, string>; fetched_at: string }>(
+      `SELECT content, fetched_at FROM scrape_results WHERE url_id = $1 AND format = 'extracted' ORDER BY fetched_at ASC`,
+      [row.id],
+    );
+    const { rows: metaRows } = await pool.query<{ content: { title?: string; image?: string }; fetched_at: string }>(
+      `SELECT content, fetched_at FROM scrape_results WHERE url_id = $1 AND format = 'metadata' ORDER BY fetched_at ASC`,
+      [row.id],
+    );
+    const currencyRates = await getCurrencyRates();
+    for (let i = 0; i < markdownRows.length; i++) {
+      const md = markdownRows[i];
+      const extracted = extractedRows[i]?.content ?? {};
+      const meta = metaRows[i]?.content ?? {};
+      try {
+        const profile = buildKickioProfile({
+          url: row.url,
+          title: meta.title ?? null,
+          description: typeof md.content === 'string' ? md.content.slice(0, 4000) : null,
+          images: meta.image ? [meta.image] : [],
+          extracted,
+          currencyRates,
+          kickioTeams: null,
+        });
+        console.log(
+          '[sale-audit] reconstructed stock at fetch',
+          JSON.stringify({ fetched_at: md.fetched_at, stock_status: profile.listing.stock_status, price: profile.listing.price }),
+        );
+      } catch (err) {
+        console.log('[sale-audit] reconstruction failed', md.fetched_at, err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+}
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -59,6 +153,8 @@ async function main(): Promise<void> {
       if (total > 0) console.log(`[backfillItemProfiles] updated ${total} row(s)`);
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
+
+  auditSaleCandidate().catch((err) => console.error('[sale-audit] failed:', err));
 
   const shutdown = async (): Promise<void> => {
     await app.close();
