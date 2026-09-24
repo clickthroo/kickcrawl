@@ -15,11 +15,22 @@ export default function Jobs() {
     const params = new URLSearchParams();
     if (statusFilter) params.set('status', statusFilter);
     if (typeFilter) params.set('type', typeFilter);
-    setError(null);
-    api
-      .get<{ success: boolean; jobs: Job[] }>(`/admin/jobs?${params.toString()}`)
-      .then((res) => setJobs(res.jobs))
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load jobs'));
+
+    function load(): void {
+      setError(null);
+      api
+        .get<{ success: boolean; jobs: Job[] }>(`/admin/jobs?${params.toString()}`)
+        .then((res) => setJobs(res.jobs))
+        .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load jobs'));
+    }
+
+    load();
+    // Same polling JobDetail.tsx already does for a single job - without
+    // it, this list only ever reflects whatever was true the moment it was
+    // loaded, showing a crawl as "Queued" indefinitely even while it's
+    // actively running, since nothing here ever re-fetches on its own.
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
   }, [statusFilter, typeFilter]);
 
   return (

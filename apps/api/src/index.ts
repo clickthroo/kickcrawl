@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { pool } from './db.js';
 import { runMigrations } from './lib/migrate.js';
 import { deduplicateQueuedCrawls, recoverOrphanedJobs, recoverStaleQueuedJobs } from './lib/jobRecords.js';
+import { backfillItemProfiles } from './lib/backfillItemProfiles.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
@@ -45,6 +46,19 @@ async function main(): Promise<void> {
 
   await app.listen({ host: '0.0.0.0', port: config.port });
   console.log(`[kickcrawl] listening on :${config.port}`);
+
+  // Fire-and-forget, not awaited - migration 010 added the profile columns
+  // (team, season, colour, ...) the admin Items list now filters in SQL,
+  // but only rows fetched from here on get them written automatically
+  // (crawl/recheck workers, above); this fills in whatever already
+  // existed before that started. Runs after the server is already
+  // listening so it never delays startup/health checks, and is a cheap
+  // no-op on every later boot once nothing is left to backfill.
+  backfillItemProfiles(pool)
+    .then((total) => {
+      if (total > 0) console.log(`[backfillItemProfiles] updated ${total} row(s)`);
+    })
+    .catch((err) => console.error('[backfillItemProfiles] failed:', err));
 
   const shutdown = async (): Promise<void> => {
     await app.close();

@@ -2,18 +2,18 @@ import { Worker } from 'bullmq';
 import { redisConnection, recheckQueue } from '../queue.js';
 import { pool } from '../db.js';
 import { scrapePage } from '../lib/scrapeCore.js';
-import { fetchPage } from '../services/fetcher.js';
 import { markUrlFetched } from '../lib/urlStore.js';
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { createJob, failJob } from '../lib/jobRecords.js';
 import { getCurrencyRates } from '../lib/currencyRates.js';
 import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
 import { buildKickioProfile, type KickioTeamRef } from '../services/kickioProfile.js';
+import { persistItemProfileColumns } from '../lib/persistItemProfile.js';
 import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 import { PAGE_TIMEOUT_MS, passesSellerFilter, resolveUseBrowser } from './crawlWorker.js';
 
-export const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+export const RECHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * A sale is recorded exactly on the In Stock -> Out of Stock transition,
@@ -25,27 +25,65 @@ export function isNewSale(previousStatus: string | null, newStatus: string | nul
   return previousStatus === 'In Stock' && newStatus === 'Out of Stock';
 }
 
+// A "meaningful" price change, not every penny of currency-conversion
+// rounding noise a recheck might otherwise see between two reads of a
+// price converted through the same admin-maintained GBP rate. Needs both
+// a real old and new price in the SAME currency to compare at all - a
+// currency change (or either side missing) isn't a price change, it's a
+// different kind of event this isn't trying to detect.
+//
+// The original £0.50-or-1% threshold turned out too tight in production:
+// every recorded "price change" so far has been the exact same £0.75
+// delta regardless of the item's own price (£72.00→£71.25, £43.50→
+// £42.75, ...) - a flat amount independent of price is the signature of
+// a shared systematic cause (VFS prices in USD; a small wobble in the
+// admin-maintained USD→GBP rate, or similar rounding, moves every item
+// by the same converted amount at once), not real independent per-item
+// price drops by the retailer. £2 or 2%, whichever is larger, clears
+// that observed noise with real margin while still catching a
+// deliberate markdown.
+const MIN_PRICE_CHANGE_ABSOLUTE = 2;
+const MIN_PRICE_CHANGE_RATIO = 0.02;
+
+export function isPriceChange(
+  oldPrice: number | null,
+  oldCurrency: string | null,
+  newPrice: number | null,
+  newCurrency: string | null,
+): boolean {
+  if (oldPrice == null || newPrice == null) return false;
+  if (oldCurrency !== newCurrency) return false;
+  const threshold = Math.max(MIN_PRICE_CHANGE_ABSOLUTE, oldPrice * MIN_PRICE_CHANGE_RATIO);
+  return Math.abs(newPrice - oldPrice) >= threshold;
+}
+
 interface RecheckableUrl {
   id: string;
   url: string;
   path: string;
   stock_status: string | null;
+  price: number | null;
+  currency: string | null;
 }
 
 export async function recheckSite(
   site: SiteConfig,
   jobId: string,
   currencyRates: Record<string, number>,
-  progress: { checked: number; total: number; sales: number; errors: string[] },
+  progress: { checked: number; total: number; sales: number; priceChanges: number; errors: string[] },
   kickioTeams: readonly KickioTeamRef[] | null = null,
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
-    `SELECT id, url, path, stock_status FROM urls WHERE site_id = $1 AND status = 'fetched'`,
+    `SELECT id, url, path, stock_status, price, currency FROM urls
+     WHERE site_id = $1 AND status = 'fetched' AND stock_status IS DISTINCT FROM 'Out of Stock'`,
     [site.id],
   );
   // Only items (allowed_paths-matched), not the stepping-stone category/
   // listing pages a crawl also fetches along the way - those never carry
   // real stock info, so rechecking them would just burn rate-limit budget.
+  // An item already known Out of Stock is excluded at the query itself
+  // (not filtered here) - once sold, it stays sold, so there's nothing
+  // left for a recheck to catch by revisiting it every hour forever.
   const items = urls.filter((u) => isPathAllowed(u.path, site.allowed_paths, site.denied_paths));
 
   progress.total += items.length;
@@ -102,46 +140,32 @@ export async function recheckSite(
           progress.sales += 1;
         }
 
-        await pool.query(`UPDATE urls SET stock_status = $2 WHERE id = $1`, [urlId, newStatus]);
-
-        // TEMP DIAGNOSTIC - see session notes. Verifying, against a real
-        // production request rather than guessing, whether Shopify's
-        // standard <product-url>.json endpoint (present by default on every
-        // Shopify store unless explicitly disabled) exposes per-size
-        // variant availability for this retailer - the data source the
-        // "one card per size" feature needs, before building on top of it.
-        if (item.url.includes('vintagefootballshirts.com') && item.url.includes('/products/')) {
-          try {
-            const jsonUrl = `${item.url.replace(/\/+$/, '')}.json`;
-            const jsonRes = await fetchPage(jsonUrl, { useBrowser: false, respectRobots: false });
-            let variantsSummary: unknown = null;
-            if (jsonRes.html) {
-              try {
-                const parsed = JSON.parse(jsonRes.html);
-                variantsSummary = Array.isArray(parsed?.product?.variants)
-                  ? parsed.product.variants.map((v: Record<string, unknown>) => ({
-                      title: v.title,
-                      available: v.available,
-                      price: v.price,
-                      sku: v.sku,
-                    }))
-                  : null;
-              } catch {
-                variantsSummary = 'unparseable';
-              }
-            }
-            console.log(
-              '[variant-diag]',
-              JSON.stringify({ url: item.url, statusCode: jsonRes.statusCode, variantsSummary }),
-            );
-          } catch (err) {
-            console.log(
-              '[variant-diag] error',
-              item.url,
-              err instanceof Error ? err.message : String(err),
-            );
-          }
+        if (isPriceChange(item.price, item.currency, profile.listing.price, profile.listing.currency)) {
+          // Same snapshot reasoning as sales just above: the full profile,
+          // not just the price, so the Price Changes page can show every
+          // feature of the item alongside the change, and stays accurate
+          // even if the source page changes or 404s later.
+          await pool.query(
+            `INSERT INTO price_changes (url_id, site_id, title, old_price, new_price, currency, profile)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              urlId,
+              site.id,
+              result.metadata.title,
+              item.price,
+              profile.listing.price,
+              profile.listing.currency,
+              JSON.stringify(profile),
+            ],
+          );
+          progress.priceChanges += 1;
         }
+
+        // Persists every commonly-filtered profile field (team, season,
+        // colour, size, ...), not just stock_status - the admin Items list
+        // now filters these in SQL (routes/admin/urls.ts) instead of
+        // building a profile for every row in the table on every request.
+        await persistItemProfileColumns(urlId, profile);
       }
     } catch (err) {
       progress.errors.push(`${item.url}: ${err instanceof Error ? err.message : String(err)}`);
@@ -154,7 +178,7 @@ export async function recheckSite(
 
 async function processRecheck(): Promise<void> {
   const jobId = await createJob('recheck', null, {}, 'running');
-  const progress = { checked: 0, total: 0, sales: 0, errors: [] as string[] };
+  const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
 
   try {
     const { rows: sites } = await pool.query<SiteConfig>('SELECT * FROM sites WHERE is_active = true');
@@ -176,7 +200,9 @@ async function processRecheck(): Promise<void> {
         JSON.stringify(progress.errors.map((e) => ({ message: e }))),
       ],
     );
-    console.log(`[recheckWorker] job ${jobId} checked ${progress.checked} item(s), found ${progress.sales} sale(s)`);
+    console.log(
+      `[recheckWorker] job ${jobId} checked ${progress.checked} item(s), found ${progress.sales} sale(s), ${progress.priceChanges} price change(s)`,
+    );
   } catch (err) {
     await failJob(jobId, err instanceof Error ? err.message : String(err));
     throw err;
@@ -214,11 +240,24 @@ export function startRecheckWorker(): Worker {
 }
 
 /**
- * Registers the repeatable job that drives the 4-hourly recheck. Safe to
- * call on every boot - BullMQ keys a repeatable job by its name + repeat
- * options, so calling this again with the same interval reuses the
- * existing schedule rather than stacking a duplicate one.
+ * Registers the repeatable job that drives the recheck cycle. Safe to call
+ * on every boot - BullMQ keys a repeatable job by its name + repeat
+ * options (including the interval itself), so calling this again with the
+ * SAME interval reuses the existing schedule rather than stacking a
+ * duplicate one. But that also means simply changing RECHECK_INTERVAL_MS
+ * and redeploying would otherwise leave whatever schedule a previous
+ * deploy registered running forever alongside the new one - two
+ * overlapping recheck cycles, not one replaced by the other. Removing
+ * every existing 'recheck' repeatable job first, unconditionally, before
+ * re-adding the current one guarantees exactly one active schedule after
+ * every boot, regardless of what interval any earlier deploy used.
  */
 export async function scheduleRecheck(): Promise<void> {
+  const existing = await recheckQueue.getRepeatableJobs();
+  for (const job of existing) {
+    if (job.name === 'recheck') {
+      await recheckQueue.removeRepeatableByKey(job.key);
+    }
+  }
   await recheckQueue.add('recheck', {}, { repeat: { every: RECHECK_INTERVAL_MS } });
 }

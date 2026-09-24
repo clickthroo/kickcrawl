@@ -59,6 +59,15 @@ function IconSales(props: IconProps) {
   );
 }
 
+function IconPriceChanges(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M11.5 4.5H5.5a1.5 1.5 0 0 0-1.5 1.5v6l9 9 7.5-7.5-9-9Z" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+    </IconBase>
+  );
+}
+
 function IconJobs(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -123,6 +132,7 @@ const NAV_ITEMS = [
   { to: '/sites', label: 'Sites', tabLabel: 'Sites', icon: IconSites, end: false },
   { to: '/items', label: 'Items', tabLabel: 'Items', icon: IconItems, end: false },
   { to: '/sales', label: 'Sales', tabLabel: 'Sales', icon: IconSales, end: false },
+  { to: '/price-changes', label: 'Price Changes', tabLabel: 'Prices', icon: IconPriceChanges, end: false },
   { to: '/jobs', label: 'Jobs', tabLabel: 'Jobs', icon: IconJobs, end: false },
   { to: '/kickio-teams', label: 'Kickio Teams', tabLabel: 'Teams', icon: IconTeams, end: false },
   { to: '/api-keys', label: 'API Keys', tabLabel: 'Keys', icon: IconKey, end: false },

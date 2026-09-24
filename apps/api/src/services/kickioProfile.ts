@@ -1607,6 +1607,36 @@ function stripUnitPriceNoise(s: string): string {
   return s.replace(UNIT_PRICE_UNAVAILABLE_NOISE, ' ');
 }
 
+// A phrase that sits entirely alone on its own markdown line/paragraph
+// (blank line - or the start/end of the text - immediately before AND
+// after it, with nothing else sharing that line) is a UI widget's own
+// text - a button label, a status badge - not incidental prose mentioning
+// the word somewhere in a sentence. That's a different, narrower kind of
+// evidence than "appears somewhere in this window of text", so it's safe
+// to check across the FULL page text rather than staying inside
+// PRICE_PROXIMITY_WINDOW below - confirmed by construction against this
+// file's own worst real false-positive source: this retailer's "Unit
+// price / **Unavailable**" boilerplate (see stripUnitPriceNoise above)
+// never matches here even though "unavailable" is one of the phrases,
+// because "Unit price /" shares that same line, so the phrase isn't
+// alone on it.
+//
+// Added after a real, still-recurring "Unknown" case (a genuinely sold
+// out listing, "2019-20 Arsenal adidas Originals '91-93 Away Shirt
+// *BNIB*") turned out to have its real, current stock status nowhere
+// near its price at all - a Shopify sticky/mobile quick-buy summary
+// widget, placed near the very end of the page, entirely outside the
+// price-proximity window: "...Arsenal / BNIB / Small -
+// [Change](#product-info)\n\nSold out\n\n[Trustpilot]...". Found by
+// capturing and reading the real text directly (a temporary production
+// diagnostic), not guessed.
+function standaloneLineVariant(phraseRegex: RegExp): RegExp {
+  const inner = phraseRegex.source.replace(/^\\b\(/, '').replace(/\)\\b$/, '');
+  return new RegExp(`(?:^|\\n\\s*\\n)\\s*\\*{0,2}(${inner})\\*{0,2}\\s*(?=\\n\\s*\\n|$)`, 'i');
+}
+const STANDALONE_LINE_OUT_OF_STOCK = standaloneLineVariant(OUT_OF_STOCK_PHRASES);
+const STANDALONE_LINE_IN_STOCK = standaloneLineVariant(IN_STOCK_PHRASES);
+
 /**
  * Availability signal, checked in order of how decisive/specific it is.
  * `phraseText`/`bareWordText` have any size-adjacent "sold"/"out of
@@ -1683,6 +1713,13 @@ export function detectStockStatus(
 
   if (OUT_OF_STOCK_PHRASES.test(p)) return 'Out of Stock';
   if (IN_STOCK_PHRASES.test(p)) return 'In Stock';
+
+  // Full-text fallback for the one shape the price-proximity window can't
+  // reach: a phrase alone on its own line/paragraph, wherever on the page
+  // it actually sits - see standaloneLineVariant's own comment.
+  const fullTextNoNoise = stripUnitPriceNoise(stripVariantStockNoise(text));
+  if (STANDALONE_LINE_OUT_OF_STOCK.test(fullTextNoNoise)) return 'Out of Stock';
+  if (STANDALONE_LINE_IN_STOCK.test(fullTextNoNoise)) return 'In Stock';
 
   if (OUT_OF_STOCK_BARE_WORDS.test(stripVariantStockNoise(bareWordText ?? text))) return 'Out of Stock';
 
@@ -2136,24 +2173,6 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
       )
     : stockBareWordText;
   const stockStatus = detectStockStatus(stockText, rawQuantity, stockBareWordText, stockPhraseText);
-  // TEMP DIAGNOSTIC - see session notes. The "Unknown" cases after the
-  // Unit-price fix are genuinely in-stock listings whose real "Add to
-  // Bag" text apparently falls outside the +/-500 char price window -
-  // measuring the REAL distance directly rather than guessing a new
-  // window size again.
-  if (stockStatus === 'Unknown' && input.url?.includes('vintagefootballshirts.com') && priceMatchInHaystack) {
-    const addToBagIdx = haystack.search(/add to (cart|basket|bag)/i);
-    console.log(
-      '[stock-diag2]',
-      JSON.stringify({
-        url: input.url,
-        priceIndex: priceMatchInHaystack.index,
-        addToBagIndex: addToBagIdx,
-        distanceAfterPrice: addToBagIdx >= 0 ? addToBagIdx - (priceMatchInHaystack.index + priceMatchInHaystack.length) : null,
-        haystackLength: haystack.length,
-      }),
-    );
-  }
 
   // ---- Jacket style custom attribute ----
   const customAttributes: Record<string, string> = {};

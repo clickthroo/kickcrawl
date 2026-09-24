@@ -1377,6 +1377,33 @@ describe('detectStockStatus', () => {
       'Out of Stock',
     );
   });
+
+  it('finds a real stock phrase sitting alone on its own line, wherever on the page it actually is - not just near the price', () => {
+    // Real listing captured via a temporary production diagnostic after
+    // the Unit-price fix shipped: "2019-20 Arsenal adidas Originals
+    // '91-93 Away Shirt *BNIB*" was still resolving to "Unknown" even
+    // though it's genuinely sold out on the real site. Its actual, live
+    // stock status turned out to sit in a Shopify sticky/mobile quick-buy
+    // summary widget near the very end of the page - nowhere close to
+    // the price, so it fell outside PRICE_PROXIMITY_WINDOW entirely, and
+    // "Sold out" here (a distinct UI element's own text, isolated by
+    // blank lines) is exactly the shape the full-text standalone-line
+    // fallback is for.
+    const realHaystackTail =
+      "[View details](/products/arsenal-adidas-originals-1991-1993-away-shirt-bnib)\n\n" +
+      "2019-20 Arsenal adidas Originals '91-93 Away Shirt \\*BNIB\\*\n\n" +
+      'Arsenal / BNIB / Small – [Change](#product-info)\n\nSold out\n\n' +
+      '[Trustpilot](https://www.trustpilot.com/review/vintagefootballshirts.com)';
+    const priceText = '£30.00'; // nowhere near "Sold out" in the real page
+    const fullText = `${priceText}\n\n${'x'.repeat(600)}\n\n${realHaystackTail}`;
+    expect(detectStockStatus(fullText, null, null, priceText)).toBe('Out of Stock');
+
+    // The same shape, but genuinely available - "Add to Bag" alone on
+    // its own line, far past the price.
+    const availableTail = 'Arsenal / BNIB / Small – [Change](#product-info)\n\nAdd to Bag\n\nBuy with Apple Pay';
+    const fullAvailableText = `${priceText}\n\n${'x'.repeat(600)}\n\n${availableTail}`;
+    expect(detectStockStatus(fullAvailableText, null, null, priceText)).toBe('In Stock');
+  });
 });
 
 describe('buildKickioProfile', () => {

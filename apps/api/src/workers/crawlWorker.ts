@@ -7,6 +7,12 @@ import { markUrlFetched, markUrlQueued, upsertDiscoveredUrls } from '../lib/urlS
 import { persistScrapeResult } from '../lib/persistResult.js';
 import { isPathAllowed, isSameSite, matchesPathPattern } from '../services/links.js';
 import { detectSellerSignals } from '../services/sellerSignals.js';
+import { BROWSER_FATAL_PATTERN } from '../services/fetcher.js';
+import { buildKickioProfile, type KickioTeamRef } from '../services/kickioProfile.js';
+import { persistItemProfileColumns } from '../lib/persistItemProfile.js';
+import { getCurrencyRates } from '../lib/currencyRates.js';
+import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
+import { resumeCrawlJob } from '../lib/jobRecords.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 
@@ -114,6 +120,27 @@ async function getJobStatus(jobId: string): Promise<string | undefined> {
 // treating it as stalled the way an unattended fetch would.
 const PAUSE_POLL_INTERVAL_MS = 3_000;
 
+// Confirmed in production on VFS: 75% of already-discovered product urls
+// (5384 of 7200) ended up permanently lost after exactly one failed fetch
+// - overwhelmingly the shared browser instance crashing/closing mid-fetch,
+// the same transient failure scrapePageWithTimeout already knows how to
+// recover from for the NEXT page, just not for this one's own single
+// attempt. A page that fails now gets up to this many total tries before
+// crawl_frontier gives up on it for real.
+const MAX_FRONTIER_ATTEMPTS = 3;
+// Each retry waits longer than the last (attempts * this many minutes) -
+// deferred to later in the queue rather than retried back-to-back, so a
+// crashed browser (which recycles on its own within a couple of minutes,
+// per this same session's own earlier findings) has real time to recover
+// instead of the retry landing in the middle of the same crash.
+const FRONTIER_RETRY_BACKOFF_MINUTES = 2;
+// How long to wait before re-checking for available work when every
+// remaining pending row is deferred for a retry - short relative to the
+// backoff itself; the main loop re-checks cancel/pause status on every
+// pass regardless, so this never blocks a pause/cancel from taking effect
+// for long.
+const FRONTIER_RETRY_POLL_MS = 5_000;
+
 /**
  * Blocks while a job's status is 'paused', re-checking on an interval.
  * Returns the status that ended the wait - either 'cancelled' (the caller
@@ -159,9 +186,41 @@ async function recordPageResult(
   jobId: string,
   url: string,
   result: ScrapeCoreResult,
-): Promise<void> {
+): Promise<string> {
   const urlId = await markUrlFetched(siteId, url, result.metadata.statusCode, result.error);
   await persistScrapeResult(urlId, jobId, result);
+  return urlId;
+}
+
+// Builds and persists the same profile columns a recheck already does
+// (lib/persistItemProfile.ts), at the point an item is first discovered
+// rather than only hours later on its first recheck - so the admin Items
+// list's SQL-side filters (team, stock status, ...) have real data for a
+// brand new item immediately, not "no value yet" until the next recheck
+// cycle.
+async function recordItemProfile(
+  urlId: string,
+  url: string,
+  result: ScrapeCoreResult,
+  currencyRates: Record<string, number>,
+  kickioTeams: readonly KickioTeamRef[] | null,
+): Promise<void> {
+  const profile = buildKickioProfile({
+    url,
+    title: result.metadata.title,
+    description: result.markdown?.slice(0, 4000) ?? null,
+    images: result.metadata.image ? [result.metadata.image] : [],
+    extracted: result.extracted,
+    currencyRates,
+    kickioTeams,
+  });
+  // TEMP DIAGNOSTIC - see session notes. Confirming, against a real
+  // production run rather than assuming, that this run is actually
+  // resolving both In Stock and Out of Stock (not just one of the two,
+  // which would mean a detection regression rather than a real-world
+  // stock mix).
+  console.log('[stock-mix-diag]', JSON.stringify({ url, stock_status: profile.listing.stock_status }));
+  await persistItemProfileColumns(urlId, profile);
 }
 
 // A catch-all safety net around the per-page fetch. Every individual I/O
@@ -175,7 +234,7 @@ async function recordPageResult(
 // blocked-page browser retry) without masking a real hang for long.
 export const PAGE_TIMEOUT_MS = 90_000;
 
-export async function scrapePageWithTimeout(
+async function scrapePageOnce(
   url: string,
   opts: Parameters<typeof scrapePage>[1],
   site: Parameters<typeof scrapePage>[2],
@@ -208,6 +267,30 @@ export async function scrapePageWithTimeout(
   ]);
 }
 
+export async function scrapePageWithTimeout(
+  url: string,
+  opts: Parameters<typeof scrapePage>[1],
+  site: Parameters<typeof scrapePage>[2],
+): Promise<ScrapeCoreResult> {
+  const result = await scrapePageOnce(url, opts, site);
+  // A fatal browser crash (BROWSER_FATAL_PATTERN, fetcher.ts) has already
+  // backed off and gotten a fresh Chromium instance by the time this
+  // promise settles - so one retry here has a real chance of succeeding,
+  // rather than leaving this page permanently failed. Confirmed in
+  // production as a real, separate cost of the crash itself: a crawl
+  // job's SEED page (depth 0, the only URL queued at that point) hit
+  // exactly one of these crashes and the whole job ended there - zero
+  // pages ever fetched, no links ever discovered to try instead, nothing
+  // left in queue to fall back to. Scoped to this one pattern rather than
+  // every failure - an ordinary 404, a real site outage, or a
+  // robots.txt/seller-filter rejection all deserve to fail once and stay
+  // failed, not be retried against odds that haven't actually improved.
+  if (!result.success && result.error && BROWSER_FATAL_PATTERN.test(result.error)) {
+    return await scrapePageOnce(url, opts, site);
+  }
+  return result;
+}
+
 async function fireWebhook(jobId: string, status: string): Promise<void> {
   if (!config.webhookUrl) return;
   try {
@@ -233,10 +316,68 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
   // applies at all and every traversable link is treated as before.
   const seedCatalogId = catalogIdFromUrl(url);
 
+  // Fetched once per job, not per page - both are small, admin-maintained
+  // lookups (currency_rates table, Kickio's own teams list), the same
+  // pattern recheckWorker.ts already uses.
+  const currencyRates = await getCurrencyRates();
+  const kickioTeams = await getKickioTeamsForMatching();
+
+  // Resume support: crawl_frontier (migration 012) persists every
+  // discovered URL for this job - the in-memory queue/visited state a
+  // restart used to lose completely, which is why recoverOrphanedJobs()
+  // (jobRecords.ts) used to have no choice but to permanently fail any
+  // job still 'running' at boot. On a fresh job the table has no rows for
+  // this job_id yet, so the seed URL is inserted as the only 'pending'
+  // entry, same as the old in-memory queue's initial state. On a resume
+  // (a previous run of this same job_id left rows behind), `visited` is
+  // seeded from every row already recorded regardless of status - both
+  // 'done' (already processed) and 'pending' (already queued, just not
+  // reached yet) - so filterTraversableLinks doesn't waste work
+  // re-discovering them, though the table's own UNIQUE(job_id, url)
+  // constraint would make re-inserting them a harmless no-op either way.
   const visited = new Set<string>();
-  const queue: { url: string; depth: number }[] = [{ url: new URL(url).toString(), depth: 0 }];
-  let completed = 0;
+  const seedUrl = new URL(url).toString();
+  const existingFrontier = await pool.query<{ url: string; status: string }>(
+    `SELECT url, status FROM crawl_frontier WHERE job_id = $1`,
+    [jobId],
+  );
+  let pendingCount: number;
+  let doneCount: number;
+  let completed: number;
+  // Seeded from the jobs row's own errors/error_count on resume, not just
+  // reset to empty - those columns are still the only record of errors
+  // from a segment that ended before this restart (per-page errors were
+  // never themselves persisted to crawl_frontier), and the final UPDATE
+  // below replaces both columns outright rather than appending.
   const errors: string[] = [];
+  if (existingFrontier.rows.length === 0) {
+    await pool.query(
+      `INSERT INTO crawl_frontier (job_id, url, depth, status) VALUES ($1, $2, 0, 'pending') ON CONFLICT (job_id, url) DO NOTHING`,
+      [jobId, seedUrl],
+    );
+    pendingCount = 1;
+    doneCount = 0;
+    completed = 0;
+  } else {
+    pendingCount = 0;
+    doneCount = 0;
+    for (const row of existingFrontier.rows) {
+      visited.add(row.url);
+      if (row.status === 'done') doneCount += 1;
+      else pendingCount += 1;
+    }
+    const jobRow = await pool.query<{ completed_pages: number; errors: { message: string }[] | null }>(
+      `SELECT completed_pages, errors FROM jobs WHERE id = $1`,
+      [jobId],
+    );
+    completed = jobRow.rows[0]?.completed_pages ?? 0;
+    for (const e of jobRow.rows[0]?.errors ?? []) {
+      if (e?.message) errors.push(e.message);
+    }
+    console.log(
+      `[crawlWorker] job ${jobId} resuming from crawl_frontier: ${doneCount} done, ${pendingCount} pending, ${completed} completed item(s)`,
+    );
+  }
   let cancelled = false;
 
   // Cancelling a job that's still 'queued' (BullMQ hasn't picked it up
@@ -245,9 +386,9 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
   // instead of after some of it already has.
   if ((await getJobStatus(jobId)) === 'cancelled') return;
 
-  await updateJobProgress(jobId, Math.min(limit, 1), 0);
+  await updateJobProgress(jobId, Math.min(limit, doneCount + pendingCount), completed);
 
-  while (queue.length > 0 && visited.size < limit) {
+  while (pendingCount > 0 && doneCount < limit) {
     const status = await getJobStatus(jobId);
     if (status === 'cancelled') {
       cancelled = true;
@@ -261,9 +402,26 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       }
     }
 
-    const next = queue.shift()!;
-    if (visited.has(next.url)) continue;
-    visited.add(next.url);
+    const nextRow = await pool.query<{ id: string; url: string; depth: number; attempts: number }>(
+      `SELECT id, url, depth, attempts FROM crawl_frontier
+       WHERE job_id = $1 AND status = 'pending' AND available_at <= now()
+       ORDER BY available_at ASC, id ASC LIMIT 1`,
+      [jobId],
+    );
+    if (nextRow.rows.length === 0) {
+      if (pendingCount > 0) {
+        // Nothing immediately available, but real pending work still
+        // exists - it's just deferred for a retry backoff, not actually
+        // exhausted. Wait a bit and check again rather than concluding
+        // the job is done.
+        await sleep(FRONTIER_RETRY_POLL_MS);
+        continue;
+      }
+      break;
+    }
+    const frontierId = nextRow.rows[0].id;
+    const attemptsSoFar = nextRow.rows[0].attempts;
+    const next = { url: nextRow.rows[0].url, depth: nextRow.rows[0].depth };
 
     // The seed (depth 0) is always an item, same as before. Anything else
     // is an item only if it matches allowed_paths - a page that doesn't
@@ -287,7 +445,7 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     if (isItem) await markUrlQueued(siteId, next.url);
 
     console.log(
-      `[crawlWorker] job ${jobId} fetching ${next.url} (depth ${next.depth}, ${completed}/${limit} done, ${queue.length} queued)`,
+      `[crawlWorker] job ${jobId} fetching ${next.url} (depth ${next.depth}, ${completed}/${limit} done, ${pendingCount} queued)`,
     );
     // A non-item page's markdown/extracted content is never read anywhere
     // below - it only exists here to have its links followed - so it has
@@ -312,7 +470,27 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       site,
     );
     if (!result.success) {
-      console.log(`[crawlWorker] job ${jobId} failed ${next.url}: ${result.error}`);
+      const attemptsMade = attemptsSoFar + 1;
+      if (attemptsMade < MAX_FRONTIER_ATTEMPTS) {
+        // Not given up on yet - stays 'pending' (pendingCount/doneCount
+        // untouched, no error recorded yet) so it's picked up again once
+        // its backoff passes, instead of being thrown away after this one
+        // attempt.
+        console.log(
+          `[crawlWorker] job ${jobId} will retry ${next.url} (attempt ${attemptsMade}/${MAX_FRONTIER_ATTEMPTS} failed: ${result.error})`,
+        );
+        await pool.query(`UPDATE crawl_frontier SET attempts = $2, available_at = $3 WHERE id = $1`, [
+          frontierId,
+          attemptsMade,
+          new Date(Date.now() + attemptsMade * FRONTIER_RETRY_BACKOFF_MINUTES * 60_000),
+        ]);
+        continue;
+      }
+
+      console.log(`[crawlWorker] job ${jobId} failed ${next.url} after ${attemptsMade} attempt(s): ${result.error}`);
+      await pool.query(`UPDATE crawl_frontier SET status = 'done' WHERE id = $1`, [frontierId]);
+      pendingCount -= 1;
+      doneCount += 1;
       // Recorded regardless of isItem - previously a failed fetch on a
       // non-item (nav/category) page was completely silent: no error, no
       // retry, nothing in the job's error count, just a page that
@@ -326,6 +504,9 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
         await recordPageResult(siteId, jobId, next.url, result);
       }
     } else {
+      await pool.query(`UPDATE crawl_frontier SET status = 'done' WHERE id = $1`, [frontierId]);
+      pendingCount -= 1;
+      doneCount += 1;
       if (isItem) {
         // The seller filter only makes sense for a page that's genuinely
         // an item by its own path - a catalog/search seed forced into
@@ -337,7 +518,8 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
           !matchesAllowedPaths ||
           passesSellerFilter(result.markdown, site ?? { require_pro_seller: false, min_seller_feedback: null });
         if (passesFilter) {
-          await recordPageResult(siteId, jobId, next.url, result);
+          const urlId = await recordPageResult(siteId, jobId, next.url, result);
+          await recordItemProfile(urlId, next.url, result, currencyRates, kickioTeams);
           completed += 1;
         } else {
           // Fetched, but doesn't meet the site's seller filter - keep
@@ -387,13 +569,30 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
         // pages) still get queued and traversed below, just not shown.
         const itemLinks = newLinks.filter((l) => isCrawlItem(new URL(l).pathname, includePaths));
         await upsertDiscoveredUrls(siteId, itemLinks);
-        for (const link of newLinks) {
-          queue.push({ url: link, depth: next.depth + 1 });
+        if (newLinks.length > 0) {
+          for (const link of newLinks) visited.add(link);
+          const values: string[] = [];
+          const params: unknown[] = [jobId];
+          for (const link of newLinks) {
+            params.push(link, next.depth + 1);
+            values.push(`($1, $${params.length - 1}, $${params.length}, 'pending')`);
+          }
+          // ON CONFLICT DO NOTHING is what makes re-discovering the same
+          // URL from a different page a safe no-op - the same guarantee
+          // the old in-memory visited Set gave the queue.push() this
+          // replaces, now also holding across a resumed job whose
+          // in-memory `visited` above was only just repopulated from the
+          // table, not accumulated fresh over this run's own traversal.
+          const inserted = await pool.query(
+            `INSERT INTO crawl_frontier (job_id, url, depth, status) VALUES ${values.join(', ')} ON CONFLICT (job_id, url) DO NOTHING`,
+            params,
+          );
+          pendingCount += inserted.rowCount ?? 0;
         }
       }
     }
 
-    await updateJobProgress(jobId, Math.min(limit, visited.size + queue.length), completed);
+    await updateJobProgress(jobId, Math.min(limit, doneCount + pendingCount), completed);
 
     // Diagnostic for the still-unexplained Vinted OOM: the crash tracks
     // with cumulative pages processed in this same job (page sizes alone
@@ -412,7 +611,7 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
   await pool.query(
     `UPDATE jobs SET status = $6, total_pages = $2, completed_pages = $3,
        error_count = $4, errors = $5::jsonb, finished_at = now() WHERE id = $1`,
-    [jobId, visited.size, completed, errors.length, JSON.stringify(errors.map((e) => ({ message: e }))), finalStatus],
+    [jobId, doneCount, completed, errors.length, JSON.stringify(errors.map((e) => ({ message: e }))), finalStatus],
   );
 
   await fireWebhook(jobId, finalStatus);
@@ -468,6 +667,27 @@ export function startCrawlWorker(): Worker<CrawlJobData> {
   );
   worker.on('failed', (job, err) => {
     console.error(`[crawlWorker] job ${job?.id} failed:`, err);
+    // A stall (maxStalledCount: 0 fails it immediately, see above) means
+    // the process holding this job's lock died without this handler's own
+    // try/catch ever running - Postgres still says 'running' since
+    // nothing else touched it. Distinct from processCrawl actually
+    // throwing, which already updates Postgres to 'failed' itself above
+    // before rethrowing, and which this same resume would wrongly bring
+    // back to life on a genuine, non-transient error. Confirmed in
+    // production as a real, recurring gap: recoverOrphanedJobs() only
+    // ever runs once at boot, and Railway's rolling deploys keep the old
+    // process alive for a stretch after the new one is already up, so a
+    // job can become newly orphaned after that one boot-time check has
+    // already run and before the next deploy ever happens. BullMQ's own
+    // stall detection isn't tied to a boot at all, so reacting to it here
+    // closes that gap continuously instead of leaving it until whatever
+    // deploy happens to come next.
+    if (job && /stalled/i.test(err.message)) {
+      const { jobId, siteId, ...payload } = job.data;
+      resumeCrawlJob(jobId, siteId, payload).catch((resumeErr) =>
+        console.error(`[crawlWorker] job ${jobId} failed to auto-resume after a stall:`, resumeErr),
+      );
+    }
   });
   return worker;
 }

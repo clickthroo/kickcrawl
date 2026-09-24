@@ -40,8 +40,7 @@ export interface UrlRecord {
 
 export interface JobPageItem {
   url: string;
-  last_status_code: number | null;
-  last_error: string | null;
+  status_code: number | null;
   fetched_at: string;
   title: string | null;
   image: string | null;
@@ -132,6 +131,21 @@ export interface Sale {
   price: number | null;
   currency: string | null;
   /** Full Kickio profile as it was at the moment the sale was detected - null for a sale recorded before this was added. */
+  profile: KickioProfile | null;
+  detected_at: string;
+}
+
+export interface PriceChange {
+  id: string;
+  url_id: string;
+  site_id: string;
+  site_name: string;
+  url: string;
+  title: string | null;
+  old_price: number;
+  new_price: number;
+  currency: string | null;
+  /** Full Kickio profile as it was at the moment the price change was detected. */
   profile: KickioProfile | null;
   detected_at: string;
 }

@@ -44,12 +44,23 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
     // (metadata/extracted/markdown) into a single human-friendly item.
     // jsonb has no MAX/MIN aggregate in Postgres, so this uses a LATERAL
     // join per format instead of conditional aggregation.
+    //
+    // status_code comes from THIS job's own metadata row (m.status_code),
+    // not urls.last_status_code/last_error - those are shared across every
+    // job that has ever touched this url (crawlWorker.ts, recheckWorker.ts
+    // both call the same markUrlFetched(), which unconditionally
+    // overwrites them) and get silently rewritten by any LATER job (an
+    // hourly recheck, most often) that happens to fail on the same url
+    // after this one already succeeded. Confirmed in production: a page
+    // with a fully populated Kickio profile - proof this job's own fetch
+    // worked - was showing "Error (0)" purely because a recheck job
+    // failed on it afterwards; nothing about this job's own run was ever
+    // actually wrong.
     const { rows: pages } = await pool.query(
       `SELECT
          u.url,
-         u.last_status_code,
-         u.last_error,
          latest.fetched_at,
+         m.status_code,
          m.content ->> 'title' AS title,
          m.content ->> 'image' AS image,
          m.content -> 'images' AS images,
@@ -62,7 +73,7 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
          WHERE sr.url_id = u.id AND sr.job_id = $1
        ) latest ON true
        LEFT JOIN LATERAL (
-         SELECT content FROM scrape_results sr
+         SELECT content, status_code FROM scrape_results sr
          WHERE sr.url_id = u.id AND sr.job_id = $1 AND sr.format = 'metadata'
          ORDER BY sr.fetched_at DESC LIMIT 1
        ) m ON true

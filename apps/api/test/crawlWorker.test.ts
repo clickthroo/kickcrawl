@@ -199,6 +199,77 @@ describe('scrapePageWithTimeout', () => {
 
     expect(closeBrowser).not.toHaveBeenCalled();
   });
+
+  it('retries once after a fatal browser crash, instead of leaving that one page permanently failed', async () => {
+    // Real production case: a fresh crawl job's SEED page (depth 0, the
+    // only URL queued at that point) hit exactly one Chromium crash - by
+    // then already backed off and given a fresh browser instance
+    // (fetcher.ts's fetchWithBrowser), so a retry has a real chance of
+    // succeeding - and the whole job ended there anyway: zero pages ever
+    // fetched, no links ever discovered to try instead, nothing left in
+    // queue to fall back to.
+    let calls = 0;
+    const crashedResult = {
+      success: false,
+      error: 'browserType.launch: Target page, context or browser has been closed',
+      metadata: { sourceURL: 'https://example.com', statusCode: 0 },
+    };
+    const recoveredResult = { success: true, metadata: { sourceURL: 'https://example.com', statusCode: 200 } };
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => {
+        calls += 1;
+        return calls === 1 ? crashedResult : recoveredResult;
+      },
+    }));
+
+    const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
+    const result = await scrapePageWithTimeout('https://example.com', {}, null);
+
+    expect(calls).toBe(2);
+    expect(result).toBe(recoveredResult);
+  });
+
+  it('does not retry an ordinary failure - a 404, a real outage, robots.txt - those deserve to fail once and stay failed', async () => {
+    let calls = 0;
+    const notFound = {
+      success: false,
+      error: 'Blocked by anti-bot protection (status 404)',
+      metadata: { sourceURL: 'https://example.com', statusCode: 404 },
+    };
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => {
+        calls += 1;
+        return notFound;
+      },
+    }));
+
+    const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
+    const result = await scrapePageWithTimeout('https://example.com', {}, null);
+
+    expect(calls).toBe(1);
+    expect(result).toBe(notFound);
+  });
+
+  it('gives up after the retry also crashes, rather than retrying forever', async () => {
+    let calls = 0;
+    const crashedResult = {
+      success: false,
+      error: 'page.goto: Page crashed',
+      metadata: { sourceURL: 'https://example.com', statusCode: 0 },
+    };
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => {
+        calls += 1;
+        return crashedResult;
+      },
+    }));
+
+    const { scrapePageWithTimeout } = await import('../src/workers/crawlWorker.js');
+    const result = await scrapePageWithTimeout('https://example.com', {}, null);
+
+    expect(calls).toBe(2);
+    expect(result).toBe(crashedResult);
+  });
 });
 
 describe('passesSellerFilter', () => {

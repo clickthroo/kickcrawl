@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isNewSale } from '../src/workers/recheckWorker.js';
+import { isNewSale, isPriceChange } from '../src/workers/recheckWorker.js';
 import type { SiteConfig } from '../src/lib/siteResolver.js';
 
 describe('isNewSale', () => {
@@ -27,6 +27,41 @@ describe('isNewSale', () => {
   it('is not a sale when the new status is unknown or null - nothing confidently confirms it sold', () => {
     expect(isNewSale('In Stock', 'Unknown')).toBe(false);
     expect(isNewSale('In Stock', null)).toBe(false);
+  });
+});
+
+describe('isPriceChange', () => {
+  it('ignores a small move that is just currency-conversion rounding noise', () => {
+    expect(isPriceChange(50, 'GBP', 50.1, 'GBP')).toBe(false);
+  });
+
+  it('ignores the exact £0.75 move seen for real in production - a flat delta independent of the item price is a shared conversion-rate wobble, not real per-item markdowns', () => {
+    expect(isPriceChange(72, 'GBP', 71.25, 'GBP')).toBe(false);
+    expect(isPriceChange(43.5, 'GBP', 42.75, 'GBP')).toBe(false);
+  });
+
+  it('counts a move of at least £2 on a cheap item', () => {
+    expect(isPriceChange(20, 'GBP', 22.01, 'GBP')).toBe(true);
+    expect(isPriceChange(20, 'GBP', 21.99, 'GBP')).toBe(false);
+  });
+
+  it('counts a move of at least 2% on an expensive item, since £2 alone would be too sensitive there', () => {
+    expect(isPriceChange(500, 'GBP', 510, 'GBP')).toBe(true); // exactly 2%
+    expect(isPriceChange(500, 'GBP', 509, 'GBP')).toBe(false); // 1.8%, under both thresholds
+  });
+
+  it('counts a price drop the same as a price rise', () => {
+    expect(isPriceChange(100, 'GBP', 50, 'GBP')).toBe(true);
+  });
+
+  it('is not a price change when either side has no real price to compare', () => {
+    expect(isPriceChange(null, 'GBP', 50, 'GBP')).toBe(false);
+    expect(isPriceChange(50, 'GBP', null, 'GBP')).toBe(false);
+    expect(isPriceChange(null, null, null, null)).toBe(false);
+  });
+
+  it('is not a price change when the currency itself differs - a different kind of event, not this one', () => {
+    expect(isPriceChange(50, 'GBP', 50, 'USD')).toBe(false);
   });
 });
 
@@ -88,7 +123,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     expect(query).toHaveBeenCalledWith('DELETE FROM urls WHERE id = $1', [recheckableItem.id]);
@@ -96,6 +131,24 @@ describe('recheckSite', () => {
     expect(persistScrapeResult).not.toHaveBeenCalled();
     expect(progress.checked).toBe(1);
     expect(progress.errors).toEqual([]);
+  });
+
+  it('excludes items already known Out of Stock from the recheck query - once sold, stays sold', async () => {
+    // Once an item has been recorded as sold, there's nothing left for an
+    // hourly recheck to catch by revisiting it forever - excluded at the
+    // query itself so it's never fetched at all, not just skipped after.
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: vi.fn() }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn() }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    await recheckSite(baseSite, 'job-1', {}, progress);
+
+    const [selectSql] = query.mock.calls[0];
+    expect(selectSql).toMatch(/stock_status IS DISTINCT FROM 'Out of Stock'/);
   });
 
   it('records the full Kickio profile on a sale, not just title/price/currency', async () => {
@@ -118,7 +171,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
     await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
 
     expect(progress.sales).toBe(1);
@@ -133,6 +186,97 @@ describe('recheckSite', () => {
     const profile = JSON.parse(params[5]);
     expect(profile.identity.team).toBe('France');
     expect(profile.listing.stock_status).toBe('Out of Stock');
+  });
+
+  it('records a price change on a real move, with the full profile snapshot - mirrors the sale detection above', async () => {
+    const siteWithoutSellerFilter: SiteConfig = { ...baseSite, require_pro_seller: false, min_seller_feedback: null };
+    const item = { ...recheckableItem, stock_status: 'In Stock', price: 90, currency: 'GBP' };
+    const query = vi.fn().mockResolvedValue({ rows: [item] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => ({
+        success: true,
+        markdown: 'Add to Bag',
+        metadata: { sourceURL: item.url, statusCode: 200, title: '1998 France Home Shirt', image: null },
+        extracted: { price: '£75.00' },
+      }),
+    }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(item.id) }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
+
+    expect(progress.priceChanges).toBe(1);
+    const priceChangeCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO price_changes'));
+    expect(priceChangeCall).toBeDefined();
+    const [, params] = priceChangeCall!;
+    expect(params[0]).toBe(item.id);
+    expect(params[1]).toBe(siteWithoutSellerFilter.id);
+    expect(params[2]).toBe('1998 France Home Shirt');
+    expect(params[3]).toBe(90); // old_price - from the stored urls row
+    expect(params[4]).toBe(75); // new_price - from this recheck's fresh scrape
+    expect(params[5]).toBe('GBP');
+    const profile = JSON.parse(params[6]);
+    expect(profile.listing.price).toBe(75);
+  });
+
+  it('does not record a price change under the noise threshold, or when nothing changed', async () => {
+    const siteWithoutSellerFilter: SiteConfig = { ...baseSite, require_pro_seller: false, min_seller_feedback: null };
+    const item = { ...recheckableItem, stock_status: 'In Stock', price: 90, currency: 'GBP' };
+    const query = vi.fn().mockResolvedValue({ rows: [item] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => ({
+        success: true,
+        markdown: 'Add to Bag',
+        metadata: { sourceURL: item.url, statusCode: 200, title: '1998 France Home Shirt', image: null },
+        extracted: { price: '£90.20' }, // a 20p wobble - under the £2/2% threshold
+      }),
+    }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(item.id) }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
+
+    expect(progress.priceChanges).toBe(0);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO price_changes'))).toBe(false);
+  });
+
+  it('persists the full profile (team, season, colour, size, ...) on every recheck, not just stock_status', async () => {
+    // The admin Items list now filters these fields in SQL (routes/admin/
+    // urls.ts) instead of building a profile for every row on every
+    // request - a recheck is one of the places that data has to actually
+    // get written for that to work.
+    const siteWithoutSellerFilter: SiteConfig = { ...baseSite, require_pro_seller: false, min_seller_feedback: null };
+    const query = vi.fn().mockResolvedValue({ rows: [recheckableItem] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({
+      scrapePage: async () => ({
+        success: true,
+        markdown: 'Add to Bag',
+        metadata: { sourceURL: recheckableItem.url, statusCode: 200, title: '2019-20 Arsenal Adidas Away Shirt M', image: null },
+        extracted: {},
+      }),
+    }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(recheckableItem.id) }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
+
+    const updateCall = query.mock.calls.find(([sql]) => String(sql).includes('UPDATE urls SET'));
+    expect(updateCall).toBeDefined();
+    const [sql, params] = updateCall!;
+    expect(String(sql)).toContain('team');
+    expect(String(sql)).toContain('colour');
+    expect(params[0]).toBe(recheckableItem.id);
+    expect(params).toContain('Arsenal');
+    expect(params).toContain('M');
   });
 
   it('keeps refreshing an item that still passes the seller filter, same as before', async () => {
@@ -152,11 +296,65 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     expect(query).not.toHaveBeenCalledWith('DELETE FROM urls WHERE id = $1', [recheckableItem.id]);
     expect(markUrlFetched).toHaveBeenCalledWith(baseSite.id, recheckableItem.url, 200, undefined);
     expect(persistScrapeResult).toHaveBeenCalled();
+  });
+});
+
+describe('scheduleRecheck', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.doUnmock('../src/queue.js');
+  });
+
+  it('removes every existing "recheck" repeatable schedule before adding the current one, instead of stacking a second schedule alongside it', async () => {
+    // BullMQ keys a repeatable job by name + repeat options (including the
+    // interval), so simply changing RECHECK_INTERVAL_MS and redeploying
+    // would otherwise leave whatever schedule a previous deploy registered
+    // (e.g. every 4 hours) running forever alongside the new one (e.g.
+    // every hour) - two overlapping recheck cycles, not one replaced by
+    // the other.
+    const getRepeatableJobs = vi.fn().mockResolvedValue([
+      { key: 'recheck::old-4h-key', name: 'recheck', every: '14400000' },
+      { key: 'other-queue-job::key', name: 'something-else', every: '60000' },
+    ]);
+    const removeRepeatableByKey = vi.fn().mockResolvedValue(undefined);
+    const add = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/queue.js', () => ({
+      redisConnection: {},
+      recheckQueue: { getRepeatableJobs, removeRepeatableByKey, add },
+    }));
+
+    const { scheduleRecheck, RECHECK_INTERVAL_MS } = await import('../src/workers/recheckWorker.js');
+    await scheduleRecheck();
+
+    expect(removeRepeatableByKey).toHaveBeenCalledTimes(1);
+    expect(removeRepeatableByKey).toHaveBeenCalledWith('recheck::old-4h-key');
+    expect(add).toHaveBeenCalledWith('recheck', {}, { repeat: { every: RECHECK_INTERVAL_MS } });
+  });
+
+  it('adds the schedule even when there is nothing existing to remove - the first-ever boot case', async () => {
+    const getRepeatableJobs = vi.fn().mockResolvedValue([]);
+    const removeRepeatableByKey = vi.fn();
+    const add = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/queue.js', () => ({
+      redisConnection: {},
+      recheckQueue: { getRepeatableJobs, removeRepeatableByKey, add },
+    }));
+
+    const { scheduleRecheck } = await import('../src/workers/recheckWorker.js');
+    await scheduleRecheck();
+
+    expect(removeRepeatableByKey).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledTimes(1);
   });
 });

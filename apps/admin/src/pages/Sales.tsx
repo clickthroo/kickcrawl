@@ -68,7 +68,7 @@ export default function Sales() {
       {sales?.length === 0 && (
         <Card>
           <p className="text-center text-sm text-slate-400">
-            No sales detected yet - this fills in as rechecks (every 4 hours) catch an item going from In Stock
+            No sales detected yet - this fills in as rechecks (every hour) catch an item going from In Stock
             to Out of Stock.
           </p>
         </Card>

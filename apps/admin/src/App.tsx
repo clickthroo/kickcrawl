@@ -8,6 +8,7 @@ import SiteForm from './pages/SiteForm';
 import SiteDetail from './pages/SiteDetail';
 import Items from './pages/Items';
 import Sales from './pages/Sales';
+import PriceChanges from './pages/PriceChanges';
 import Jobs from './pages/Jobs';
 import JobDetail from './pages/JobDetail';
 import ApiKeys from './pages/ApiKeys';
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="sites/:id/edit" element={<SiteForm />} />
         <Route path="items" element={<Items />} />
         <Route path="sales" element={<Sales />} />
+        <Route path="price-changes" element={<PriceChanges />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="jobs/:id" element={<JobDetail />} />
         <Route path="kickio-teams" element={<KickioTeams />} />
