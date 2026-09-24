@@ -166,17 +166,6 @@ export async function recheckSite(
         // now filters these in SQL (routes/admin/urls.ts) instead of
         // building a profile for every row in the table on every request.
         await persistItemProfileColumns(urlId, profile);
-
-        // TEMP DIAGNOSTIC - see session notes. Confirming, against a real
-        // production run rather than assuming, that rechecks are actually
-        // resolving both In Stock and Out of Stock (not just one of the
-        // two, which would mean a detection regression rather than a
-        // real-world stock mix).
-        console.log(
-          '[stock-mix-diag]',
-          JSON.stringify({ url: item.url, stock_status: profile.listing.stock_status }),
-        );
-
       }
     } catch (err) {
       progress.errors.push(`${item.url}: ${err instanceof Error ? err.message : String(err)}`);
