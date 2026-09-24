@@ -79,9 +79,24 @@ export async function detectAndRecordTransition(
   const safeTitle = title ?? null;
 
   if (isNewSale(previous.stock_status, profile.listing.stock_status)) {
+    // A sale's price is the price the item was actually listed/sold at -
+    // the PREVIOUS reading, captured while it was still In Stock - not
+    // profile.listing.price (the fresh reading from the page AFTER it
+    // went Out of Stock). Confirmed in production on the first real sale
+    // this system caught: the retailer's page stops rendering a price at
+    // all once an item shows as sold out, so profile.listing.price was
+    // null at the exact moment of detection even though the item plainly
+    // had a real price moments before - the sales row recorded no price
+    // even though one was known. Falls back to the fresh reading only if
+    // there's no previous price to fall back on at all (a url_id whose
+    // very first-ever read already came back Out of Stock, which
+    // isNewSale's own In Stock requirement makes unreachable in practice,
+    // but keeps this safe against a null previous.price either way).
+    const soldPrice = previous.price ?? profile.listing.price;
+    const soldCurrency = previous.currency ?? profile.listing.currency;
     await pool.query(
       `INSERT INTO sales (url_id, site_id, title, price, currency, profile) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [urlId, siteId, safeTitle, profile.listing.price, profile.listing.currency, JSON.stringify(profile)],
+      [urlId, siteId, safeTitle, soldPrice, soldCurrency, JSON.stringify(profile)],
     );
     sale = true;
   }

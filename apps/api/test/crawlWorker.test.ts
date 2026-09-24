@@ -372,6 +372,41 @@ describe('recordItemProfile', () => {
     expect(params[2]).toBe('1998 France Home Shirt');
   });
 
+  it('records the price it was actually listed at, not a null/missing price from the now-sold-out page - confirmed in production (AC Milan shirt) that the source page stops rendering a price once marked sold out', async () => {
+    // Same shape as the real bug: previous read was £45 In Stock, but the
+    // fresh Out of Stock page's own markdown has no price at all (no "£"
+    // anywhere) - profile.listing.price comes back null for THIS read.
+    // The sale should still record £45, the price it was known to be
+    // listed/sold at, not null just because the post-sale page lost it.
+    const query = mockPool({ stock_status: 'In Stock', price: 45, currency: 'GBP' });
+    const { recordItemProfile } = await import('../src/workers/crawlWorker.js');
+
+    const outcome = await recordItemProfile(
+      'url-4',
+      'site-1',
+      'https://example.com/products/ac-milan-shirt',
+      {
+        success: true,
+        // "Sold out" alone on its own paragraph (blank lines either side),
+        // no price anywhere - mirrors the real page shape: a Shopify
+        // sticky/quick-buy widget's own text, not near the price block at
+        // all (which the retailer stops rendering once sold out).
+        markdown: 'AC Milan / Mint / XL – [Change](#product-info)\n\nSold out\n\n[Trustpilot](https://example.com/reviews)',
+        metadata: { sourceURL: 'https://example.com/products/ac-milan-shirt', statusCode: 200, title: 'AC Milan Home Shirt', image: null },
+        extracted: {},
+      },
+      {},
+      null,
+    );
+
+    expect(outcome.sale).toBe(true);
+    const saleCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO sales'));
+    expect(saleCall).toBeDefined();
+    const [, params] = saleCall!;
+    expect(params[3]).toBe(45); // price - from the PREVIOUS reading, not the now-priceless page
+    expect(params[4]).toBe('GBP');
+  });
+
   it('does not detect a sale on a brand new item - nothing to transition from yet', async () => {
     const query = mockPool({ stock_status: null, price: null, currency: null });
     const { recordItemProfile } = await import('../src/workers/crawlWorker.js');
