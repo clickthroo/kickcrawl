@@ -133,10 +133,16 @@ describe('recheckSite', () => {
     expect(progress.errors).toEqual([]);
   });
 
-  it('excludes items already known Out of Stock from the recheck query - once sold, stays sold', async () => {
+  it('excludes items already known Out of Stock from the recheck query - once sold, stays sold - but includes status=failed items with a known reading', async () => {
     // Once an item has been recorded as sold, there's nothing left for an
     // hourly recheck to catch by revisiting it forever - excluded at the
     // query itself so it's never fetched at all, not just skipped after.
+    // status='failed' rows ARE included now (as long as they have a real
+    // stock_status to diff from) - confirmed in production that 78% of
+    // everything with a known non-Out-of-Stock stock_status sat in
+    // status='failed' (its last fetch attempt errored) and was being
+    // permanently excluded from ever being re-verified, which meant a
+    // real sale on any of them could never be detected.
     const query = vi.fn().mockResolvedValue({ rows: [] });
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
     vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage: vi.fn() }));
@@ -148,7 +154,9 @@ describe('recheckSite', () => {
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     const [selectSql] = query.mock.calls[0];
-    expect(selectSql).toMatch(/stock_status IS DISTINCT FROM 'Out of Stock'/);
+    expect(selectSql).toMatch(/status IN \('fetched', 'failed'\)/);
+    expect(selectSql).toMatch(/stock_status IS NOT NULL/);
+    expect(selectSql).toMatch(/stock_status != 'Out of Stock'/);
   });
 
   it('records the full Kickio profile on a sale, not just title/price/currency', async () => {

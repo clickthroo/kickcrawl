@@ -312,3 +312,146 @@ describe('passesSellerFilter', () => {
     expect(passesSellerFilter('Cushty Kits\n524\nPro', site)).toBe(false);
   });
 });
+
+describe('recordItemProfile', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.doUnmock('../src/db.js');
+  });
+
+  // Mocks the same '../src/db.js' pool every real query in this path goes
+  // through - getPreviousStockAndPrice's own SELECT, persistItemProfile's
+  // UPDATE, and (when a transition fires) the INSERT INTO sales/
+  // price_changes - so `previous` is exactly what getPreviousStockAndPrice
+  // reads back before recordItemProfile overwrites it.
+  function mockPool(previous: { stock_status: string | null; price: number | null; currency: string | null }) {
+    const query = vi.fn(async (sql: string) => {
+      if (String(sql).includes('SELECT stock_status, price, currency FROM urls')) {
+        return { rows: [previous] };
+      }
+      return { rows: [] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    return query;
+  }
+
+  it('detects a sale when a crawl re-fetch of an already-known item observes an In Stock -> Out of Stock transition', async () => {
+    // The real gap this closes: crawlWorker re-fetches already-known
+    // urls constantly (confirmed in production - thousands of urls
+    // touched by more than one separate crawl job), and until now that
+    // overwrote stock_status with no comparison at all, so a transition
+    // a crawl happened to be the one to observe was silently lost.
+    const query = mockPool({ stock_status: 'In Stock', price: 25, currency: 'GBP' });
+    const { recordItemProfile } = await import('../src/workers/crawlWorker.js');
+
+    const outcome = await recordItemProfile(
+      'url-1',
+      'site-1',
+      'https://example.com/products/sold-shirt',
+      {
+        success: true,
+        markdown: '£25 Sold out',
+        metadata: { sourceURL: 'https://example.com/products/sold-shirt', statusCode: 200, title: '1998 France Home Shirt', image: null },
+        extracted: {},
+      },
+      {},
+      null,
+    );
+
+    expect(outcome.sale).toBe(true);
+    const saleCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO sales'));
+    expect(saleCall).toBeDefined();
+    const [, params] = saleCall!;
+    expect(params[0]).toBe('url-1');
+    expect(params[1]).toBe('site-1');
+    expect(params[2]).toBe('1998 France Home Shirt');
+  });
+
+  it('records the price it was actually listed at, not a null/missing price from the now-sold-out page - confirmed in production (AC Milan shirt) that the source page stops rendering a price once marked sold out', async () => {
+    // Same shape as the real bug: previous read was £45 In Stock, but the
+    // fresh Out of Stock page's own markdown has no price at all (no "£"
+    // anywhere) - profile.listing.price comes back null for THIS read.
+    // The sale should still record £45, the price it was known to be
+    // listed/sold at, not null just because the post-sale page lost it.
+    const query = mockPool({ stock_status: 'In Stock', price: 45, currency: 'GBP' });
+    const { recordItemProfile } = await import('../src/workers/crawlWorker.js');
+
+    const outcome = await recordItemProfile(
+      'url-4',
+      'site-1',
+      'https://example.com/products/ac-milan-shirt',
+      {
+        success: true,
+        // "Sold out" alone on its own paragraph (blank lines either side),
+        // no price anywhere - mirrors the real page shape: a Shopify
+        // sticky/quick-buy widget's own text, not near the price block at
+        // all (which the retailer stops rendering once sold out).
+        markdown: 'AC Milan / Mint / XL – [Change](#product-info)\n\nSold out\n\n[Trustpilot](https://example.com/reviews)',
+        metadata: { sourceURL: 'https://example.com/products/ac-milan-shirt', statusCode: 200, title: 'AC Milan Home Shirt', image: null },
+        extracted: {},
+      },
+      {},
+      null,
+    );
+
+    expect(outcome.sale).toBe(true);
+    const saleCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO sales'));
+    expect(saleCall).toBeDefined();
+    const [, params] = saleCall!;
+    expect(params[3]).toBe(45); // price - from the PREVIOUS reading, not the now-priceless page
+    expect(params[4]).toBe('GBP');
+  });
+
+  it('does not detect a sale on a brand new item - nothing to transition from yet', async () => {
+    const query = mockPool({ stock_status: null, price: null, currency: null });
+    const { recordItemProfile } = await import('../src/workers/crawlWorker.js');
+
+    const outcome = await recordItemProfile(
+      'url-2',
+      'site-1',
+      'https://example.com/products/new-shirt',
+      {
+        success: true,
+        markdown: '£25 Sold out',
+        metadata: { sourceURL: 'https://example.com/products/new-shirt', statusCode: 200, title: 'Brand New Item', image: null },
+        extracted: {},
+      },
+      {},
+      null,
+    );
+
+    expect(outcome.sale).toBe(false);
+    expect(query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO sales'))).toBeUndefined();
+  });
+
+  it('detects a price change on a crawl re-fetch the same way it detects a sale', async () => {
+    const query = mockPool({ stock_status: 'In Stock', price: 90, currency: 'GBP' });
+    const { recordItemProfile } = await import('../src/workers/crawlWorker.js');
+
+    const outcome = await recordItemProfile(
+      'url-3',
+      'site-1',
+      'https://example.com/products/discounted-shirt',
+      {
+        success: true,
+        markdown: 'Add to Bag',
+        metadata: { sourceURL: 'https://example.com/products/discounted-shirt', statusCode: 200, title: '1998 France Home Shirt', image: null },
+        extracted: { price: '£75.00' },
+      },
+      {},
+      null,
+    );
+
+    expect(outcome.priceChange).toBe(true);
+    const priceChangeCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO price_changes'));
+    expect(priceChangeCall).toBeDefined();
+    const [, params] = priceChangeCall!;
+    expect(params[3]).toBe(90); // old_price
+    expect(params[4]).toBe(75); // new_price
+  });
+});

@@ -12,50 +12,15 @@ import { persistItemProfileColumns } from '../lib/persistItemProfile.js';
 import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 import { PAGE_TIMEOUT_MS, passesSellerFilter, resolveUseBrowser } from './crawlWorker.js';
+import { detectAndRecordTransition, isNewSale, isPriceChange } from '../lib/saleDetection.js';
+
+// Re-exported so existing imports (this file's own tests included) keep
+// working - the real definitions moved to lib/saleDetection.ts so
+// crawlWorker.ts's own recordItemProfile can share them too, without a
+// circular import (crawlWorker already exports things this file imports).
+export { isNewSale, isPriceChange };
 
 export const RECHECK_INTERVAL_MS = 60 * 60 * 1000;
-
-/**
- * A sale is recorded exactly on the In Stock -> Out of Stock transition,
- * not on every recheck that happens to read "Out of Stock" - a page that's
- * already out of stock (or was never confidently in stock, or is
- * "Unknown") isn't a new sale, it's just still out of stock.
- */
-export function isNewSale(previousStatus: string | null, newStatus: string | null): boolean {
-  return previousStatus === 'In Stock' && newStatus === 'Out of Stock';
-}
-
-// A "meaningful" price change, not every penny of currency-conversion
-// rounding noise a recheck might otherwise see between two reads of a
-// price converted through the same admin-maintained GBP rate. Needs both
-// a real old and new price in the SAME currency to compare at all - a
-// currency change (or either side missing) isn't a price change, it's a
-// different kind of event this isn't trying to detect.
-//
-// The original £0.50-or-1% threshold turned out too tight in production:
-// every recorded "price change" so far has been the exact same £0.75
-// delta regardless of the item's own price (£72.00→£71.25, £43.50→
-// £42.75, ...) - a flat amount independent of price is the signature of
-// a shared systematic cause (VFS prices in USD; a small wobble in the
-// admin-maintained USD→GBP rate, or similar rounding, moves every item
-// by the same converted amount at once), not real independent per-item
-// price drops by the retailer. £2 or 2%, whichever is larger, clears
-// that observed noise with real margin while still catching a
-// deliberate markdown.
-const MIN_PRICE_CHANGE_ABSOLUTE = 2;
-const MIN_PRICE_CHANGE_RATIO = 0.02;
-
-export function isPriceChange(
-  oldPrice: number | null,
-  oldCurrency: string | null,
-  newPrice: number | null,
-  newCurrency: string | null,
-): boolean {
-  if (oldPrice == null || newPrice == null) return false;
-  if (oldCurrency !== newCurrency) return false;
-  const threshold = Math.max(MIN_PRICE_CHANGE_ABSOLUTE, oldPrice * MIN_PRICE_CHANGE_RATIO);
-  return Math.abs(newPrice - oldPrice) >= threshold;
-}
 
 interface RecheckableUrl {
   id: string;
@@ -75,7 +40,7 @@ export async function recheckSite(
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
     `SELECT id, url, path, stock_status, price, currency FROM urls
-     WHERE site_id = $1 AND status = 'fetched' AND stock_status IS DISTINCT FROM 'Out of Stock'`,
+     WHERE site_id = $1 AND status IN ('fetched', 'failed') AND stock_status IS NOT NULL AND stock_status != 'Out of Stock'`,
     [site.id],
   );
   // Only items (allowed_paths-matched), not the stepping-stone category/
@@ -84,6 +49,23 @@ export async function recheckSite(
   // An item already known Out of Stock is excluded at the query itself
   // (not filtered here) - once sold, it stays sold, so there's nothing
   // left for a recheck to catch by revisiting it every hour forever.
+  //
+  // status='failed' is included alongside 'fetched' - confirmed in
+  // production that 78% of everything with a known non-Out-of-Stock
+  // stock_status (4943 of 6378 rows) sits in status='failed' (its most
+  // recent fetch attempt errored, overwhelmingly the same browser-crash
+  // pattern crawlWorker.ts's retry logic already handles within a single
+  // job). The OLD 'fetched'-only filter permanently excluded every one of
+  // those rows from ever being re-verified again the moment a fetch
+  // happened to fail once - meaning a genuine sale on any of them could
+  // never be detected. markUrlFetched (already called below on every
+  // outcome) naturally heals a row's status back to 'fetched' on a
+  // successful retry, or leaves it 'failed' again to be retried next
+  // cycle - no separate recovery path needed. stock_status IS NOT NULL
+  // excludes urls.status='failed' rows that have NEVER been successfully
+  // fetched at all (nothing to diff against, and no price to recheck the
+  // seller/currency for) - that backlog belongs to crawl's own retry
+  // logic, not this one.
   const items = urls.filter((u) => isPathAllowed(u.path, site.allowed_paths, site.denied_paths));
 
   progress.total += items.length;
@@ -126,40 +108,22 @@ export async function recheckSite(
           currencyRates,
           kickioTeams,
         });
-        const newStatus = profile.listing.stock_status;
 
-        if (isNewSale(item.stock_status, newStatus)) {
-          // The full profile - not just title/price/currency - so the Sales
-          // page can show every feature we knew about the item (team,
-          // season, condition, images, ...) exactly as it was at the moment
-          // it sold, the same way the Items list shows it for an active one.
-          await pool.query(
-            `INSERT INTO sales (url_id, site_id, title, price, currency, profile) VALUES ($1, $2, $3, $4, $5, $6)`,
-            [urlId, site.id, result.metadata.title, profile.listing.price, profile.listing.currency, JSON.stringify(profile)],
-          );
-          progress.sales += 1;
-        }
-
-        if (isPriceChange(item.price, item.currency, profile.listing.price, profile.listing.currency)) {
-          // Same snapshot reasoning as sales just above: the full profile,
-          // not just the price, so the Price Changes page can show every
-          // feature of the item alongside the change, and stays accurate
-          // even if the source page changes or 404s later.
-          await pool.query(
-            `INSERT INTO price_changes (url_id, site_id, title, old_price, new_price, currency, profile)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-              urlId,
-              site.id,
-              result.metadata.title,
-              item.price,
-              profile.listing.price,
-              profile.listing.currency,
-              JSON.stringify(profile),
-            ],
-          );
-          progress.priceChanges += 1;
-        }
+        // The full profile - not just title/price/currency - is snapshotted
+        // on a sale/price change so the Sales/Price Changes pages can show
+        // every feature we knew about the item (team, season, condition,
+        // images, ...) exactly as it was at the moment of detection, the
+        // same way the Items list shows it for an active one, and stays
+        // accurate even if the source page later changes or 404s.
+        const { sale, priceChange } = await detectAndRecordTransition(
+          urlId,
+          site.id,
+          result.metadata.title,
+          { stock_status: item.stock_status, price: item.price, currency: item.currency },
+          profile,
+        );
+        if (sale) progress.sales += 1;
+        if (priceChange) progress.priceChanges += 1;
 
         // Persists every commonly-filtered profile field (team, season,
         // colour, size, ...), not just stock_status - the admin Items list

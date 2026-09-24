@@ -27,3 +27,8 @@ export const crawlQueue = new Queue<CrawlJobData>('crawl', { connection: redisCo
 // active site's already-fetched items itself, same as "Crawl all sites"
 // loops sites, so there's nothing site-specific to put in the job data.
 export const recheckQueue = new Queue('recheck', { connection: redisConnection });
+
+// Same shape as recheckQueue - a single global sweep of every not-yet-
+// synced row in the local sales table (workers/kickioSyncWorker.ts),
+// nothing per-job to pass in.
+export const kickioSyncQueue = new Queue('kickio_sync', { connection: redisConnection });

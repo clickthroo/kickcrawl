@@ -10,6 +10,7 @@ import { detectSellerSignals } from '../services/sellerSignals.js';
 import { BROWSER_FATAL_PATTERN } from '../services/fetcher.js';
 import { buildKickioProfile, type KickioTeamRef } from '../services/kickioProfile.js';
 import { persistItemProfileColumns } from '../lib/persistItemProfile.js';
+import { detectAndRecordTransition, getPreviousStockAndPrice } from '../lib/saleDetection.js';
 import { getCurrencyRates } from '../lib/currencyRates.js';
 import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
 import { resumeCrawlJob } from '../lib/jobRecords.js';
@@ -198,13 +199,14 @@ async function recordPageResult(
 // list's SQL-side filters (team, stock status, ...) have real data for a
 // brand new item immediately, not "no value yet" until the next recheck
 // cycle.
-async function recordItemProfile(
+export async function recordItemProfile(
   urlId: string,
+  siteId: string,
   url: string,
   result: ScrapeCoreResult,
   currencyRates: Record<string, number>,
   kickioTeams: readonly KickioTeamRef[] | null,
-): Promise<void> {
+): Promise<{ sale: boolean; priceChange: boolean }> {
   const profile = buildKickioProfile({
     url,
     title: result.metadata.title,
@@ -214,13 +216,17 @@ async function recordItemProfile(
     currencyRates,
     kickioTeams,
   });
-  // TEMP DIAGNOSTIC - see session notes. Confirming, against a real
-  // production run rather than assuming, that this run is actually
-  // resolving both In Stock and Out of Stock (not just one of the two,
-  // which would mean a detection regression rather than a real-world
-  // stock mix).
-  console.log('[stock-mix-diag]', JSON.stringify({ url, stock_status: profile.listing.stock_status }));
+  // Read BEFORE persistItemProfileColumns overwrites it - a crawl job
+  // re-fetches already-known urls constantly (confirmed in production:
+  // 2114 distinct urls touched by more than one separate crawl job), and
+  // until now that overwrite happened with no comparison at all, so any
+  // In Stock -> Out of Stock transition a crawl (rather than the hourly
+  // recheck) happened to be the one to observe was silently lost - the
+  // write went through, but nothing ever checked whether it was a sale.
+  const previous = await getPreviousStockAndPrice(urlId);
+  const outcome = await detectAndRecordTransition(urlId, siteId, result.metadata.title, previous, profile);
   await persistItemProfileColumns(urlId, profile);
+  return outcome;
 }
 
 // A catch-all safety net around the per-page fetch. Every individual I/O
@@ -519,7 +525,9 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
           passesSellerFilter(result.markdown, site ?? { require_pro_seller: false, min_seller_feedback: null });
         if (passesFilter) {
           const urlId = await recordPageResult(siteId, jobId, next.url, result);
-          await recordItemProfile(urlId, next.url, result, currencyRates, kickioTeams);
+          const { sale, priceChange } = await recordItemProfile(urlId, siteId, next.url, result, currencyRates, kickioTeams);
+          if (sale) console.log(`[crawlWorker] job ${jobId} detected a sale on re-fetch: ${next.url}`);
+          if (priceChange) console.log(`[crawlWorker] job ${jobId} detected a price change on re-fetch: ${next.url}`);
           completed += 1;
         } else {
           // Fetched, but doesn't meet the site's seller filter - keep

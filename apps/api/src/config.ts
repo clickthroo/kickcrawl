@@ -7,6 +7,15 @@ function env(name: string, fallback?: string): string {
   throw new Error(`Missing required environment variable: ${name}`);
 }
 
+// API keys/tokens can never legitimately contain whitespace - stripping it
+// defends against a stray newline or trailing space from a dashboard
+// copy-paste, which would otherwise surface as a confusing low-level error
+// (e.g. fetch's Headers.append rejecting a value with an embedded \n) far
+// from where the env var was actually set.
+function envSecret(name: string): string {
+  return (process.env[name] ?? '').replace(/\s+/g, '');
+}
+
 export const config = {
   databaseUrl: env('DATABASE_URL', 'postgresql://kickcrawl:kickcrawl@localhost:5432/kickcrawl'),
   redisUrl: env('REDIS_URL', 'redis://localhost:6379'),
@@ -44,6 +53,16 @@ export const config = {
   // than failing startup, since it's a read-only convenience, not a
   // dependency the rest of the app needs.
   kickioSupabaseUrl: process.env.KICKIO_SUPABASE_URL ?? '',
-  kickioSupabaseAnonKey: process.env.KICKIO_SUPABASE_ANON_KEY ?? '',
+  kickioSupabaseAnonKey: envSecret('KICKIO_SUPABASE_ANON_KEY'),
+  // Kickio's service_role key - required to call its import_kickio_product/
+  // import_kickio_sale RPCs (workers/kickioSyncWorker.ts), which are
+  // SECURITY DEFINER functions granted to service_role only, not the
+  // public anon role the Teams-matching key above uses. This bypasses
+  // Kickio's RLS entirely, so unlike the anon key it's a real secret -
+  // set only in Railway's variables, never logged, never surfaced to the
+  // admin UI. Left blank disables the sync job at boot (same "convenience,
+  // not a dependency" pattern as kickioSupabaseAnonKey) rather than
+  // failing startup.
+  kickioSupabaseServiceRoleKey: envSecret('KICKIO_SUPABASE_SERVICE_ROLE_KEY'),
   nodeEnv: process.env.NODE_ENV ?? 'development',
 };
