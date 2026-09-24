@@ -45,6 +45,7 @@ async function recordOutcome(sale: SaleForSync, progress: Progress): Promise<voi
       [sale.id, message],
     );
     progress.errors.push(`${sale.id}: ${message}`);
+    console.error(`[kickioSyncWorker] sale ${sale.id} sync threw:`, message);
   }
 }
 
