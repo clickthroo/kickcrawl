@@ -1,7 +1,7 @@
 import { pool } from '../db.js';
 import { crawlQueue, type CrawlJobData } from '../queue.js';
 
-export type JobType = 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck';
+export type JobType = 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck' | 'kickio_sync';
 export type JobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export async function createJob(

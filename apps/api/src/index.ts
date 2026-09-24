@@ -6,6 +6,7 @@ import { backfillItemProfiles } from './lib/backfillItemProfiles.js';
 import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
+import { scheduleKickioSync, startKickioSyncWorker } from './workers/kickioSyncWorker.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -41,6 +42,8 @@ async function main(): Promise<void> {
   const worker = startCrawlWorker();
   const recheckWorker = startRecheckWorker();
   await scheduleRecheck();
+  const kickioSyncWorker = startKickioSyncWorker();
+  await scheduleKickioSync();
 
   const app = await buildApp();
 
@@ -64,6 +67,7 @@ async function main(): Promise<void> {
     await app.close();
     await worker.close();
     await recheckWorker.close();
+    await kickioSyncWorker.close();
     await pool.end();
     process.exit(0);
   };

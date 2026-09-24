@@ -45,5 +45,15 @@ export const config = {
   // dependency the rest of the app needs.
   kickioSupabaseUrl: process.env.KICKIO_SUPABASE_URL ?? '',
   kickioSupabaseAnonKey: process.env.KICKIO_SUPABASE_ANON_KEY ?? '',
+  // Kickio's service_role key - required to call its import_kickio_product/
+  // import_kickio_sale RPCs (workers/kickioSyncWorker.ts), which are
+  // SECURITY DEFINER functions granted to service_role only, not the
+  // public anon role the Teams-matching key above uses. This bypasses
+  // Kickio's RLS entirely, so unlike the anon key it's a real secret -
+  // set only in Railway's variables, never logged, never surfaced to the
+  // admin UI. Left blank disables the sync job at boot (same "convenience,
+  // not a dependency" pattern as kickioSupabaseAnonKey) rather than
+  // failing startup.
+  kickioSupabaseServiceRoleKey: process.env.KICKIO_SUPABASE_SERVICE_ROLE_KEY ?? '',
   nodeEnv: process.env.NODE_ENV ?? 'development',
 };
