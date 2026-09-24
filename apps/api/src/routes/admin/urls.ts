@@ -8,6 +8,7 @@ import { buildKickioProfile } from '../../services/kickioProfile.js';
 import { getCurrencyRates } from '../../lib/currencyRates.js';
 import { getKickioTeamsForMatching } from '../../lib/kickioTeams.js';
 import { persistItemProfileColumns } from '../../lib/persistItemProfile.js';
+import { detectAndRecordTransition, getPreviousStockAndPrice } from '../../lib/saleDetection.js';
 import { isCrawlItem, passesSellerFilter } from '../../workers/crawlWorker.js';
 
 export interface ItemFilters {
@@ -323,6 +324,13 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
         currencyRates: await getCurrencyRates(),
         kickioTeams: await getKickioTeamsForMatching(),
       });
+      // Read BEFORE persistItemProfileColumns overwrites it - a manual
+      // re-scrape can just as easily be the fetch that observes a real
+      // In Stock -> Out of Stock transition as the hourly recheck can, so
+      // it needs the same before/after comparison, not just a blind
+      // overwrite (see lib/saleDetection.ts).
+      const previous = await getPreviousStockAndPrice(urlId);
+      await detectAndRecordTransition(urlId, row.site_id, result.metadata.title, previous, profile);
       await persistItemProfileColumns(urlId, profile);
     }
 
