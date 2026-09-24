@@ -7,6 +7,53 @@ import { buildApp } from './app.js';
 import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
 
+// TEMP DIAGNOSTIC - see session notes. Auditing why there are 6000+ items
+// but ~0 recorded sales sitewide - real counts, not a guess: how many
+// items are even eligible for recheck's sale-detection query (status=
+// 'fetched' AND stock_status IS DISTINCT FROM 'Out of Stock'), how many
+// have ever actually been processed by a recheck job at all vs only ever
+// touched by crawl/rescrape (neither of which run isNewSale), and how
+// many urls have been fetched by more than one crawl job (each overwrite
+// bypassing sale detection independently of recheck).
+async function auditSalesGap(): Promise<void> {
+  const { rows: totals } = await pool.query<{ total: string }>(`SELECT count(*)::text AS total FROM urls`);
+  console.log('[sales-gap] total urls', totals[0]?.total);
+
+  const { rows: byStatus } = await pool.query<{ status: string; stock_status: string | null; n: string }>(
+    `SELECT status, stock_status, count(*)::text AS n FROM urls GROUP BY status, stock_status ORDER BY n::int DESC`,
+  );
+  console.log('[sales-gap] status x stock_status breakdown', JSON.stringify(byStatus));
+
+  const { rows: eligible } = await pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM urls WHERE status = 'fetched' AND stock_status IS DISTINCT FROM 'Out of Stock'`,
+  );
+  console.log('[sales-gap] recheck-eligible right now (status=fetched, not already Out of Stock)', eligible[0]?.n);
+
+  const { rows: recheckJobs } = await pool.query<{ id: string; status: string; total_pages: number; completed_pages: number; created_at: string; finished_at: string | null }>(
+    `SELECT id, status, total_pages, completed_pages, created_at, finished_at FROM jobs WHERE type = 'recheck' ORDER BY created_at DESC LIMIT 10`,
+  );
+  console.log('[sales-gap] last 10 recheck jobs', JSON.stringify(recheckJobs));
+
+  const { rows: everRechecked } = await pool.query<{ n: string }>(
+    `SELECT count(DISTINCT sr.url_id)::text AS n FROM scrape_results sr JOIN jobs j ON j.id = sr.job_id WHERE j.type = 'recheck'`,
+  );
+  console.log('[sales-gap] distinct urls ever touched by a recheck job (all time)', everRechecked[0]?.n);
+
+  const { rows: multiCrawled } = await pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM (
+       SELECT sr.url_id FROM scrape_results sr JOIN jobs j ON j.id = sr.job_id
+       WHERE j.type = 'crawl' GROUP BY sr.url_id HAVING count(DISTINCT sr.job_id) > 1
+     ) x`,
+  );
+  console.log('[sales-gap] distinct urls fetched by MORE THAN ONE crawl job (each overwrite bypasses sale detection)', multiCrawled[0]?.n);
+
+  const { rows: salesCount } = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM sales`);
+  console.log('[sales-gap] total sales rows (all time, all sites)', salesCount[0]?.n);
+
+  const { rows: priceChangeCount } = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM price_changes`);
+  console.log('[sales-gap] total price_changes rows (all time, all sites)', priceChangeCount[0]?.n);
+}
+
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
   const { rows } = await pool.query('SELECT id FROM admin_users LIMIT 1');
@@ -59,6 +106,8 @@ async function main(): Promise<void> {
       if (total > 0) console.log(`[backfillItemProfiles] updated ${total} row(s)`);
     })
     .catch((err) => console.error('[backfillItemProfiles] failed:', err));
+
+  auditSalesGap().catch((err) => console.error('[sales-gap] failed:', err));
 
   const shutdown = async (): Promise<void> => {
     await app.close();
