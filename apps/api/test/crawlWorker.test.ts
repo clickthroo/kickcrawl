@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   catalogIdFromUrl,
+  filterSitemapSeeds,
   filterTraversableLinks,
   isCrawlItem,
   passesSellerFilter,
@@ -42,6 +43,79 @@ describe('filterTraversableLinks', () => {
     const links = ['https://example.com/anything', 'https://example.com/whatever'];
     const result = filterTraversableLinks(links, new Set(), []);
     expect(result).toEqual(links);
+  });
+});
+
+describe('filterSitemapSeeds', () => {
+  const origin = 'https://cultkits.com';
+
+  it('keeps a same-site sitemap URL', () => {
+    const result = filterSitemapSeeds(
+      ['https://cultkits.com/products/some-shirt'],
+      origin,
+      new Set(),
+      [],
+      null,
+    );
+    expect(result).toEqual(['https://cultkits.com/products/some-shirt']);
+  });
+
+  it('drops a sitemap entry pointing at another host - never trusted further than a same-site link would be', () => {
+    // A sitemap is a fetched document, same as a scraped page's own links -
+    // it gets exactly the same isSameSite guard, not a free pass.
+    const result = filterSitemapSeeds(
+      ['https://cultkits.com/products/real-shirt', 'https://evil.example/products/fake'],
+      origin,
+      new Set(),
+      [],
+      null,
+    );
+    expect(result).toEqual(['https://cultkits.com/products/real-shirt']);
+  });
+
+  it('drops already-visited and denied-path URLs, same as any other discovered link', () => {
+    const visited = new Set(['https://cultkits.com/products/already-seen']);
+    const result = filterSitemapSeeds(
+      [
+        'https://cultkits.com/products/already-seen',
+        'https://cultkits.com/products/new-shirt',
+        'https://cultkits.com/account',
+      ],
+      origin,
+      visited,
+      ['/account'],
+      null,
+    );
+    expect(result).toEqual(['https://cultkits.com/products/new-shirt']);
+  });
+
+  it('this is the actual production case: a middle-of-pagination product the site links to from no visited page still gets seeded', () => {
+    // Cult Kits' own collection pagination jumps from page=3 straight to
+    // page=24 (a "few nearby pages + last page" widget) - a product that
+    // only ever appeared on page 12 is unreachable by link-following BFS
+    // no matter how long the crawl runs, but it's still in the sitemap.
+    const result = filterSitemapSeeds(
+      ['https://cultkits.com/products/only-ever-linked-from-page-12'],
+      origin,
+      new Set(),
+      [],
+      null,
+    );
+    expect(result).toEqual(['https://cultkits.com/products/only-ever-linked-from-page-12']);
+  });
+
+  it('scopes to the seed catalog id, same rule in-page link discovery already applies', () => {
+    const result = filterSitemapSeeds(
+      [
+        'https://www.vinted.co.uk/catalog/3267-team-shirts?catalog[]=3267',
+        'https://www.vinted.co.uk/catalog/9999-something-else?catalog[]=9999',
+      ],
+      'https://www.vinted.co.uk',
+      new Set(),
+      [],
+      '3267',
+    );
+    expect(result).toEqual(['https://www.vinted.co.uk/catalog/3267-team-shirts?catalog[]=3267']);
   });
 });
 

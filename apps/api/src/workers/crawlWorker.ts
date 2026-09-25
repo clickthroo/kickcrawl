@@ -16,6 +16,7 @@ import { getKickioTeamsForMatching } from '../lib/kickioTeams.js';
 import { resumeCrawlJob } from '../lib/jobRecords.js';
 import { config } from '../config.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
+import { getAllSitemapUrls } from '../services/sitemap.js';
 
 /**
  * Which of a page's outbound same-site links the crawl should follow next.
@@ -27,6 +28,29 @@ import type { SiteConfig } from '../lib/siteResolver.js';
  * followed - see isCrawlItem() for the allow-list check that decides
  * whether a visited page gets recorded as an Item.
  */
+/**
+ * Which of a site's sitemap URLs are worth seeding a fresh crawl's frontier
+ * with: same-site (a sitemap is the site's own, but never trust a fetched
+ * document further than that), not already queued/visited, past
+ * denied_paths, and - same rule the in-page link discovery already applies -
+ * scoped to the seed's own catalog id when the seed itself is catalog-scoped
+ * (a Vinted `catalog[]=3267` crawl shouldn't have its frontier flooded with
+ * every other category's products just because they're in one shared
+ * sitemap).
+ */
+export function filterSitemapSeeds(
+  sitemapUrls: string[],
+  origin: string,
+  visited: Set<string>,
+  excludePaths: string[],
+  seedCatalogId: string | null,
+): string[] {
+  const sameSite = sitemapUrls.filter((l) => isSameSite(l, origin, false));
+  return filterTraversableLinks(sameSite, visited, excludePaths).filter(
+    (l) => !seedCatalogId || catalogIdFromUrl(l) === null || catalogIdFromUrl(l) === seedCatalogId,
+  );
+}
+
 export function filterTraversableLinks(
   links: string[],
   visited: Set<string>,
@@ -361,9 +385,42 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       `INSERT INTO crawl_frontier (job_id, url, depth, status) VALUES ($1, $2, 0, 'pending') ON CONFLICT (job_id, url) DO NOTHING`,
       [jobId, seedUrl],
     );
+    visited.add(seedUrl);
     pendingCount = 1;
     doneCount = 0;
     completed = 0;
+
+    // Seed the frontier from the site's own sitemap too, not just the one
+    // start URL. Confirmed live on Cult Kits: a Shopify collection page's
+    // own pagination links skip straight from page=3 to page=24 (a "few
+    // nearby pages + last page" widget, not every page in between), so
+    // pure link-following BFS never discovers whatever products live on
+    // the un-linked pages in between - thousands of real items, silently
+    // unreachable no matter how long the crawl runs. A sitemap lists every
+    // URL directly, with no pagination to have gaps in, so it catches
+    // exactly what BFS structurally can't. Additive, not a replacement:
+    // BFS still runs as before and still finds category pages the sitemap
+    // may omit, and a site with no sitemap (getAllSitemapUrls returns
+    // empty) falls back to exactly the old pure-BFS behaviour.
+    const sitemapUrls = await getAllSitemapUrls(origin);
+    const newSitemapUrls = filterSitemapSeeds(sitemapUrls, origin, visited, excludePaths, seedCatalogId);
+    if (newSitemapUrls.length > 0) {
+      for (const link of newSitemapUrls) visited.add(link);
+      const values: string[] = [];
+      const params: unknown[] = [jobId];
+      for (const link of newSitemapUrls) {
+        params.push(link, 0);
+        values.push(`($1, $${params.length - 1}, $${params.length}, 'pending')`);
+      }
+      const inserted = await pool.query(
+        `INSERT INTO crawl_frontier (job_id, url, depth, status) VALUES ${values.join(', ')} ON CONFLICT (job_id, url) DO NOTHING`,
+        params,
+      );
+      pendingCount += inserted.rowCount ?? 0;
+      console.log(
+        `[crawlWorker] job ${jobId} seeded ${inserted.rowCount ?? 0} url(s) from ${origin}'s sitemap (${sitemapUrls.length} found, ${newSitemapUrls.length} after filtering)`,
+      );
+    }
   } else {
     pendingCount = 0;
     doneCount = 0;
