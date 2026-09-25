@@ -136,6 +136,27 @@ export async function recheckSite(
   progress.total += items.length;
   await pool.query(`UPDATE jobs SET total_pages = $2 WHERE id = $1`, [jobId, progress.total]);
 
+  // recheckSite() has no per-item log line (unlike crawlWorker.ts's own
+  // "fetching ..." line) - fine for a single fast site, but with
+  // RECHECK_SITE_CONCURRENCY now running several sites in parallel and a
+  // large plain-HTTP site legitimately taking over an hour at its
+  // per-domain rate limit, that silence is indistinguishable from actually
+  // being stuck. Confirmed the gap in production: a genuinely healthy,
+  // still-in-progress cycle and a truly wedged one looked identical in
+  // Railway's logs - nothing to check but the raw jobs.completed_pages
+  // column. A start line plus a periodic heartbeat closes that blind spot
+  // without adding a line per item (which, at thousands of items across 5
+  // sites, would just be noise).
+  console.log(`[recheckWorker] job ${jobId} checking ${site.name}: ${items.length} item(s) eligible`);
+  const HEARTBEAT_EVERY = 100;
+  let checkedHere = 0;
+  function heartbeat(): void {
+    checkedHere += 1;
+    if (checkedHere % HEARTBEAT_EVERY === 0 || checkedHere === items.length) {
+      console.log(`[recheckWorker] job ${jobId} ${site.name}: ${checkedHere}/${items.length} checked so far`);
+    }
+  }
+
   for (const item of items) {
     try {
       // Every url here already matched allowed_paths (the filter just
@@ -156,6 +177,7 @@ export async function recheckSite(
       if (result.success && !passesSellerFilter(result.markdown, site)) {
         await pool.query(`DELETE FROM urls WHERE id = $1`, [item.id]);
         progress.checked += 1;
+        heartbeat();
         await pool.query(`UPDATE jobs SET completed_pages = $2 WHERE id = $1`, [jobId, progress.checked]);
         continue;
       }
@@ -201,6 +223,7 @@ export async function recheckSite(
     }
 
     progress.checked += 1;
+    heartbeat();
     await pool.query(`UPDATE jobs SET completed_pages = $2 WHERE id = $1`, [jobId, progress.checked]);
   }
 }
@@ -213,6 +236,8 @@ async function processRecheck(): Promise<void> {
     const { rows: sites } = await pool.query<SiteConfig>('SELECT * FROM sites WHERE is_active = true');
     const currencyRates = await getCurrencyRates();
     const kickioTeams = await getKickioTeamsForMatching();
+
+    console.log(`[recheckWorker] job ${jobId} starting: ${sites.length} active site(s), concurrency ${RECHECK_SITE_CONCURRENCY}`);
 
     await runWithConcurrency(sites, RECHECK_SITE_CONCURRENCY, (site) =>
       recheckSite(site, jobId, currencyRates, progress, kickioTeams),
