@@ -99,6 +99,37 @@ describe('recoverOrphanedJobs', () => {
   });
 });
 
+describe('createJob', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults api_key_id to null for an internal (admin/worker-triggered) job', async () => {
+    const query = vi.fn(async () => ({ rows: [{ id: 'job-1' }] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+
+    const { createJob } = await import('../src/lib/jobRecords.js');
+    const jobId = await createJob('recheck', null, {}, 'running');
+
+    expect(jobId).toBe('job-1');
+    const [, params] = query.mock.calls[0];
+    expect(params).toEqual(['recheck', null, '{}', 'running', null]);
+  });
+
+  it('records the calling API key on a job created via the public v1 API - the job-ownership check (routes/crawl.ts) depends on this actually being set', async () => {
+    const query = vi.fn(async () => ({ rows: [{ id: 'job-2' }] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+
+    const { createJob } = await import('../src/lib/jobRecords.js');
+    await createJob('crawl', 'site-1', { url: 'https://example.com' }, 'queued', 'key-abc');
+
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toContain('api_key_id');
+    expect(params).toEqual(['crawl', 'site-1', '{"url":"https://example.com"}', 'queued', 'key-abc']);
+  });
+});
+
 describe('deduplicateQueuedCrawls', () => {
   beforeEach(() => {
     vi.resetModules();

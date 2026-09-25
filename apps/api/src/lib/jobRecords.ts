@@ -9,12 +9,17 @@ export async function createJob(
   siteId: string | null,
   payload: unknown,
   status: JobStatus = 'queued',
+  // Only ever set for a job created directly by a public v1 API call
+  // (routes/crawl.ts) - an admin-triggered or worker-internal job has no
+  // calling API key at all, and is left NULL on purpose (see migration
+  // 016_job_ownership.sql for why that's the safe default, not a gap).
+  apiKeyId: string | null = null,
 ): Promise<string> {
   const { rows } = await pool.query<{ id: string }>(
-    `INSERT INTO jobs (type, site_id, payload, status, started_at)
-     VALUES ($1, $2, $3, $4, CASE WHEN $4 IN ('running','completed') THEN now() ELSE NULL END)
+    `INSERT INTO jobs (type, site_id, payload, status, api_key_id, started_at)
+     VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 IN ('running','completed') THEN now() ELSE NULL END)
      RETURNING id`,
-    [type, siteId, JSON.stringify(payload), status],
+    [type, siteId, JSON.stringify(payload), status, apiKeyId],
   );
   return rows[0].id;
 }

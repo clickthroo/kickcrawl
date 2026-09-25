@@ -4,6 +4,7 @@ import { pool } from '../db.js';
 import { crawlQueue } from '../queue.js';
 import { getOrCreateSiteForUrl } from '../lib/siteResolver.js';
 import { createJob } from '../lib/jobRecords.js';
+import type { ApiKeyRequest } from '../middleware/apiAuth.js';
 
 const crawlSchema = z.object({
   url: z.string().url(),
@@ -30,7 +31,7 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
     const body = parsed.data;
     const site = await getOrCreateSiteForUrl(body.url);
 
-    const jobId = await createJob('crawl', site.id, body, 'queued');
+    const jobId = await createJob('crawl', site.id, body, 'queued', (req as ApiKeyRequest).apiKeyId);
     await crawlQueue.add(
       'crawl',
       {
@@ -51,7 +52,14 @@ export async function crawlRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/v1/crawl/:jobId', async (req, reply) => {
     const { jobId } = req.params as { jobId: string };
-    const { rows } = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+    // Scoped to the calling key - a job created by a different key (or an
+    // internal admin/worker job, which never has an api_key_id at all)
+    // must 404 exactly like a nonexistent id, not reveal that it exists
+    // under someone else's key.
+    const { rows } = await pool.query('SELECT * FROM jobs WHERE id = $1 AND api_key_id = $2', [
+      jobId,
+      (req as ApiKeyRequest).apiKeyId,
+    ]);
     const job = rows[0];
     if (!job) {
       return reply.code(404).send({ success: false, error: 'Job not found' });

@@ -16,6 +16,8 @@ function envSecret(name: string): string {
   return (process.env[name] ?? '').replace(/\s+/g, '');
 }
 
+const nodeEnv = process.env.NODE_ENV ?? 'development';
+
 export const config = {
   databaseUrl: env('DATABASE_URL', 'postgresql://kickcrawl:kickcrawl@localhost:5432/kickcrawl'),
   redisUrl: env('REDIS_URL', 'redis://localhost:6379'),
@@ -43,7 +45,13 @@ export const config = {
   ),
   adminEmail: process.env.ADMIN_EMAIL ?? '',
   adminPasswordHash: process.env.ADMIN_PASSWORD_HASH ?? '',
-  sessionSecret: env('SESSION_SECRET', 'dev-only-insecure-secret-change-me'),
+  // In production this must fail closed, not fall back - the fallback
+  // string is checked into this repo, so anyone with read access to the
+  // source already knows it, and it signs/verifies every admin session
+  // cookie (lib/session.ts). Every other environment (local dev, CI) can
+  // still boot without setting it, exactly as before.
+  sessionSecret:
+    nodeEnv === 'production' ? env('SESSION_SECRET') : env('SESSION_SECRET', 'dev-only-insecure-secret-change-me'),
   webhookUrl: process.env.WEBHOOK_URL ?? '',
   // Kickio's own Supabase project - read-only, for the "Kickio Teams"
   // admin page (Part 2 "Team" verification against Kickio's real canonical
@@ -64,5 +72,5 @@ export const config = {
   // not a dependency" pattern as kickioSupabaseAnonKey) rather than
   // failing startup.
   kickioSupabaseServiceRoleKey: envSecret('KICKIO_SUPABASE_SERVICE_ROLE_KEY'),
-  nodeEnv: process.env.NODE_ENV ?? 'development',
+  nodeEnv,
 };
