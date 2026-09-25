@@ -85,10 +85,23 @@ export async function closeBrowser(): Promise<void> {
  * of other concurrent browser fetches repeatedly crashed the container
  * with a V8 "JavaScript heap out of memory" FATAL ERROR - this isn't a
  * guess at a possible problem, it's a fix for one that was already
- * reproducing. 1 is deliberately conservative: a crash that kills every
- * in-flight job is far worse than crawls running one page slower.
+ * reproducing.
+ *
+ * Raised from 1 to 2 (not higher yet) after checking the service's actual
+ * Railway memory usage: 8GB limit, ~0.6GB peak / ~0.36GB average over the
+ * prior 24h under real load (a full site crawl plus a recheck running
+ * together), so 1 concurrent fetch was leaving most of that budget unused.
+ * Still deliberately conservative rather than jumping straight to
+ * crawlWorker's own concurrency:3 - the documented crash above happened at
+ * exactly this "a couple concurrent" order of magnitude, and a catalog/
+ * listing page (fetched during any crawl alongside item pages) can hold far
+ * more DOM/JS than a single product page, so this needs its own real
+ * production memory measurement at 2 before going any higher. A crash here
+ * kills every in-flight job across the whole app, not just one page, so
+ * under-provisioning is always the safer failure mode - watch
+ * MEMORY_USAGE_GB on Railway after this deploys before raising it further.
  */
-const MAX_CONCURRENT_BROWSER_FETCHES = 1;
+const MAX_CONCURRENT_BROWSER_FETCHES = 2;
 let activeBrowserFetches = 0;
 const waiters: (() => void)[] = [];
 

@@ -121,41 +121,47 @@ describe('withBrowserSlot', () => {
     expect(result).toBe('done');
   });
 
-  it('serializes concurrent calls - a second one never starts until the first releases its slot', async () => {
+  it('caps concurrent calls at the configured slot limit - a third one never starts until an earlier one releases', async () => {
     // The real-world case this guards against: several BullMQ workers
     // (crawl concurrency 3, plus the recheck worker) each mid-fetch on a
     // JS-heavy site at once - repeatedly crashed the container's V8 heap
-    // in production. Capping this to one at a time is the actual fix, so
-    // what matters here is that a second call's body provably never
-    // starts running while the first is still inside its slot.
+    // in production. Capping concurrent browser-driven fetches is the
+    // actual fix; this asserts the cap itself (currently 2) rather than
+    // hardcoding "exactly one," so it stays correct if that number is
+    // retuned again after further production memory measurements.
     const events: string[] = [];
-    let releaseFirst!: () => void;
+    const releasers: (() => void)[] = [];
 
     const { withBrowserSlot } = await import('../src/services/browser.js');
 
-    const first = withBrowserSlot(async () => {
-      events.push('first:start');
-      await new Promise<void>((resolve) => {
-        releaseFirst = resolve;
+    function slot(name: string) {
+      return withBrowserSlot(async () => {
+        events.push(`${name}:start`);
+        await new Promise<void>((resolve) => releasers.push(resolve));
+        events.push(`${name}:end`);
+        return name;
       });
-      events.push('first:end');
-      return 'first';
-    });
+    }
 
-    const second = withBrowserSlot(async () => {
-      events.push('second:start');
-      return 'second';
-    });
+    const first = slot('first');
+    const second = slot('second');
+    const third = slot('third');
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(events).toEqual(['first:start']);
+    // Exactly the slot limit's worth of calls have started; the third is
+    // still queued behind them.
+    expect(events).toEqual(['first:start', 'second:start']);
 
-    releaseFirst();
-    const [firstResult, secondResult] = await Promise.all([first, second]);
+    releasers[0]();
+    await first;
+    expect(events).toContain('third:start');
 
-    expect(events).toEqual(['first:start', 'first:end', 'second:start']);
+    releasers[1]();
+    releasers[2]();
+    const [firstResult, secondResult, thirdResult] = await Promise.all([first, second, third]);
     expect(firstResult).toBe('first');
     expect(secondResult).toBe('second');
+    expect(thirdResult).toBe('third');
   });
 
   it('releases the slot even when the wrapped call throws, so one failure never wedges every later fetch', async () => {

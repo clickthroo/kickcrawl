@@ -22,6 +22,61 @@ export { isNewSale, isPriceChange };
 
 export const RECHECK_INTERVAL_MS = 60 * 60 * 1000;
 
+// How long a status='failed' row sits out before it's eligible for another
+// recheck attempt. Confirmed in production: including all 4,943 'failed'
+// rows unconditionally on every cycle (see the query below) grew a single
+// recheck pass from comfortably under an hour to over 5 hours - BullMQ's
+// repeatable job doesn't start a new run while the previous one is still
+// executing, so the real recheck cadence collapsed from hourly to roughly
+// once every 5-6 hours, and "no sales or price changes detected for most
+// of the day" was that reduced cadence, not a detection-logic bug (the
+// comparison logic itself - detectAndRecordTransition - was unaffected).
+// Most of that backlog is the same browser-crash pattern that clears up on
+// its own; retrying it every single hour was mostly the same URLs failing
+// again for the same reason, at the cost of the whole catalog's recheck
+// frequency. A few hours' backoff still gets every failed row retried
+// several times a day, just not at the expense of the 'fetched' majority.
+const RECHECK_FAILED_BACKOFF_HOURS = 4;
+
+// How many sites' recheckSite() calls run at once. Confirmed in production:
+// processRecheck() used to await each site's ENTIRE recheckSite() call in a
+// plain sequential for-loop, so one large, browser-heavy site (every item
+// needing Playwright, serialized through the single global browser slot -
+// services/browser.ts) could occupy the whole cycle by itself for hours,
+// leaving every other site completely unchecked for that entire stretch -
+// not slower, literally zero progress - and blowing the whole job well past
+// RECHECK_INTERVAL_MS in the process. Running sites concurrently doesn't
+// remove the shared browser-slot bottleneck (browser-driven fetches across
+// ALL of them still serialize through it, one at a time, exactly as before),
+// but it does mean a fast, plain-HTTP site's items get their fair share of
+// that slot's time and their own rate-limit budget instead of queuing
+// behind one slow site's entire backlog. 3 mirrors crawlWorker.ts's own
+// Worker concurrency for consistency, not a resource limit of its own - the
+// real ceilings (browser slot, per-domain rate limit) are enforced further
+// down the call stack regardless of how many sites are "concurrent" here.
+const RECHECK_SITE_CONCURRENCY = 3;
+
+/**
+ * Runs `fn` over `items` with at most `concurrency` in flight at once,
+ * waiting for the whole batch to finish before returning - a minimal
+ * worker-pool, not a full queue, since recheck's own site list is small
+ * (a handful of sites) and doesn't need anything fancier.
+ */
+export async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+}
+
 interface RecheckableUrl {
   id: string;
   url: string;
@@ -40,7 +95,8 @@ export async function recheckSite(
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
     `SELECT id, url, path, stock_status, price, currency FROM urls
-     WHERE site_id = $1 AND status IN ('fetched', 'failed') AND stock_status IS NOT NULL AND stock_status != 'Out of Stock'`,
+     WHERE site_id = $1 AND stock_status IS NOT NULL AND stock_status != 'Out of Stock'
+       AND (status = 'fetched' OR (status = 'failed' AND last_fetched_at < now() - interval '${RECHECK_FAILED_BACKOFF_HOURS} hours'))`,
     [site.id],
   );
   // Only items (allowed_paths-matched), not the stepping-stone category/
@@ -61,15 +117,45 @@ export async function recheckSite(
   // never be detected. markUrlFetched (already called below on every
   // outcome) naturally heals a row's status back to 'fetched' on a
   // successful retry, or leaves it 'failed' again to be retried next
-  // cycle - no separate recovery path needed. stock_status IS NOT NULL
-  // excludes urls.status='failed' rows that have NEVER been successfully
-  // fetched at all (nothing to diff against, and no price to recheck the
-  // seller/currency for) - that backlog belongs to crawl's own retry
-  // logic, not this one.
+  // eligible cycle - no separate recovery path needed. stock_status IS NOT
+  // NULL excludes urls.status='failed' rows that have NEVER been
+  // successfully fetched at all (nothing to diff against, and no price to
+  // recheck the seller/currency for) - that backlog belongs to crawl's own
+  // retry logic, not this one.
+  //
+  // RECHECK_FAILED_BACKOFF_HOURS gates the 'failed' half: unconditionally
+  // re-attempting all ~5000 of them every single hourly cycle (as the first
+  // version of this fix did) grew one recheck pass past 5 hours, which cut
+  // the real detection cadence for the ENTIRE catalog - 'fetched' rows
+  // included - from hourly to roughly once every 5-6 hours. A row that
+  // failed recently sits out until it's stale enough to be worth another
+  // try, keeping each cycle's working set close to what actually finishes
+  // inside RECHECK_INTERVAL_MS.
   const items = urls.filter((u) => isPathAllowed(u.path, site.allowed_paths, site.denied_paths));
 
   progress.total += items.length;
   await pool.query(`UPDATE jobs SET total_pages = $2 WHERE id = $1`, [jobId, progress.total]);
+
+  // recheckSite() has no per-item log line (unlike crawlWorker.ts's own
+  // "fetching ..." line) - fine for a single fast site, but with
+  // RECHECK_SITE_CONCURRENCY now running several sites in parallel and a
+  // large plain-HTTP site legitimately taking over an hour at its
+  // per-domain rate limit, that silence is indistinguishable from actually
+  // being stuck. Confirmed the gap in production: a genuinely healthy,
+  // still-in-progress cycle and a truly wedged one looked identical in
+  // Railway's logs - nothing to check but the raw jobs.completed_pages
+  // column. A start line plus a periodic heartbeat closes that blind spot
+  // without adding a line per item (which, at thousands of items across 5
+  // sites, would just be noise).
+  console.log(`[recheckWorker] job ${jobId} checking ${site.name}: ${items.length} item(s) eligible`);
+  const HEARTBEAT_EVERY = 100;
+  let checkedHere = 0;
+  function heartbeat(): void {
+    checkedHere += 1;
+    if (checkedHere % HEARTBEAT_EVERY === 0 || checkedHere === items.length) {
+      console.log(`[recheckWorker] job ${jobId} ${site.name}: ${checkedHere}/${items.length} checked so far`);
+    }
+  }
 
   for (const item of items) {
     try {
@@ -91,6 +177,7 @@ export async function recheckSite(
       if (result.success && !passesSellerFilter(result.markdown, site)) {
         await pool.query(`DELETE FROM urls WHERE id = $1`, [item.id]);
         progress.checked += 1;
+        heartbeat();
         await pool.query(`UPDATE jobs SET completed_pages = $2 WHERE id = $1`, [jobId, progress.checked]);
         continue;
       }
@@ -136,6 +223,7 @@ export async function recheckSite(
     }
 
     progress.checked += 1;
+    heartbeat();
     await pool.query(`UPDATE jobs SET completed_pages = $2 WHERE id = $1`, [jobId, progress.checked]);
   }
 }
@@ -149,9 +237,11 @@ async function processRecheck(): Promise<void> {
     const currencyRates = await getCurrencyRates();
     const kickioTeams = await getKickioTeamsForMatching();
 
-    for (const site of sites) {
-      await recheckSite(site, jobId, currencyRates, progress, kickioTeams);
-    }
+    console.log(`[recheckWorker] job ${jobId} starting: ${sites.length} active site(s), concurrency ${RECHECK_SITE_CONCURRENCY}`);
+
+    await runWithConcurrency(sites, RECHECK_SITE_CONCURRENCY, (site) =>
+      recheckSite(site, jobId, currencyRates, progress, kickioTeams),
+    );
 
     await pool.query(
       `UPDATE jobs SET status = 'completed', total_pages = $2, completed_pages = $3,
