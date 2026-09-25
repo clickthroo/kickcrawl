@@ -38,6 +38,45 @@ export const RECHECK_INTERVAL_MS = 60 * 60 * 1000;
 // several times a day, just not at the expense of the 'fetched' majority.
 const RECHECK_FAILED_BACKOFF_HOURS = 4;
 
+// How many sites' recheckSite() calls run at once. Confirmed in production:
+// processRecheck() used to await each site's ENTIRE recheckSite() call in a
+// plain sequential for-loop, so one large, browser-heavy site (every item
+// needing Playwright, serialized through the single global browser slot -
+// services/browser.ts) could occupy the whole cycle by itself for hours,
+// leaving every other site completely unchecked for that entire stretch -
+// not slower, literally zero progress - and blowing the whole job well past
+// RECHECK_INTERVAL_MS in the process. Running sites concurrently doesn't
+// remove the shared browser-slot bottleneck (browser-driven fetches across
+// ALL of them still serialize through it, one at a time, exactly as before),
+// but it does mean a fast, plain-HTTP site's items get their fair share of
+// that slot's time and their own rate-limit budget instead of queuing
+// behind one slow site's entire backlog. 3 mirrors crawlWorker.ts's own
+// Worker concurrency for consistency, not a resource limit of its own - the
+// real ceilings (browser slot, per-domain rate limit) are enforced further
+// down the call stack regardless of how many sites are "concurrent" here.
+const RECHECK_SITE_CONCURRENCY = 3;
+
+/**
+ * Runs `fn` over `items` with at most `concurrency` in flight at once,
+ * waiting for the whole batch to finish before returning - a minimal
+ * worker-pool, not a full queue, since recheck's own site list is small
+ * (a handful of sites) and doesn't need anything fancier.
+ */
+export async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+}
+
 interface RecheckableUrl {
   id: string;
   url: string;
@@ -175,9 +214,9 @@ async function processRecheck(): Promise<void> {
     const currencyRates = await getCurrencyRates();
     const kickioTeams = await getKickioTeamsForMatching();
 
-    for (const site of sites) {
-      await recheckSite(site, jobId, currencyRates, progress, kickioTeams);
-    }
+    await runWithConcurrency(sites, RECHECK_SITE_CONCURRENCY, (site) =>
+      recheckSite(site, jobId, currencyRates, progress, kickioTeams),
+    );
 
     await pool.query(
       `UPDATE jobs SET status = 'completed', total_pages = $2, completed_pages = $3,

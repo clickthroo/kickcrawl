@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isNewSale, isPriceChange } from '../src/workers/recheckWorker.js';
+import { isNewSale, isPriceChange, runWithConcurrency } from '../src/workers/recheckWorker.js';
 import type { SiteConfig } from '../src/lib/siteResolver.js';
 
 describe('isNewSale', () => {
@@ -62,6 +62,61 @@ describe('isPriceChange', () => {
 
   it('is not a price change when the currency itself differs - a different kind of event, not this one', () => {
     expect(isPriceChange(50, 'GBP', 50, 'USD')).toBe(false);
+  });
+});
+
+describe('runWithConcurrency', () => {
+  it('runs every item exactly once', async () => {
+    const seen: number[] = [];
+    await runWithConcurrency([1, 2, 3, 4, 5], 2, async (n) => {
+      seen.push(n);
+    });
+    expect(seen.sort()).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('never exceeds the concurrency cap', async () => {
+    let active = 0;
+    let maxActive = 0;
+    await runWithConcurrency([1, 2, 3, 4, 5, 6], 2, async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+    });
+    expect(maxActive).toBeLessThanOrEqual(2);
+  });
+
+  it('does not let one slow item hold up the others - the exact VFS-blocking-every-other-site bug this replaces', async () => {
+    const finishOrder: string[] = [];
+    const items = [
+      { name: 'slow-site', delayMs: 30 },
+      { name: 'fast-site-a', delayMs: 1 },
+      { name: 'fast-site-b', delayMs: 1 },
+    ];
+    await runWithConcurrency(items, 3, async (item) => {
+      await new Promise((resolve) => setTimeout(resolve, item.delayMs));
+      finishOrder.push(item.name);
+    });
+    // Both fast sites finish well before the slow one, instead of queuing
+    // behind it as the old sequential for-loop would have forced.
+    expect(finishOrder.slice(0, 2).sort()).toEqual(['fast-site-a', 'fast-site-b']);
+    expect(finishOrder[2]).toBe('slow-site');
+  });
+
+  it('handles fewer items than the concurrency limit without error', async () => {
+    const seen: number[] = [];
+    await runWithConcurrency([1], 3, async (n) => {
+      seen.push(n);
+    });
+    expect(seen).toEqual([1]);
+  });
+
+  it('handles an empty list', async () => {
+    const seen: number[] = [];
+    await runWithConcurrency([], 3, async (n: number) => {
+      seen.push(n);
+    });
+    expect(seen).toEqual([]);
   });
 });
 

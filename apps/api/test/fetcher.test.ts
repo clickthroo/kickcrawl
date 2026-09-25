@@ -131,33 +131,41 @@ describe('fetchWithBrowser', () => {
     const { fetchWithBrowser } = await import('../src/services/fetcher.js');
     const { withBrowserSlot } = await import('../src/services/browser.js');
 
-    const stuck = fetchWithBrowser('https://example.com/stuck', 'UA', 0);
-    // Attached in the same tick the promise is created, so Node never sees
-    // it as briefly "unhandled" once fake-timer advancement lets it settle
-    // further down - the actual assertion still only resolves once awaited.
-    const stuckAssertion = expect(stuck).rejects.toThrow(/timed out after 45000ms/i);
+    // services/browser.ts currently allows 2 concurrent browser-driven
+    // fetches, not 1 - both need to be stuck to actually exhaust the slot
+    // pool, or a call queued "behind" them would just take the second free
+    // slot immediately and this test would prove nothing.
+    const stuck1 = fetchWithBrowser('https://example.com/stuck1', 'UA', 0);
+    const stuck2 = fetchWithBrowser('https://example.com/stuck2', 'UA', 0);
+    // Attached in the same tick the promises are created, so Node never
+    // sees them as briefly "unhandled" once fake-timer advancement lets
+    // them settle further down - the actual assertions still only resolve
+    // once awaited.
+    const stuck1Assertion = expect(stuck1).rejects.toThrow(/timed out after 45000ms/i);
+    const stuck2Assertion = expect(stuck2).rejects.toThrow(/timed out after 45000ms/i);
 
-    // Let the microtask queue drain so the call is genuinely inside
-    // withBrowserSlot (holding the slot) before advancing the clock.
+    // Let the microtask queue drain so both calls are genuinely inside
+    // withBrowserSlot (holding both slots) before advancing the clock.
     await vi.advanceTimersByTimeAsync(0);
 
-    const secondSlotAcquired = vi.fn();
-    const second = withBrowserSlot(async () => {
-      secondSlotAcquired();
-      return 'second-ran';
+    const thirdSlotAcquired = vi.fn();
+    const third = withBrowserSlot(async () => {
+      thirdSlotAcquired();
+      return 'third-ran';
     });
 
-    // Still stuck - the slot must not be free before the timeout fires.
+    // Still stuck - no slot must be free before either timeout fires.
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(secondSlotAcquired).not.toHaveBeenCalled();
+    expect(thirdSlotAcquired).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(45_000);
 
-    await stuckAssertion;
-    // The slot was actually released - a call queued behind the stuck one
-    // gets to run instead of waiting forever behind it too.
-    await expect(second).resolves.toBe('second-ran');
-    expect(secondSlotAcquired).toHaveBeenCalledTimes(1);
+    await stuck1Assertion;
+    await stuck2Assertion;
+    // A slot was actually released - a call queued behind both stuck ones
+    // gets to run instead of waiting forever behind them too.
+    await expect(third).resolves.toBe('third-ran');
+    expect(thirdSlotAcquired).toHaveBeenCalledTimes(1);
   });
 
   it('reports success even when context.close() throws afterward - a close-time failure must never overwrite a result that already succeeded', async () => {
