@@ -86,6 +86,7 @@ interface RecheckableUrl {
   price: number | null;
   currency: string | null;
   sitemap_lastmod: string | null;
+  last_fetched_at: string | null;
 }
 
 /**
@@ -104,6 +105,31 @@ export function isUnchangedSinceLastCheck(
   return storedLastmod !== null && currentLastmod != null && storedLastmod === currentLastmod;
 }
 
+// The sitemap-lastmod skip above trusts a THIRD PARTY's own bookkeeping to
+// reflect a stock change - many sitemap generators only bump <lastmod> on a
+// content edit (a description tweak, a re-crop of the photo), not on an
+// inventory change, so an item that sells without its listing markup
+// otherwise changing could keep reporting the exact same lastmod forever.
+// That's not hypothetical: sales/price-change detection is the entire
+// reason this pipeline exists, so silently trusting a site's lastmod
+// forever would trade a throughput problem for a correctness one - the
+// same class of risk already surfaced once this session for the crawl-side
+// freshness fix. Forcing a real fetch at least this often bounds the worst
+// case to "detected up to a day late" instead of "never detected while the
+// sitemap stays quiet," while still skipping the overwhelming majority of
+// genuinely-unchanged hourly cycles in between.
+const RECHECK_FORCE_REFETCH_HOURS = 24;
+
+export function shouldForceRefetch(
+  lastFetchedAt: string | Date | null | undefined,
+  now: Date,
+  forceRefetchHours: number,
+): boolean {
+  if (lastFetchedAt == null) return true;
+  const last = typeof lastFetchedAt === 'string' ? new Date(lastFetchedAt) : lastFetchedAt;
+  return now.getTime() - last.getTime() >= forceRefetchHours * 60 * 60 * 1000;
+}
+
 export async function recheckSite(
   site: SiteConfig,
   jobId: string,
@@ -119,7 +145,7 @@ export async function recheckSite(
   kickioTeams: readonly KickioTeamRef[] | null = null,
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
-    `SELECT id, url, path, stock_status, price, currency, sitemap_lastmod FROM urls
+    `SELECT id, url, path, stock_status, price, currency, sitemap_lastmod, last_fetched_at FROM urls
      WHERE site_id = $1 AND stock_status IS NOT NULL AND stock_status != 'Out of Stock'
        AND (status = 'fetched' OR (status = 'failed' AND last_fetched_at < now() - interval '${RECHECK_FAILED_BACKOFF_HOURS} hours'))`,
     [site.id],
@@ -208,7 +234,9 @@ export async function recheckSite(
   for (const item of items) {
     try {
       const currentLastmod = sitemapLastmods.get(item.url);
-      if (isUnchangedSinceLastCheck(item.sitemap_lastmod, currentLastmod)) {
+      const unchangedViaSitemap = isUnchangedSinceLastCheck(item.sitemap_lastmod, currentLastmod);
+      const forceRefetch = shouldForceRefetch(item.last_fetched_at, new Date(), RECHECK_FORCE_REFETCH_HOURS);
+      if (unchangedViaSitemap && !forceRefetch) {
         skippedViaSitemap += 1;
         progress.skippedViaSitemap += 1;
         progress.checked += 1;
