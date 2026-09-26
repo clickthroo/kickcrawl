@@ -8,6 +8,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [showProxyUrl, setShowProxyUrl] = useState(false);
 
   useEffect(() => {
     api
@@ -61,12 +62,31 @@ export default function Settings() {
             value={form.default_user_agent}
             onChange={(e) => setForm({ ...form, default_user_agent: e.target.value })}
           />
-          <Input
-            label="Proxy URL"
-            value={form.proxy_url ?? ''}
-            onChange={(e) => setForm({ ...form, proxy_url: e.target.value })}
-            placeholder="http://user:pass@host:port"
-          />
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Proxy URL</span>
+            <div className="flex gap-2">
+              <input
+                type={showProxyUrl ? 'text' : 'password'}
+                value={form.proxy_url ?? ''}
+                onChange={(e) => setForm({ ...form, proxy_url: e.target.value })}
+                placeholder="http://user:pass@host:port"
+                // This URL embeds a username/password (the proxy's own
+                // basic-auth credentials) - masked by default so it isn't
+                // sitting in plain text on screen every time this page
+                // loads, the same way any other password field isn't.
+                autoComplete="off"
+                className="min-h-[2.5rem] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setShowProxyUrl((v) => !v)}
+                className="shrink-0 px-3 text-xs"
+              >
+                {showProxyUrl ? 'Hide' : 'Show'}
+              </Button>
+            </div>
+          </label>
         </Card>
 
         <Card className="space-y-4">
@@ -166,8 +186,13 @@ function CurrencyRates() {
     ) {
       return;
     }
-    await api.delete(`/admin/currency-rates/${currencyCode}`);
-    reload();
+    setError(null);
+    try {
+      await api.delete(`/admin/currency-rates/${currencyCode}`);
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to remove rate');
+    }
   }
 
   return (

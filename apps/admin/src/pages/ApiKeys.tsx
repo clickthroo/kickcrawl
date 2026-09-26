@@ -9,6 +9,7 @@ export default function ApiKeys() {
   const [error, setError] = useState<string | null>(null);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   function reload() {
     api
@@ -37,8 +38,16 @@ export default function ApiKeys() {
 
   async function deleteKey(id: string) {
     if (!confirm('Delete this API key? Any client using it will stop working immediately.')) return;
-    await api.delete(`/admin/api-keys/${id}`);
-    reload();
+    setDeletingId(id);
+    setError(null);
+    try {
+      await api.delete(`/admin/api-keys/${id}`);
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete API key');
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -103,8 +112,13 @@ export default function ApiKeys() {
                     <div className="truncate font-medium text-slate-800">{k.name}</div>
                     <div className="truncate font-mono text-xs text-slate-500">{k.key_preview}</div>
                   </div>
-                  <Button variant="danger" onClick={() => deleteKey(k.id)} className="shrink-0 px-2.5 py-1.5 text-xs">
-                    Delete
+                  <Button
+                    variant="danger"
+                    onClick={() => deleteKey(k.id)}
+                    disabled={deletingId === k.id}
+                    className="shrink-0 px-2.5 py-1.5 text-xs"
+                  >
+                    {deletingId === k.id ? 'Deleting…' : 'Delete'}
                   </Button>
                 </div>
                 <div className="text-xs text-slate-400">
@@ -135,8 +149,8 @@ export default function ApiKeys() {
                         {k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'Never'}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <Button variant="danger" onClick={() => deleteKey(k.id)}>
-                          Delete
+                        <Button variant="danger" onClick={() => deleteKey(k.id)} disabled={deletingId === k.id}>
+                          {deletingId === k.id ? 'Deleting…' : 'Delete'}
                         </Button>
                       </td>
                     </tr>

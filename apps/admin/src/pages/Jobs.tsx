@@ -2,25 +2,33 @@ import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { Job } from '../lib/types';
-import { Badge, Card, ErrorBanner, PageHeader, ProgressBar, Select, Spinner } from '../components/ui';
+import { Badge, Button, Card, ErrorBanner, PageHeader, ProgressBar, Select, Spinner } from '../components/ui';
 
 export default function Jobs() {
   const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[] | null>(null);
+  const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState(() => searchParams.get('type') ?? '');
+  const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const pageSize = 25;
+
+  useEffect(() => setPage(1), [statusFilter, typeFilter]);
 
   useEffect(() => {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (statusFilter) params.set('status', statusFilter);
     if (typeFilter) params.set('type', typeFilter);
 
     function load(): void {
       setError(null);
       api
-        .get<{ success: boolean; jobs: Job[] }>(`/admin/jobs?${params.toString()}`)
-        .then((res) => setJobs(res.jobs))
+        .get<{ success: boolean; jobs: Job[]; total: number }>(`/admin/jobs?${params.toString()}`)
+        .then((res) => {
+          setJobs(res.jobs);
+          setTotal(res.total);
+        })
         .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load jobs'));
     }
 
@@ -29,9 +37,15 @@ export default function Jobs() {
     // it, this list only ever reflects whatever was true the moment it was
     // loaded, showing a crawl as "Queued" indefinitely even while it's
     // actively running, since nothing here ever re-fetches on its own.
+    // Paginated the same way every other admin list is (Items, Sales,
+    // PriceChanges) - this used to re-fetch every job matching the filter,
+    // unbounded, on every 5-second tick, which only got more expensive as
+    // job history grew; now each tick only re-fetches this one page.
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
-  }, [statusFilter, typeFilter]);
+  }, [statusFilter, typeFilter, page]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div className="space-y-4">
@@ -143,6 +157,22 @@ export default function Jobs() {
             </div>
           </Card>
         </>
+      )}
+
+      {total > pageSize && (
+        <div className="flex items-center justify-between text-sm text-slate-500">
+          <span>
+            Page {page} of {totalPages}
+          </span>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              Previous
+            </Button>
+            <Button variant="secondary" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+              Next
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );

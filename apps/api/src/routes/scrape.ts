@@ -36,8 +36,11 @@ export async function scrapeRoutes(app: FastifyInstance): Promise<void> {
           result.error,
         );
         await persistScrapeResult(urlId, null, result);
-      } catch {
-        // best-effort - persistence failures shouldn't fail the API response
+      } catch (err) {
+        // best-effort - persistence failures shouldn't fail the API response,
+        // but silently discarding them (as this used to) means a DB outage
+        // or bad row here leaves zero trace anywhere to debug later.
+        console.error(`[scrape] failed to persist result for ${body.url}:`, err);
       }
     }
 
