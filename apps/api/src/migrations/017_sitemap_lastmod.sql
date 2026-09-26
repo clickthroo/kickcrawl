@@ -1,0 +1,15 @@
+-- Caches the <lastmod> value a site's own sitemap reported for a url the
+-- last time it was actually fetched, so recheckWorker.ts can skip the real
+-- page fetch entirely when the site's own sitemap says nothing has changed
+-- since then - most of a large catalog doesn't change most hours, and this
+-- is the single biggest lever for keeping a full recheck pass inside its
+-- intended ~1 hour cadence without brute-forcing more concurrency/rate.
+--
+-- Stored as plain text, not timestamptz - <lastmod> format varies across
+-- sites' own sitemap generators (some omit the time entirely, some use
+-- non-standard precision), and this is only ever used for a straight
+-- equality check against the same site's own next-reported value, never
+-- real date arithmetic, so preserving the exact string a site reports is
+-- simpler and more robust than forcing it through a timestamp parse that
+-- could reject a perfectly valid value.
+ALTER TABLE urls ADD COLUMN IF NOT EXISTS sitemap_lastmod text;

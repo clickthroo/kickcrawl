@@ -13,6 +13,7 @@ import { isPathAllowed } from '../services/links.js';
 import type { SiteConfig } from '../lib/siteResolver.js';
 import { PAGE_TIMEOUT_MS, passesSellerFilter, resolveUseBrowser } from './crawlWorker.js';
 import { detectAndRecordTransition, isNewSale, isPriceChange } from '../lib/saleDetection.js';
+import { getAllSitemapEntries } from '../services/sitemap.js';
 
 // Re-exported so existing imports (this file's own tests included) keep
 // working - the real definitions moved to lib/saleDetection.ts so
@@ -84,17 +85,41 @@ interface RecheckableUrl {
   stock_status: string | null;
   price: number | null;
   currency: string | null;
+  sitemap_lastmod: string | null;
+}
+
+/**
+ * Whether a url can skip its real fetch this cycle because the site's own
+ * sitemap is reporting the exact same <lastmod> it reported the last time
+ * this url was actually fetched. False whenever there's nothing to compare
+ * (no stored value yet, or this url isn't in the site's current sitemap at
+ * all) - that's the deliberately safe default: the worst this ever costs is
+ * a skipped optimization, never a missed real change, since "can't prove
+ * it's unchanged" always falls through to a real fetch.
+ */
+export function isUnchangedSinceLastCheck(
+  storedLastmod: string | null,
+  currentLastmod: string | null | undefined,
+): boolean {
+  return storedLastmod !== null && currentLastmod != null && storedLastmod === currentLastmod;
 }
 
 export async function recheckSite(
   site: SiteConfig,
   jobId: string,
   currencyRates: Record<string, number>,
-  progress: { checked: number; total: number; sales: number; priceChanges: number; errors: string[] },
+  progress: {
+    checked: number;
+    total: number;
+    sales: number;
+    priceChanges: number;
+    skippedViaSitemap: number;
+    errors: string[];
+  },
   kickioTeams: readonly KickioTeamRef[] | null = null,
 ): Promise<void> {
   const { rows: urls } = await pool.query<RecheckableUrl>(
-    `SELECT id, url, path, stock_status, price, currency FROM urls
+    `SELECT id, url, path, stock_status, price, currency, sitemap_lastmod FROM urls
      WHERE site_id = $1 AND stock_status IS NOT NULL AND stock_status != 'Out of Stock'
        AND (status = 'fetched' OR (status = 'failed' AND last_fetched_at < now() - interval '${RECHECK_FAILED_BACKOFF_HOURS} hours'))`,
     [site.id],
@@ -133,6 +158,22 @@ export async function recheckSite(
   // inside RECHECK_INTERVAL_MS.
   const items = urls.filter((u) => isPathAllowed(u.path, site.allowed_paths, site.denied_paths));
 
+  // Fetched once per site per cycle, not per item - the actual lever that
+  // makes this cheap. A site's sitemap almost always lists every item's
+  // <lastmod>, and most of a large catalog genuinely doesn't change most
+  // hours, so comparing against what was stored the last time each url was
+  // fetched (below) skips the real page fetch entirely for anything the
+  // site itself is saying is unchanged. Never fatal if this fails or the
+  // site has no sitemap at all - an empty map just means every item falls
+  // through to a real fetch, identical to this optimization not existing.
+  let sitemapLastmods = new Map<string, string | null>();
+  try {
+    const entries = await getAllSitemapEntries(site.base_url);
+    sitemapLastmods = new Map(entries.map((e) => [e.loc, e.lastmod]));
+  } catch {
+    // no sitemap, or it failed to fetch/parse - fall through with an empty map.
+  }
+
   progress.total += items.length;
   await pool.query(`UPDATE jobs SET total_pages = $2 WHERE id = $1`, [jobId, progress.total]);
 
@@ -147,18 +188,35 @@ export async function recheckSite(
   // column. A start line plus a periodic heartbeat closes that blind spot
   // without adding a line per item (which, at thousands of items across 5
   // sites, would just be noise).
-  console.log(`[recheckWorker] job ${jobId} checking ${site.name}: ${items.length} item(s) eligible`);
+  console.log(
+    `[recheckWorker] job ${jobId} checking ${site.name}: ${items.length} item(s) eligible ` +
+      `(${sitemapLastmods.size} url(s) in its sitemap)`,
+  );
   const HEARTBEAT_EVERY = 100;
   let checkedHere = 0;
+  let skippedViaSitemap = 0;
   function heartbeat(): void {
     checkedHere += 1;
     if (checkedHere % HEARTBEAT_EVERY === 0 || checkedHere === items.length) {
-      console.log(`[recheckWorker] job ${jobId} ${site.name}: ${checkedHere}/${items.length} checked so far`);
+      console.log(
+        `[recheckWorker] job ${jobId} ${site.name}: ${checkedHere}/${items.length} checked so far ` +
+          `(${skippedViaSitemap} skipped via unchanged sitemap lastmod)`,
+      );
     }
   }
 
   for (const item of items) {
     try {
+      const currentLastmod = sitemapLastmods.get(item.url);
+      if (isUnchangedSinceLastCheck(item.sitemap_lastmod, currentLastmod)) {
+        skippedViaSitemap += 1;
+        progress.skippedViaSitemap += 1;
+        progress.checked += 1;
+        heartbeat();
+        await pool.query(`UPDATE jobs SET completed_pages = $2 WHERE id = $1`, [jobId, progress.checked]);
+        continue;
+      }
+
       // Every url here already matched allowed_paths (the filter just
       // above), so this is always the matchesAllowedPaths=true case of
       // crawlWorker.ts's own per-page useBrowser decision - reused here
@@ -217,6 +275,15 @@ export async function recheckSite(
         // now filters these in SQL (routes/admin/urls.ts) instead of
         // building a profile for every row in the table on every request.
         await persistItemProfileColumns(urlId, profile);
+
+        // Records whatever the sitemap currently says for this url (or
+        // null, if it isn't in the sitemap at all right now) so the NEXT
+        // cycle's isUnchangedSinceLastCheck has something real to compare
+        // against - this is what actually makes the skip above possible.
+        await pool.query(`UPDATE urls SET sitemap_lastmod = $2 WHERE id = $1`, [
+          urlId,
+          currentLastmod ?? null,
+        ]);
       }
     } catch (err) {
       progress.errors.push(`${item.url}: ${err instanceof Error ? err.message : String(err)}`);
@@ -230,7 +297,7 @@ export async function recheckSite(
 
 async function processRecheck(): Promise<void> {
   const jobId = await createJob('recheck', null, {}, 'running');
-  const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+  const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
 
   try {
     const { rows: sites } = await pool.query<SiteConfig>('SELECT * FROM sites WHERE is_active = true');
@@ -255,7 +322,7 @@ async function processRecheck(): Promise<void> {
       ],
     );
     console.log(
-      `[recheckWorker] job ${jobId} checked ${progress.checked} item(s), found ${progress.sales} sale(s), ${progress.priceChanges} price change(s)`,
+      `[recheckWorker] job ${jobId} checked ${progress.checked} item(s) (${progress.skippedViaSitemap} skipped via unchanged sitemap lastmod), found ${progress.sales} sale(s), ${progress.priceChanges} price change(s)`,
     );
   } catch (err) {
     await failJob(jobId, err instanceof Error ? err.message : String(err));
