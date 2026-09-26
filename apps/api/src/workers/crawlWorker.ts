@@ -440,8 +440,17 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     // is far longer than recheck's. This is the actual fix for a crawl
     // otherwise refetching a site's entire catalog from scratch on every
     // single run, "new items since last time" included.
+    // status = 'fetched' only - markUrlFetched sets last_fetched_at on
+    // every attempt, success or failure, so a plain recency check alone
+    // would also exclude a url that failed its very first-ever scrape
+    // (never got a stock_status at all) from being reseeded for up to a
+    // week. That row is exactly the case recheckWorker.ts's own query
+    // explicitly leaves out (stock_status IS NOT NULL) as "belongs to
+    // crawl's own retry logic, not this one" - so crawl remains the only
+    // thing that will ever retry it, and needs to keep doing so on every
+    // run, not just successfully-profiled items.
     const { rows: freshRows } = await pool.query<{ url: string }>(
-      `SELECT url FROM urls WHERE site_id = $1 AND last_fetched_at > now() - interval '${CRAWL_REFRESH_STALE_DAYS} days'`,
+      `SELECT url FROM urls WHERE site_id = $1 AND status = 'fetched' AND last_fetched_at > now() - interval '${CRAWL_REFRESH_STALE_DAYS} days'`,
       [siteId],
     );
     const newSitemapUrls = excludeFreshlyKnownUrls(candidateUrls, new Set(freshRows.map((r) => r.url)));
