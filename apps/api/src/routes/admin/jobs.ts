@@ -11,25 +11,38 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
 
   app.get('/api/admin/jobs', async (req, reply) => {
-    const { status, type } = req.query as { status?: string; type?: string };
+    const query = req.query as { status?: string; type?: string; page?: string; pageSize?: string };
+    const page = Math.max(1, Number(query.page) || 1);
+    // Same default/cap as every other admin list endpoint (Items, Sales,
+    // PriceChanges) - this one used to just LIMIT 200 with no pagination
+    // at all, which the Jobs list then re-fetched in full every 5 seconds
+    // (its own polling interval) regardless of how many jobs actually
+    // existed, growing that payload - and the poll's cost - forever as job
+    // history accumulates.
+    const pageSize = Math.min(Math.max(1, Number(query.pageSize) || 25), 200);
+    const offset = (page - 1) * pageSize;
+
     const conditions: string[] = [];
     const params: unknown[] = [];
-    if (status) {
-      params.push(status);
+    if (query.status) {
+      params.push(query.status);
       conditions.push(`status = $${params.length}`);
     }
-    if (type) {
-      params.push(type);
+    if (query.type) {
+      params.push(query.type);
       conditions.push(`type = $${params.length}`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    const { rows: countRows } = await pool.query(`SELECT count(*) FROM jobs ${where}`, params);
+    const total = Number(countRows[0].count);
+
     const { rows } = await pool.query(
       `SELECT j.*, s.name AS site_name FROM jobs j LEFT JOIN sites s ON s.id = j.site_id
-       ${where} ORDER BY j.created_at DESC LIMIT 200`,
+       ${where} ORDER BY j.created_at DESC LIMIT ${pageSize} OFFSET ${offset}`,
       params,
     );
-    return reply.send({ success: true, jobs: rows });
+    return reply.send({ success: true, jobs: rows, total, page, pageSize });
   });
 
   app.get('/api/admin/jobs/:id', async (req, reply) => {

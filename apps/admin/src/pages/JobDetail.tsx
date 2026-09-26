@@ -66,6 +66,14 @@ export default function JobDetail() {
 
   async function runAction(kind: 'pause' | 'resume' | 'cancel') {
     if (!id) return;
+    // Only cancel is actually destructive - it throws away whatever this
+    // job hasn't finished yet, with no way to resume it (pause/resume both
+    // keep all progress intact), so it's the one action here worth a
+    // confirmation, same as the destructive actions elsewhere in the app
+    // (SiteDetail's clearItems, ApiKeys' deleteKey).
+    if (kind === 'cancel' && !confirm('Cancel this job? Any progress it hasn\'t already saved will be lost.')) {
+      return;
+    }
     setAction(kind);
     setError(null);
     try {
