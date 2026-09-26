@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   catalogIdFromUrl,
+  excludeFreshlyKnownUrls,
   filterSitemapSeeds,
   filterTraversableLinks,
   isCrawlItem,
@@ -116,6 +117,35 @@ describe('filterSitemapSeeds', () => {
       '3267',
     );
     expect(result).toEqual(['https://www.vinted.co.uk/catalog/3267-team-shirts?catalog[]=3267']);
+  });
+});
+
+describe('excludeFreshlyKnownUrls', () => {
+  it('drops a url the caller has already confirmed was fetched recently', () => {
+    const result = excludeFreshlyKnownUrls(
+      ['https://cultkits.com/products/already-known', 'https://cultkits.com/products/brand-new'],
+      new Set(['https://cultkits.com/products/already-known']),
+    );
+    expect(result).toEqual(['https://cultkits.com/products/brand-new']);
+  });
+
+  it('this is the actual fix: a re-crawl of the same site no longer reseeds its entire sitemap', () => {
+    // Confirmed as the real prior behaviour: filterSitemapSeeds alone had
+    // no concept of a previous run at all, so every url in a site's
+    // sitemap - known or not - was reseeded into every fresh crawl. This
+    // is the extra filter that actually makes "check for new items"
+    // cheap: everything already known and recently fetched is gone,
+    // leaving only what's genuinely new.
+    const sitemapUrls = Array.from({ length: 1000 }, (_, i) => `https://cultkits.com/products/item-${i}`);
+    const freshlyKnown = new Set(sitemapUrls.slice(0, 970));
+    const result = excludeFreshlyKnownUrls(sitemapUrls, freshlyKnown);
+    expect(result).toHaveLength(30);
+    expect(result).toEqual(sitemapUrls.slice(970));
+  });
+
+  it('keeps everything when nothing is known yet - a genuinely first-ever crawl of a site', () => {
+    const sitemapUrls = ['https://cultkits.com/products/a', 'https://cultkits.com/products/b'];
+    expect(excludeFreshlyKnownUrls(sitemapUrls, new Set())).toEqual(sitemapUrls);
   });
 });
 

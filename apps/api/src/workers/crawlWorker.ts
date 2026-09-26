@@ -51,6 +51,20 @@ export function filterSitemapSeeds(
   );
 }
 
+/**
+ * Sitemap urls to leave out of a fresh crawl's frontier because they're
+ * already a known item, fetched recently enough (see
+ * CRAWL_REFRESH_STALE_DAYS) that re-touching them is redundant work - the
+ * actual fix for a crawl otherwise having no memory of any previous run.
+ * `freshlyKnownUrls` is exactly the set the caller's own query already
+ * scoped to this site and to "fetched within the window", so this is a
+ * plain set-difference, kept as its own function only so that scoping
+ * decision stays independently testable from the DB query around it.
+ */
+export function excludeFreshlyKnownUrls(sitemapUrls: string[], freshlyKnownUrls: ReadonlySet<string>): string[] {
+  return sitemapUrls.filter((url) => !freshlyKnownUrls.has(url));
+}
+
 export function filterTraversableLinks(
   links: string[],
   visited: Set<string>,
@@ -165,6 +179,21 @@ const FRONTIER_RETRY_BACKOFF_MINUTES = 2;
 // pass regardless, so this never blocks a pause/cancel from taking effect
 // for long.
 const FRONTIER_RETRY_POLL_MS = 5_000;
+
+// How long an already-known url stays exempt from being reseeded into a
+// FRESH crawl's frontier. A crawl's real job is finding what's NEW since
+// last time - stock/price movement on an already-known item is already
+// recheckWorker.ts's job, running hourly. Confirmed as the actual live
+// behaviour before this: a fresh crawl reseeded and refetched EVERY url in
+// the site's sitemap every single time, with zero memory of any previous
+// run, so a routine "check for new items" crawl cost exactly the same as
+// the very first full crawl of that site - all 21,844 Cult Kits urls
+// refetched to find perhaps 30 genuinely new ones. Deliberately much
+// longer than recheck's own ~1 hour cadence (a week, not an hour) so this
+// still periodically re-validates team/season/profile parsing and catches
+// anything recheck's own eligibility rules exclude, without undoing the
+// whole point by re-touching everything constantly.
+const CRAWL_REFRESH_STALE_DAYS = 7;
 
 /**
  * Blocks while a job's status is 'paused', re-checking on an interval.
@@ -403,7 +432,20 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     // may omit, and a site with no sitemap (getAllSitemapUrls returns
     // empty) falls back to exactly the old pure-BFS behaviour.
     const sitemapUrls = await getAllSitemapUrls(origin);
-    const newSitemapUrls = filterSitemapSeeds(sitemapUrls, origin, visited, excludePaths, seedCatalogId);
+    const candidateUrls = filterSitemapSeeds(sitemapUrls, origin, visited, excludePaths, seedCatalogId);
+
+    // Excludes anything already a known item, fetched recently enough that
+    // re-touching it here is redundant with recheckWorker.ts's own hourly
+    // stock/price pass - see CRAWL_REFRESH_STALE_DAYS for why this window
+    // is far longer than recheck's. This is the actual fix for a crawl
+    // otherwise refetching a site's entire catalog from scratch on every
+    // single run, "new items since last time" included.
+    const { rows: freshRows } = await pool.query<{ url: string }>(
+      `SELECT url FROM urls WHERE site_id = $1 AND last_fetched_at > now() - interval '${CRAWL_REFRESH_STALE_DAYS} days'`,
+      [siteId],
+    );
+    const newSitemapUrls = excludeFreshlyKnownUrls(candidateUrls, new Set(freshRows.map((r) => r.url)));
+
     if (newSitemapUrls.length > 0) {
       for (const link of newSitemapUrls) visited.add(link);
       const values: string[] = [];
@@ -418,7 +460,13 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
       );
       pendingCount += inserted.rowCount ?? 0;
       console.log(
-        `[crawlWorker] job ${jobId} seeded ${inserted.rowCount ?? 0} url(s) from ${origin}'s sitemap (${sitemapUrls.length} found, ${newSitemapUrls.length} after filtering)`,
+        `[crawlWorker] job ${jobId} seeded ${inserted.rowCount ?? 0} url(s) from ${origin}'s sitemap ` +
+          `(${sitemapUrls.length} found, ${candidateUrls.length} after filtering, ${freshRows.length} already known & skipped)`,
+      );
+    } else {
+      console.log(
+        `[crawlWorker] job ${jobId} seeded 0 new url(s) from ${origin}'s sitemap - ${sitemapUrls.length} found, ` +
+          `all already known and fetched within the last ${CRAWL_REFRESH_STALE_DAYS} days`,
       );
     }
   } else {
