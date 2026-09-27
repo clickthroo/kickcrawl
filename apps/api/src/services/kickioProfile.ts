@@ -1362,9 +1362,15 @@ export function gradeConditionText(raw: string | null | undefined, hostname?: st
     }
   }
 
-  const rating = l.match(/\b(\d{1,2})\s*\/\s*10\b/);
+  // Half-point scores (e.g. "8.5/10") are real, common seller wording -
+  // confirmed on casualfootballshirts.co.uk, which grades roughly half its
+  // catalog that way. The previous pattern only captured whole digits
+  // immediately before "/10", so "8.5/10" silently matched on just the
+  // ".5" - landing on "5/10" (Fair) instead of the correct "Very Good",
+  // a genuine two-tier misgrade, not just a missed parse.
+  const rating = l.match(/\b(\d{1,2}(?:\.\d+)?)\s*\/\s*10\b/);
   if (rating) {
-    const r = parseInt(rating[1], 10);
+    const r = parseFloat(rating[1]);
     if (r === 10) return 'Mint';
     if (r >= 8) return 'Very Good';
     if (r >= 6) return 'Good';

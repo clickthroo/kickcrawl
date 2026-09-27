@@ -1080,6 +1080,17 @@ describe('gradeConditionText', () => {
     expect(gradeConditionText('8/10 condition')).toBe('Very Good');
   });
 
+  it('grades a half-point rating correctly, not just the digit after the decimal point', () => {
+    // Real bug: "8.5/10" used to match on just the ".5", landing on "5/10"
+    // (Fair) instead of the correct "Very Good" - confirmed live on
+    // casualfootballshirts.co.uk, which grades much of its catalog this way.
+    expect(gradeConditionText('Condition: 8.5/10')).toBe('Very Good');
+    expect(gradeConditionText('6.5/10')).toBe('Good');
+    expect(gradeConditionText('4.5/10')).toBe('Fair');
+    expect(gradeConditionText('9.9/10')).toBe('Very Good');
+    expect(gradeConditionText('10.0/10')).toBe('Mint');
+  });
+
   it('recognises condition shorthand', () => {
     expect(gradeConditionText('BNWT')).toBe('Brand New (With Tags)');
     expect(gradeConditionText('new without tags')).toBe('Mint');
