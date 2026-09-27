@@ -6,6 +6,7 @@ import { htmlToMarkdown } from '../services/markdown.js';
 import { extractLinks } from '../services/links.js';
 import { extractBySelectors, type SelectorMap } from '../services/extractor.js';
 import { extractStructuredProductData } from '../services/structuredData.js';
+import { withQueryParam, stripQueryParam } from './queryParams.js';
 import type { SiteConfig } from './siteResolver.js';
 
 export type ScrapeFormat = 'markdown' | 'html' | 'links' | 'screenshot';
@@ -49,7 +50,21 @@ export async function scrapePage(
   const useBrowser = opts.useBrowser ?? site?.use_browser_default ?? false;
   const waitFor = opts.waitFor ?? (useBrowser ? DEFAULT_BROWSER_WAIT_MS : 0);
 
-  const result = await fetchPage(url, {
+  // Some sites (Shopify Markets and similar geo-pricing setups) pick a
+  // visitor's currency by the request's own perceived location, with
+  // nothing pinning it to the site's "real" currency otherwise - confirmed
+  // on casualfootballshirts.co.uk, where this app's own outbound requests
+  // were served genuine US-market pricing (USD, ~50% off the true GBP
+  // price) with no session/cookie carried between our stateless per-page
+  // fetches to ever correct it. `?currency=<code>` is Shopify's own
+  // supported override and reliably pins the market regardless of
+  // requester geolocation. Applied only to the outbound fetch URL, never
+  // to what this function reports back as the page's URL (below) - the
+  // override must never leak into a stored/canonical URL, since nothing
+  // else (sitemap lastmod matching, dedup, admin links) expects it there.
+  const fetchUrl = site?.currency_override ? withQueryParam(url, 'currency', site.currency_override) : url;
+
+  const result = await fetchPage(fetchUrl, {
     useBrowser,
     waitFor,
     proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
@@ -77,12 +92,16 @@ export async function scrapePage(
   // blocked request.
   let finalResult = result;
   if (result.blocked) {
-    finalResult = await fetchPage(url, {
+    finalResult = await fetchPage(fetchUrl, {
       useBrowser: true,
       waitFor: opts.waitFor ?? DEFAULT_BROWSER_WAIT_MS,
       proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
       rateLimitRps: site?.rate_limit_rps,
     });
+  }
+
+  if (site?.currency_override) {
+    finalResult = { ...finalResult, finalUrl: stripQueryParam(finalResult.finalUrl, 'currency') };
   }
 
   // Still blocked after the retry - report it as the failure it is rather

@@ -85,6 +85,72 @@ describe('scrapePage - default waitFor for browser-rendered pages', () => {
   });
 });
 
+describe('scrapePage - currency_override pins a site\'s geo-priced currency', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  const siteWithOverride = {
+    id: 's1',
+    name: 'Site',
+    base_url: 'https://example.com',
+    rate_limit_rps: 1,
+    max_depth: 2,
+    use_browser_default: false,
+    use_proxy: false,
+    default_selectors: {},
+    allowed_paths: [],
+    denied_paths: [],
+    is_active: true,
+    require_pro_seller: false,
+    min_seller_feedback: null,
+    currency_override: 'GBP',
+  } as never;
+
+  it('appends ?currency=<override> to the outbound fetch URL', async () => {
+    const fetchPage = fetchPageMock();
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    await scrapePage('https://example.com/products/foo', {}, siteWithOverride);
+
+    expect(fetchPage).toHaveBeenCalledWith(
+      'https://example.com/products/foo?currency=GBP',
+      expect.anything(),
+    );
+  });
+
+  it('does not leak the override into the reported sourceURL - it must stay the clean, canonical url', async () => {
+    const fetchPage = vi.fn(async () => ({
+      html: SIMPLE_HTML,
+      statusCode: 200,
+      usedBrowser: false,
+      // Shopify echoes the query param straight back when there's no
+      // separate redirect - finalUrl is exactly what real fetcher.ts
+      // would report for this case.
+      finalUrl: 'https://example.com/products/foo?currency=GBP',
+      blocked: false,
+    }));
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage('https://example.com/products/foo', {}, siteWithOverride);
+
+    expect(result.metadata.sourceURL).toBe('https://example.com/products/foo');
+  });
+
+  it('leaves the fetch URL untouched for a site with no override', async () => {
+    const fetchPage = fetchPageMock();
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    await scrapePage('https://example.com/products/foo', {}, null);
+
+    expect(fetchPage).toHaveBeenCalledWith('https://example.com/products/foo', expect.anything());
+  });
+});
+
 describe('scrapePage - retries a blocked fetch through a fresh browser session', () => {
   beforeEach(() => {
     vi.resetModules();

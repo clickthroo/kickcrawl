@@ -288,6 +288,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
         is_active: row.is_active,
         require_pro_seller: row.require_pro_seller,
         min_seller_feedback: row.min_seller_feedback,
+        currency_override: row.currency_override,
       },
     );
 

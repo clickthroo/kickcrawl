@@ -206,6 +206,7 @@ describe('recheckSite', () => {
     is_active: true,
     require_pro_seller: true,
     min_seller_feedback: null,
+    currency_override: null,
   };
 
   const recheckableItem = {
