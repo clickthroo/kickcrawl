@@ -2,16 +2,9 @@ import { Worker } from 'bullmq';
 import { redisConnection, kickioSyncQueue } from '../queue.js';
 import { pool } from '../db.js';
 import { createJob, failJob } from '../lib/jobRecords.js';
-import { isKickioSyncConfigured, syncSaleToKickio, type SaleForSync } from '../lib/kickioSync.js';
+import { isKickioSyncConfigured, syncAndPersistOutcome, MAX_SYNC_ATTEMPTS, type SaleForSync } from '../lib/kickioSync.js';
 
 export const KICKIO_SYNC_INTERVAL_MS = 60 * 60 * 1000;
-
-// A row that keeps failing (Kickio down, or a permanent hold like "no
-// team match") stops being retried after this many attempts rather than
-// being hammered every hour forever - same shape as crawl_frontier's own
-// MAX_FRONTIER_ATTEMPTS. Left in place (kickio_synced_at stays null) for
-// manual follow-up rather than silently dropped.
-const MAX_SYNC_ATTEMPTS = 5;
 
 interface Progress {
   checked: number;
@@ -20,32 +13,20 @@ interface Progress {
   errors: string[];
 }
 
+// A row that keeps failing (Kickio down, or a permanent hold like "no
+// team match") stops being auto-retried after MAX_SYNC_ATTEMPTS rather
+// than being hammered every hour forever - same shape as crawl_frontier's
+// own MAX_FRONTIER_ATTEMPTS. Left in place (kickio_synced_at stays null)
+// for manual follow-up, not silently dropped - the admin Sales page shows
+// these as "Stuck" with a Retry button (routes/admin/sales.ts), which is
+// the actual manual-follow-up path this comment used to only promise.
 async function recordOutcome(sale: SaleForSync, progress: Progress): Promise<void> {
-  try {
-    const outcome = await syncSaleToKickio(sale);
-    if (outcome.success) {
-      await pool.query(
-        `UPDATE sales SET kickio_synced_at = now(), kickio_product_id = $2, kickio_sale_id = $3,
-           kickio_sync_action = $4, kickio_sync_error = NULL WHERE id = $1`,
-        [sale.id, outcome.productId ?? null, outcome.saleId ?? null, outcome.action ?? null],
-      );
-      progress.synced += 1;
-    } else {
-      await pool.query(
-        `UPDATE sales SET kickio_sync_attempts = kickio_sync_attempts + 1, kickio_sync_error = $2 WHERE id = $1`,
-        [sale.id, outcome.error ?? 'unknown error'],
-      );
-      progress.held += 1;
-      progress.errors.push(`${sale.id}: ${outcome.error ?? 'unknown error'}`);
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await pool.query(
-      `UPDATE sales SET kickio_sync_attempts = kickio_sync_attempts + 1, kickio_sync_error = $2 WHERE id = $1`,
-      [sale.id, message],
-    );
-    progress.errors.push(`${sale.id}: ${message}`);
-    console.error(`[kickioSyncWorker] sale ${sale.id} sync threw:`, message);
+  const outcome = await syncAndPersistOutcome(sale);
+  if (outcome.success) {
+    progress.synced += 1;
+  } else {
+    progress.held += 1;
+    progress.errors.push(`${sale.id}: ${outcome.error ?? 'unknown error'}`);
   }
 }
 
