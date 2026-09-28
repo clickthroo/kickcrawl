@@ -177,6 +177,35 @@ describe('POST /api/admin/sales/:id/retry-kickio-sync', () => {
   });
 });
 
+describe('POST /api/admin/sales/retry-all-kickio-sync', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/middleware/adminAuth.js');
+    vi.doUnmock('../src/workers/kickioSyncWorker.js');
+  });
+
+  it('queues the recovery sweep and answers immediately, without waiting for it to finish', async () => {
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    const enqueueKickioSyncRecoverySweep = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../src/workers/kickioSyncWorker.js', () => ({ enqueueKickioSyncRecoverySweep }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/retry-all-kickio-sync' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ success: true });
+    expect(enqueueKickioSyncRecoverySweep).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+});
+
 describe('POST /api/admin/sales/:id/set-team', () => {
   beforeEach(() => {
     vi.resetModules();

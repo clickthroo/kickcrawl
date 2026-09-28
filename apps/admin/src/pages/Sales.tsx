@@ -68,6 +68,8 @@ export default function Sales() {
   const [error, setError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [kickioTeamNames, setKickioTeamNames] = useState<string[]>([]);
+  const [retryingAll, setRetryingAll] = useState(false);
+  const [retryAllMessage, setRetryAllMessage] = useState<string | null>(null);
   const pageSize = 25;
 
   useEffect(() => {
@@ -130,6 +132,24 @@ export default function Sales() {
     }
   }
 
+  async function retryAllStuck() {
+    setRetryingAll(true);
+    setRetryAllMessage(null);
+    try {
+      // Runs as a background job (kickioSyncWorker's recovery sweep), not
+      // inline - a real backlog can take longer than an HTTP request
+      // should ever block for, so this only queues it. Progress shows up
+      // on the Jobs page like any other job; the counts here won't move
+      // until it's actually done and this page is reloaded/refetched.
+      await api.post('/admin/sales/retry-all-kickio-sync');
+      setRetryAllMessage('Queued - check the Jobs page for progress, then refresh this page once it completes.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to queue the retry-all sweep');
+    } finally {
+      setRetryingAll(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -188,9 +208,27 @@ export default function Sales() {
       </Card>
 
       {counts && counts.stuck > 0 && (
-        <ErrorBanner
-          message={`${counts.stuck} sale${counts.stuck === 1 ? '' : 's'} exceeded the automatic retry limit and stopped syncing to Kickio - filter by "Stuck" below to review and retry them.`}
-        />
+        <div className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            {counts.stuck} sale{counts.stuck === 1 ? '' : 's'} exceeded the automatic retry limit and stopped
+            syncing to Kickio - filter by "Stuck" below to review individually, or retry all of them at once
+            (e.g. after an upstream Kickio-side fix that's since resolved whatever was blocking them).
+          </span>
+          <Button
+            variant="secondary"
+            className="!min-h-0 shrink-0 !py-1.5 text-xs"
+            disabled={retryingAll}
+            onClick={retryAllStuck}
+          >
+            {retryingAll ? 'Queuing…' : 'Retry all now'}
+          </Button>
+        </div>
+      )}
+
+      {retryAllMessage && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          {retryAllMessage}
+        </div>
       )}
 
       {error && <ErrorBanner message={error} />}

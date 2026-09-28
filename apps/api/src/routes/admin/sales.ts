@@ -3,6 +3,7 @@ import { pool } from '../../db.js';
 import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { MAX_SYNC_ATTEMPTS, syncAndPersistOutcome, type SaleForSync } from '../../lib/kickioSync.js';
 import { getKickioTeams, KickioTeamsNotConfiguredError } from '../../lib/kickioTeams.js';
+import { enqueueKickioSyncRecoverySweep } from '../../workers/kickioSyncWorker.js';
 
 // A sale's Kickio sync status, derived from the same three columns every
 // time - kept as one function so the list filter, the counts breakdown,
@@ -119,6 +120,19 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
     // itself being invalid (sale not found, already synced).
     const outcome = await syncAndPersistOutcome(sale);
     return reply.send({ success: true, outcome });
+  });
+
+  // The bulk counterpart to retry-kickio-sync above, for exactly one
+  // scenario: an upstream outage (Kickio's own database, a network
+  // blip, ...) held back a whole batch of sales at once, some of which
+  // have since exceeded MAX_SYNC_ATTEMPTS and dropped out of the normal
+  // hourly sweep's reach entirely. Runs as a background job rather than
+  // inline (kickioSyncWorker.ts's enqueueKickioSyncRecoverySweep) since a
+  // real backlog can take longer than an HTTP request should ever block
+  // for - progress shows up on the Jobs page like any other job.
+  app.post('/api/admin/sales/retry-all-kickio-sync', async (_req, reply) => {
+    await enqueueKickioSyncRecoverySweep();
+    return reply.send({ success: true });
   });
 
   // Lets an admin unstick a sale whose team couldn't be confidently
