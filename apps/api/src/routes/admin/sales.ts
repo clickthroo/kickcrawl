@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db.js';
 import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { MAX_SYNC_ATTEMPTS, syncAndPersistOutcome, type SaleForSync } from '../../lib/kickioSync.js';
+import { getKickioTeams, KickioTeamsNotConfiguredError } from '../../lib/kickioTeams.js';
 
 // A sale's Kickio sync status, derived from the same three columns every
 // time - kept as one function so the list filter, the counts breakdown,
@@ -117,6 +118,63 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
     // not the HTTP status - a 4xx/5xx here is reserved for the request
     // itself being invalid (sale not found, already synced).
     const outcome = await syncAndPersistOutcome(sale);
+    return reply.send({ success: true, outcome });
+  });
+
+  // Lets an admin unstick a sale whose team couldn't be confidently
+  // guessed/matched from the listing title (identity.team_kickio_match
+  // null - the same reason retry-kickio-sync above keeps holding it).
+  // Still enforced against Kickio's own live team list, not accepted as
+  // free text - the same "never send a guess" policy matchKickioTeam()
+  // already applies automatically, just with a human doing the matching
+  // instead of the title-text heuristic.
+  app.post('/api/admin/sales/:id/set-team', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { team } = req.body as { team?: unknown };
+    if (typeof team !== 'string' || !team.trim()) {
+      return reply.code(400).send({ success: false, error: 'A team name is required' });
+    }
+
+    const { rows } = await pool.query<SaleForSync & { kickio_synced_at: string | null }>(
+      `SELECT id, url_id, price, currency, detected_at, profile, kickio_synced_at FROM sales WHERE id = $1`,
+      [id],
+    );
+    const sale = rows[0];
+    if (!sale) return reply.code(404).send({ success: false, error: 'Sale not found' });
+    if (sale.kickio_synced_at) {
+      return reply.code(400).send({ success: false, error: 'This sale has already synced to Kickio' });
+    }
+    if (!sale.profile) {
+      return reply.code(400).send({ success: false, error: 'This sale has no stored profile to attach a team to' });
+    }
+
+    let matchedTeam: string;
+    try {
+      const { teams } = await getKickioTeams();
+      const found = teams.find((t) => t.name.toLowerCase() === team.trim().toLowerCase());
+      if (!found) {
+        return reply.code(400).send({ success: false, error: 'Not a recognised Kickio team name' });
+      }
+      matchedTeam = found.name;
+    } catch (err) {
+      if (err instanceof KickioTeamsNotConfiguredError) {
+        return reply.code(501).send({ success: false, error: err.message });
+      }
+      return reply
+        .code(502)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Failed to fetch Kickio teams' });
+    }
+
+    const updatedProfile = {
+      ...sale.profile,
+      identity: { ...sale.profile.identity, team_kickio_match: matchedTeam },
+    };
+    await pool.query(`UPDATE sales SET profile = $2 WHERE id = $1`, [id, JSON.stringify(updatedProfile)]);
+
+    // Same shared sync-and-persist path as retry-kickio-sync, so setting
+    // the team also immediately attempts the send it was blocking - the
+    // admin doesn't need a second "retry" click for the common case.
+    const outcome = await syncAndPersistOutcome({ ...sale, profile: updatedProfile });
     return reply.send({ success: true, outcome });
   });
 }

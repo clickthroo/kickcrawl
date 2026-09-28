@@ -5,6 +5,58 @@ import { Badge, Button, Card, ErrorBanner, KickioProfilePanel, PageHeader, Selec
 
 type KickioStatus = '' | 'synced' | 'held' | 'stuck';
 
+const KICKIO_TEAMS_DATALIST_ID = 'kickio-teams-datalist';
+
+// A 501 from /admin/kickio-teams means KICKIO_SUPABASE_URL/ANON_KEY aren't
+// configured in this deployment - see KickioTeams.tsx's own NOT_CONFIGURED_STATUS.
+// The manual team-select feature just quietly disappears in that case, same
+// as the dedicated Kickio Teams page does, rather than showing a broken input.
+const KICKIO_NOT_CONFIGURED_STATUS = 501;
+
+/** One "set team" control for a single unsynced sale - kept as its own component so its input/submitting state doesn't leak between cards. */
+function SetTeamControl({ saleId, onDone }: { saleId: string; onDone: () => Promise<void> }) {
+  const [team, setTeam] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!team.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.post(`/admin/sales/${saleId}/set-team`, { team: team.trim() });
+      setTeam('');
+      await onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to set team');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <input
+        type="text"
+        list={KICKIO_TEAMS_DATALIST_ID}
+        value={team}
+        onChange={(e) => setTeam(e.target.value)}
+        placeholder="Set team…"
+        className="min-h-0 w-40 rounded-md border border-slate-300 px-2 py-1 text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+      />
+      <Button
+        variant="secondary"
+        className="!min-h-0 !py-1 text-xs"
+        disabled={submitting || !team.trim()}
+        onClick={submit}
+      >
+        {submitting ? 'Setting…' : 'Set team'}
+      </Button>
+      {error && <span className="text-xs text-rose-600">{error}</span>}
+    </div>
+  );
+}
+
 export default function Sales() {
   const [sites, setSites] = useState<Site[] | null>(null);
   const [sales, setSales] = useState<Sale[] | null>(null);
@@ -15,6 +67,7 @@ export default function Sales() {
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [kickioTeamNames, setKickioTeamNames] = useState<string[]>([]);
   const pageSize = 25;
 
   useEffect(() => {
@@ -22,6 +75,22 @@ export default function Sales() {
       .get<{ success: boolean; sites: Site[] }>('/admin/sites')
       .then((res) => setSites(res.sites))
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load sites'));
+  }, []);
+
+  useEffect(() => {
+    // Sourced from the same endpoint KickioTeams.tsx uses (10-min server
+    // cache, ~3000 teams) - fetched once here, at the page level, and
+    // shared by every sale card's <datalist> rather than each card
+    // fetching (or rendering thousands of <option> elements) on its own.
+    // A 501 (not configured in this deployment) just leaves the list
+    // empty - each SetTeamControl still renders, but with no suggestions.
+    api
+      .get<{ success: boolean; teams: { name: string }[] }>('/admin/kickio-teams')
+      .then((res) => setKickioTeamNames(res.teams.map((t) => t.name)))
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === KICKIO_NOT_CONFIGURED_STATUS) return;
+        // Non-fatal - the retry/status UI still works without team names to suggest.
+      });
   }, []);
 
   const loadSales = useCallback(() => {
@@ -65,6 +134,16 @@ export default function Sales() {
 
   return (
     <div className="space-y-4">
+      {/* Shared by every SetTeamControl below - a single list of ~3000
+          <option>s rendered once at the page level, not per sale card,
+          which would otherwise multiply into a real DOM-performance
+          problem on a page of 25 sales. */}
+      <datalist id={KICKIO_TEAMS_DATALIST_ID}>
+        {kickioTeamNames.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+
       <PageHeader
         title="Sales"
         subtitle="Items detected as sold - flipped from In Stock to Out of Stock on a scheduled recheck"
@@ -176,14 +255,17 @@ export default function Sales() {
                     {s.kickio_sync_error && <span className="text-slate-500"> — {s.kickio_sync_error}</span>}
                     <span className="text-slate-400"> ({s.kickio_sync_attempts} attempt{s.kickio_sync_attempts === 1 ? '' : 's'})</span>
                   </div>
-                  <Button
-                    variant="secondary"
-                    className="!min-h-0 !py-1 text-xs"
-                    disabled={retryingId === s.id}
-                    onClick={() => retrySync(s.id)}
-                  >
-                    {retryingId === s.id ? 'Retrying…' : 'Retry now'}
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {kickioTeamNames.length > 0 && <SetTeamControl saleId={s.id} onDone={loadSales} />}
+                    <Button
+                      variant="secondary"
+                      className="!min-h-0 !py-1 text-xs"
+                      disabled={retryingId === s.id}
+                      onClick={() => retrySync(s.id)}
+                    >
+                      {retryingId === s.id ? 'Retrying…' : 'Retry now'}
+                    </Button>
+                  </div>
                 </div>
               )}
 

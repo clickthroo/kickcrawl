@@ -176,3 +176,201 @@ describe('POST /api/admin/sales/:id/retry-kickio-sync', () => {
     await app.close();
   });
 });
+
+describe('POST /api/admin/sales/:id/set-team', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/db.js');
+    vi.doUnmock('../src/middleware/adminAuth.js');
+    vi.doUnmock('../src/lib/kickioSync.js');
+    vi.doUnmock('../src/lib/kickioTeams.js');
+  });
+
+  const TEAMS = [{ name: 'Manchester City', slug: 'manchester-city', country: 'England' }];
+
+  it('rejects a missing/blank team', async () => {
+    vi.doMock('../src/db.js', () => ({ pool: { query: vi.fn() } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/sale-1/set-team', payload: { team: '  ' } });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/team name is required/i);
+    await app.close();
+  });
+
+  it('404s for an unknown sale', async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/sales/missing/set-team',
+      payload: { team: 'Manchester City' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('refuses a sale that has already synced', async () => {
+    const query = vi.fn(async () => ({ rows: [{ id: 'sale-1', kickio_synced_at: '2026-09-27T00:00:00Z' }] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/sales/sale-1/set-team',
+      payload: { team: 'Manchester City' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/already synced/i);
+    await app.close();
+  });
+
+  it('refuses a sale with no stored profile at all', async () => {
+    const query = vi.fn(async () => ({ rows: [{ id: 'sale-1', kickio_synced_at: null, profile: null }] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/sales/sale-1/set-team',
+      payload: { team: 'Manchester City' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/no stored profile/i);
+    await app.close();
+  });
+
+  it('rejects a team name that is not a real Kickio team, rather than writing it through as a guess', async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ id: 'sale-1', kickio_synced_at: null, profile: { identity: { team_kickio_match: null } } }],
+    }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    vi.doMock('../src/lib/kickioTeams.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/lib/kickioTeams.js')>();
+      return { ...actual, getKickioTeams: vi.fn(async () => ({ teams: TEAMS, fetchedAt: Date.now(), stale: false })) };
+    });
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/sales/sale-1/set-team',
+      payload: { team: 'Not A Real Team' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/not a recognised kickio team/i);
+    // Never even reaches the UPDATE - only the initial SELECT ran.
+    expect(query).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('answers 501 when Kickio team matching is not configured in this deployment', async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ id: 'sale-1', kickio_synced_at: null, profile: { identity: { team_kickio_match: null } } }],
+    }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    vi.doMock('../src/lib/kickioTeams.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/lib/kickioTeams.js')>();
+      return {
+        ...actual,
+        getKickioTeams: vi.fn(async () => {
+          throw new actual.KickioTeamsNotConfiguredError();
+        }),
+      };
+    });
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/sales/sale-1/set-team',
+      payload: { team: 'Manchester City' },
+    });
+    expect(res.statusCode).toBe(501);
+    await app.close();
+  });
+
+  it('accepts a case-insensitive match, persists the canonical name, and immediately attempts a sync', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id, url_id')) {
+        return {
+          rows: [
+            {
+              id: 'sale-1',
+              url_id: 'url-1',
+              price: 10,
+              currency: 'GBP',
+              detected_at: '2026-09-27T00:00:00Z',
+              kickio_synced_at: null,
+              profile: { identity: { team_kickio_match: null } },
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    vi.doMock('../src/lib/kickioTeams.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/lib/kickioTeams.js')>();
+      return { ...actual, getKickioTeams: vi.fn(async () => ({ teams: TEAMS, fetchedAt: Date.now(), stale: false })) };
+    });
+    const syncAndPersistOutcome = vi.fn(async () => ({ success: true, productId: 'p1', saleId: 's1', action: 'insert' }));
+    vi.doMock('../src/lib/kickioSync.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/lib/kickioSync.js')>();
+      return { ...actual, syncAndPersistOutcome };
+    });
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/sales/sale-1/set-team',
+      payload: { team: 'manchester city' },
+    });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.outcome).toEqual({ success: true, productId: 'p1', saleId: 's1', action: 'insert' });
+
+    const updateCall = query.mock.calls.find(([sql]) => (sql as string).includes('UPDATE sales SET profile'));
+    expect(updateCall).toBeTruthy();
+    const persistedProfile = JSON.parse(updateCall![1][1]);
+    expect(persistedProfile.identity.team_kickio_match).toBe('Manchester City');
+
+    expect(syncAndPersistOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sale-1', profile: expect.objectContaining({ identity: expect.objectContaining({ team_kickio_match: 'Manchester City' }) }) }),
+    );
+    await app.close();
+  });
+});
