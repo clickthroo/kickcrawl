@@ -363,6 +363,28 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('2021-22 Wolves Castore Third Shirt Neto #7')).toBe('Wolves');
   });
 
+  it('strips a leading "#<number> <player name>" span, not just the reverse order', () => {
+    // Real title from a live casualfootballshirts.co.uk listing that came
+    // back as "Real Madrid Benzema" - this retailer writes the marked
+    // number BEFORE the player name ("#9 Benzema"), the opposite
+    // convention from every other retailer already covered above, and
+    // nothing stripped the trailing name in that direction at all.
+    expect(guessTeamFromTitle('2022/23 Real Madrid Home Football Shirt (S) Adidas #9 Benzema')).toBe('Real Madrid');
+  });
+
+  it('does not read a manufacturer sitting right before a marked number as the player name to strip', () => {
+    // The actual root cause behind the Real Madrid case above: "Adidas"
+    // sat immediately before "#9" with nothing else between them, so the
+    // existing (pre-fix) before-# strip read "Adidas" as if it WERE the
+    // player name and consumed "Adidas #9" whole - leaving "Benzema"
+    // behind with no "#9" left for the after-# strip to anchor on. Every
+    // known manufacturer is now excluded from both strips the same way
+    // kit words already were. ("Nike" at the front is stripped by this
+    // function's separate leading-manufacturer handling, unrelated to
+    // this fix - included here as a real title shape, not to test that.)
+    expect(guessTeamFromTitle('Nike Real Madrid Home Shirt Adidas #9 Benzema')).toBe('Real Madrid');
+  });
+
   it("strips a manufacturer's casualwear product line and garment-type words, not just shirt-specific ones", () => {
     // Real title from a live listing: "Team: Manchester United Essentials
     // 1/4 Zip Sweatshirt" - "Essentials" is adidas's own product-line name
@@ -967,6 +989,47 @@ describe('extractPlayerNameFromTitle', () => {
     // empties the candidate straight to null here already.
     expect(extractPlayerNameFromTitle('1988-90 England Goalkeeper Shirt #1 M')).toBe('England');
     expect(extractPlayerNameFromTitle('2000-01 Everton Goalkeeper Shirt White #1 M')).toBeNull();
+  });
+
+  it('reads a name written AFTER a marked number, not just before it - confirmed as casualfootballshirts.co.uk\'s own convention', () => {
+    // Real title from a live listing: "before" finds nothing usable
+    // (the word right before "#9" is the manufacturer, excluded - see the
+    // next test), so this falls through to check after the marker instead.
+    expect(extractPlayerNameFromTitle('2022/23 Real Madrid Home Football Shirt (S) Adidas #9 Benzema')).toBe(
+      'Benzema',
+    );
+  });
+
+  it('still prefers a name before the marker when one is genuinely there, even though after-marker reading now exists', () => {
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt Cristiano Ronaldo #7 Adidas')).toBe('Cristiano Ronaldo');
+  });
+
+  it('does not read a manufacturer sitting right before a marked number as the player name', () => {
+    // Real bug: "Adidas" sat immediately before "#9" with nothing else
+    // between them, so the existing before-marker match read it as if it
+    // WERE the player name (returning "Adidas" outright) before this
+    // function ever got a chance to look after the marker instead.
+    expect(extractPlayerNameFromTitle('2022/23 Real Madrid Home Shirt Adidas #9')).toBeNull();
+  });
+
+  it('does not read a trailing bare size code ("M", "XL", "3XL") after the marker as a player name', () => {
+    // Real title shape: "#1 M" is a goalkeeper's unqualified shirt number
+    // followed by this retailer's own trailing size letter, not a name.
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt #1 M')).toBeNull();
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt #1 XL')).toBeNull();
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt #1 3XL')).toBeNull();
+  });
+
+  it('does not let after-marker reading walk into unrelated following text', () => {
+    // The 2-word cap (tighter than the 3-word before-marker cap) matters
+    // here: real product descriptions continue past a player's name into
+    // "Teammates: Including ..." - this must never absorb "Teammates" too.
+    // Manufacturer right before the marker (as on the real listing) so
+    // "before" finds nothing and this actually exercises after-marker
+    // reading, not the before-marker path.
+    expect(
+      extractPlayerNameFromTitle('Real Madrid Home Shirt Adidas #9 Karim Benzema Teammates Modric'),
+    ).toBe('Karim Benzema');
   });
 });
 
