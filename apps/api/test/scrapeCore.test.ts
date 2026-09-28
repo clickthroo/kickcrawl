@@ -151,6 +151,60 @@ describe('scrapePage - currency_override pins a site\'s geo-priced currency', ()
   });
 });
 
+describe('scrapePage - merges structured additionalProperty fields into extracted', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  const PRODUCT_HTML = `<html><head>
+    <script type="application/ld+json">${JSON.stringify({
+      '@type': 'Product',
+      offers: { price: '44.99', priceCurrency: 'GBP' },
+      additionalProperty: [{ '@type': 'PropertyValue', name: 'Team', value: 'Manchester City' }],
+    })}</script>
+  </head><body><p>content</p></body></html>`;
+
+  it('fills extracted.Team from structured data when no selector provided one', async () => {
+    const fetchPage = vi.fn(async () => ({
+      html: PRODUCT_HTML,
+      statusCode: 200,
+      usedBrowser: false,
+      finalUrl: 'https://example.com/products/foo',
+      blocked: false,
+    }));
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage('https://example.com/products/foo', { formats: ['markdown'] }, null);
+
+    expect(result.extracted?.Team).toBe('Manchester City');
+  });
+
+  it("never overrides a site-configured selector's own team value, case-insensitively", async () => {
+    const fetchPage = vi.fn(async () => ({
+      html: PRODUCT_HTML,
+      statusCode: 200,
+      usedBrowser: false,
+      finalUrl: 'https://example.com/products/foo',
+      blocked: false,
+    }));
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+    const extractBySelectors = vi.fn(() => ({ team: 'Selector Team' }));
+    vi.doMock('../src/services/extractor.js', () => ({ extractBySelectors }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage(
+      'https://example.com/products/foo',
+      { formats: ['markdown'], selectors: { team: '.team' } },
+      null,
+    );
+
+    expect(result.extracted?.team).toBe('Selector Team');
+    expect(result.extracted?.Team).toBeUndefined();
+  });
+});
+
 describe('scrapePage - retries a blocked fetch through a fresh browser session', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -226,6 +280,7 @@ describe('scrapePage - skips the markdown/extraction pipeline when nothing needs
       availability: null,
       sku: null,
       images: [],
+      additionalProperties: {},
     }));
     vi.doMock('../src/services/mainContent.js', () => ({ getContentHtml }));
     vi.doMock('../src/services/markdown.js', () => ({ htmlToMarkdown }));

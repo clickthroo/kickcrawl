@@ -160,6 +160,19 @@ export async function scrapePage(
     if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
     if (structured.availability && !extracted.availability) extracted.availability = structured.availability;
     if (structured.sku && !extracted.sku) extracted.sku = structured.sku;
+    // Same "selector always wins" precedence as the fixed fields above -
+    // a retailer's own Product.additionalProperty (Team, Year, ...) is
+    // explicit, structured data, strictly more trustworthy than anything
+    // buildKickioProfile would otherwise have to guess from title text
+    // (see guessTeamFromTitle's own doc comment on why that's inherently
+    // ambiguous without a real field to fall back on).
+    const extractedKeysLower = new Set(Object.keys(extracted).map((k) => k.toLowerCase()));
+    for (const [key, value] of Object.entries(structured.additionalProperties)) {
+      // Case-insensitive check, not `key in extracted` - a selector-set
+      // "team" must still win over a same-page additionalProperty "Team",
+      // not sit shadowed underneath it as a second, differently-cased key.
+      if (!extractedKeysLower.has(key.toLowerCase())) extracted[key] = value;
+    }
 
     // Merge in whatever schema.org's Product.image gave us on top of the
     // og:image tags extractMetadata already found - a page can carry its
