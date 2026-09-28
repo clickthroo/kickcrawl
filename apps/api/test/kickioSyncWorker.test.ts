@@ -63,6 +63,21 @@ describe('processKickioSync', () => {
     expect(selectCall![1]).toEqual([]);
   });
 
+  it('excludes dismissed sales in both modes - a dismissal is a standing decision, not something a sweep should override', async () => {
+    const { query } = mockCommon();
+    vi.doMock('../src/lib/kickioSync.js', () => ({
+      isKickioSyncConfigured: () => true,
+      syncAndPersistOutcome: vi.fn(async () => ({ success: true })),
+      MAX_SYNC_ATTEMPTS: 5,
+    }));
+
+    const { processKickioSync } = await import('../src/workers/kickioSyncWorker.js');
+    await processKickioSync(true);
+
+    const selectCall = query.mock.calls.find(([sql]) => String(sql).includes('FROM sales'));
+    expect(String(selectCall![0])).toContain('kickio_sync_dismissed_at IS NULL');
+  });
+
   it('still skips entirely when Kickio sync is not configured, regardless of includeStuck', async () => {
     const { query } = mockCommon();
     vi.doMock('../src/lib/kickioSync.js', () => ({

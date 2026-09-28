@@ -5,15 +5,18 @@ import { MAX_SYNC_ATTEMPTS, syncAndPersistOutcome, type SaleForSync } from '../.
 import { getKickioTeams, KickioTeamsNotConfiguredError } from '../../lib/kickioTeams.js';
 import { enqueueKickioSyncRecoverySweep } from '../../workers/kickioSyncWorker.js';
 
-// A sale's Kickio sync status, derived from the same three columns every
+// A sale's Kickio sync status, derived from the same four columns every
 // time - kept as one function so the list filter, the counts breakdown,
 // and (implicitly, via MAX_SYNC_ATTEMPTS) the retry route's own "already
 // synced"/"still eligible" checks can never drift out of sync with each
-// other about what "stuck" means.
-const KICKIO_STATUS_SQL: Record<'synced' | 'held' | 'stuck', string> = {
+// other about what "stuck" (or now "dismissed") means. A dismissed sale
+// takes priority over held/stuck - once an admin has opted it out, its
+// attempt count is no longer the interesting fact about it.
+const KICKIO_STATUS_SQL: Record<'synced' | 'dismissed' | 'held' | 'stuck', string> = {
   synced: 'sa.kickio_synced_at IS NOT NULL',
-  held: `sa.kickio_synced_at IS NULL AND sa.kickio_sync_attempts < ${MAX_SYNC_ATTEMPTS}`,
-  stuck: `sa.kickio_synced_at IS NULL AND sa.kickio_sync_attempts >= ${MAX_SYNC_ATTEMPTS}`,
+  dismissed: 'sa.kickio_synced_at IS NULL AND sa.kickio_sync_dismissed_at IS NOT NULL',
+  held: `sa.kickio_synced_at IS NULL AND sa.kickio_sync_dismissed_at IS NULL AND sa.kickio_sync_attempts < ${MAX_SYNC_ATTEMPTS}`,
+  stuck: `sa.kickio_synced_at IS NULL AND sa.kickio_sync_dismissed_at IS NULL AND sa.kickio_sync_attempts >= ${MAX_SYNC_ATTEMPTS}`,
 };
 
 export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
@@ -53,6 +56,7 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
         `SELECT sa.*, s.name AS site_name, u.url,
            CASE
              WHEN ${KICKIO_STATUS_SQL.synced} THEN 'synced'
+             WHEN ${KICKIO_STATUS_SQL.dismissed} THEN 'dismissed'
              WHEN ${KICKIO_STATUS_SQL.stuck} THEN 'stuck'
              ELSE 'held'
            END AS kickio_status
@@ -69,6 +73,7 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
            count(*) FILTER (WHERE ${KICKIO_STATUS_SQL.synced}) AS synced,
            count(*) FILTER (WHERE ${KICKIO_STATUS_SQL.held}) AS held,
            count(*) FILTER (WHERE ${KICKIO_STATUS_SQL.stuck}) AS stuck,
+           count(*) FILTER (WHERE ${KICKIO_STATUS_SQL.dismissed}) AS dismissed,
            count(*) AS total
          FROM sales sa ${countsWhere}`,
         countsParams,
@@ -86,6 +91,7 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
         synced: Number(counts.synced),
         held: Number(counts.held),
         stuck: Number(counts.stuck),
+        dismissed: Number(counts.dismissed),
         total: Number(counts.total),
       },
     });
@@ -102,14 +108,22 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
   // the way an automatic one would.
   app.post('/api/admin/sales/:id/retry-kickio-sync', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { rows } = await pool.query<SaleForSync & { kickio_synced_at: string | null }>(
-      `SELECT id, url_id, price, currency, detected_at, profile, kickio_synced_at FROM sales WHERE id = $1`,
+    const { rows } = await pool.query<
+      SaleForSync & { kickio_synced_at: string | null; kickio_sync_dismissed_at: string | null }
+    >(
+      `SELECT id, url_id, price, currency, detected_at, profile, kickio_synced_at, kickio_sync_dismissed_at
+       FROM sales WHERE id = $1`,
       [id],
     );
     const sale = rows[0];
     if (!sale) return reply.code(404).send({ success: false, error: 'Sale not found' });
     if (sale.kickio_synced_at) {
       return reply.code(400).send({ success: false, error: 'This sale has already synced to Kickio' });
+    }
+    if (sale.kickio_sync_dismissed_at) {
+      return reply
+        .code(400)
+        .send({ success: false, error: 'This sale is dismissed - undismiss it first to retry' });
     }
 
     // 200 regardless of outcome.success - the retry request itself ran and
@@ -120,6 +134,39 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
     // itself being invalid (sale not found, already synced).
     const outcome = await syncAndPersistOutcome(sale);
     return reply.send({ success: true, outcome });
+  });
+
+  // Lets an admin permanently opt a sale out of Kickio sync - some
+  // listings genuinely shouldn't be sent (a one-off/novelty item, a
+  // listing whose team can never be resolved, ...), and without this the
+  // only way to make "Stuck" go away for one was to keep clicking Retry
+  // forever. Excluded from both the hourly worker and the manual
+  // "retry all" recovery sweep (kickioSyncWorker.ts) while dismissed.
+  app.post('/api/admin/sales/:id/dismiss-kickio-sync', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query<{ kickio_synced_at: string | null }>(
+      `SELECT kickio_synced_at FROM sales WHERE id = $1`,
+      [id],
+    );
+    const sale = rows[0];
+    if (!sale) return reply.code(404).send({ success: false, error: 'Sale not found' });
+    if (sale.kickio_synced_at) {
+      return reply.code(400).send({ success: false, error: 'This sale has already synced to Kickio' });
+    }
+    await pool.query(`UPDATE sales SET kickio_sync_dismissed_at = now() WHERE id = $1`, [id]);
+    return reply.send({ success: true });
+  });
+
+  // Reverses dismiss-kickio-sync - a dismissed sale goes back to "held"
+  // (or "stuck", if it had already exceeded MAX_SYNC_ATTEMPTS before being
+  // dismissed) and becomes eligible for the hourly sweep/manual retry
+  // again. Idempotent - undismissing an already-undismissed sale is a
+  // routine no-op, not an error.
+  app.post('/api/admin/sales/:id/undismiss-kickio-sync', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rowCount } = await pool.query(`UPDATE sales SET kickio_sync_dismissed_at = NULL WHERE id = $1`, [id]);
+    if (!rowCount) return reply.code(404).send({ success: false, error: 'Sale not found' });
+    return reply.send({ success: true });
   });
 
   // The bulk counterpart to retry-kickio-sync above, for exactly one
@@ -149,14 +196,22 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ success: false, error: 'A team name is required' });
     }
 
-    const { rows } = await pool.query<SaleForSync & { kickio_synced_at: string | null }>(
-      `SELECT id, url_id, price, currency, detected_at, profile, kickio_synced_at FROM sales WHERE id = $1`,
+    const { rows } = await pool.query<
+      SaleForSync & { kickio_synced_at: string | null; kickio_sync_dismissed_at: string | null }
+    >(
+      `SELECT id, url_id, price, currency, detected_at, profile, kickio_synced_at, kickio_sync_dismissed_at
+       FROM sales WHERE id = $1`,
       [id],
     );
     const sale = rows[0];
     if (!sale) return reply.code(404).send({ success: false, error: 'Sale not found' });
     if (sale.kickio_synced_at) {
       return reply.code(400).send({ success: false, error: 'This sale has already synced to Kickio' });
+    }
+    if (sale.kickio_sync_dismissed_at) {
+      return reply
+        .code(400)
+        .send({ success: false, error: 'This sale is dismissed - undismiss it first to set a team' });
     }
     if (!sale.profile) {
       return reply.code(400).send({ success: false, error: 'This sale has no stored profile to attach a team to' });

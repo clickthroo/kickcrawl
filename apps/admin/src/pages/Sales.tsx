@@ -3,7 +3,7 @@ import { api, ApiError } from '../lib/api';
 import type { KickioSyncCounts, Sale, Site } from '../lib/types';
 import { Badge, Button, Card, ErrorBanner, KickioProfilePanel, PageHeader, Select, Spinner, Thumbnail } from '../components/ui';
 
-type KickioStatus = '' | 'synced' | 'held' | 'stuck';
+type KickioStatus = '' | 'synced' | 'held' | 'stuck' | 'dismissed';
 
 const KICKIO_TEAMS_DATALIST_ID = 'kickio-teams-datalist';
 
@@ -67,6 +67,7 @@ export default function Sales() {
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [dismissingId, setDismissingId] = useState<string | null>(null);
   const [kickioTeamNames, setKickioTeamNames] = useState<string[]>([]);
   const [retryingAll, setRetryingAll] = useState(false);
   const [retryAllMessage, setRetryAllMessage] = useState<string | null>(null);
@@ -128,6 +129,33 @@ export default function Sales() {
       setError(err instanceof ApiError ? err.message : 'Retry failed');
     } finally {
       setRetryingId(null);
+      await loadSales();
+    }
+  }
+
+  async function dismissSale(saleId: string) {
+    setDismissingId(saleId);
+    try {
+      // Excludes the sale from both the hourly worker and the manual
+      // "retry all" recovery sweep going forward - a standing decision,
+      // not a one-off skip, so it persists until explicitly undone.
+      await api.post(`/admin/sales/${saleId}/dismiss-kickio-sync`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to dismiss');
+    } finally {
+      setDismissingId(null);
+      await loadSales();
+    }
+  }
+
+  async function undismissSale(saleId: string) {
+    setDismissingId(saleId);
+    try {
+      await api.post(`/admin/sales/${saleId}/undismiss-kickio-sync`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to undismiss');
+    } finally {
+      setDismissingId(null);
       await loadSales();
     }
   }
@@ -201,6 +229,7 @@ export default function Sales() {
               <option value="synced">Synced{counts ? ` (${counts.synced})` : ''}</option>
               <option value="held">Held{counts ? ` (${counts.held})` : ''}</option>
               <option value="stuck">Stuck{counts ? ` (${counts.stuck})` : ''}</option>
+              <option value="dismissed">Dismissed{counts ? ` (${counts.dismissed})` : ''}</option>
             </Select>
           </div>
         </div>
@@ -282,11 +311,15 @@ export default function Sales() {
 
               {/* Not shown at all once synced - kickio_sync_error is
                   cleared on success, so a synced sale has nothing to
-                  explain here. A held/stuck one shows exactly why Kickio
-                  hasn't received it and how many hourly attempts it's had,
-                  plus a way to try again right now instead of waiting for
-                  (or, once stuck, never getting) the next automatic cycle. */}
-              {!s.kickio_synced_at && (
+                  explain here. A dismissed one gets its own quieter panel
+                  (below) - Retry/Set team don't apply to something an
+                  admin has deliberately opted out of. A held/stuck one
+                  shows exactly why Kickio hasn't received it and how many
+                  hourly attempts it's had, plus a way to try again right
+                  now instead of waiting for (or, once stuck, never
+                  getting) the next automatic cycle, and a way to opt it
+                  out entirely if it just shouldn't be sent at all. */}
+              {!s.kickio_synced_at && !s.kickio_sync_dismissed_at && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   <div className="min-w-0">
                     <span className="font-medium text-slate-700">Not synced to Kickio</span>
@@ -303,7 +336,33 @@ export default function Sales() {
                     >
                       {retryingId === s.id ? 'Retrying…' : 'Retry now'}
                     </Button>
+                    <Button
+                      variant="secondary"
+                      className="!min-h-0 !py-1 text-xs text-slate-500"
+                      disabled={dismissingId === s.id}
+                      onClick={() => dismissSale(s.id)}
+                    >
+                      {dismissingId === s.id ? 'Dismissing…' : 'Dismiss'}
+                    </Button>
                   </div>
+                </div>
+              )}
+
+              {s.kickio_sync_dismissed_at && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <div className="min-w-0">
+                    <span className="font-medium text-slate-700">Dismissed</span>
+                    <span className="text-slate-500"> — excluded from Kickio sync</span>
+                    <span className="text-slate-400"> (since {new Date(s.kickio_sync_dismissed_at).toLocaleString()})</span>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="!min-h-0 !py-1 text-xs"
+                    disabled={dismissingId === s.id}
+                    onClick={() => undismissSale(s.id)}
+                  >
+                    {dismissingId === s.id ? 'Undismissing…' : 'Undismiss'}
+                  </Button>
                 </div>
               )}
 

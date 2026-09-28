@@ -16,9 +16,9 @@ describe('GET /api/admin/sales', () => {
   it('includes each sale\'s computed kickio_status and a sync-status breakdown', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('count(*) FILTER')) {
-        return { rows: [{ synced: '3', held: '2', stuck: '1', total: '6' }] };
+        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', total: '7' }] };
       }
-      if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '6' }] };
+      if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '7' }] };
       return { rows: [{ id: 'sale-1', kickio_status: 'held' }] };
     });
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
@@ -33,14 +33,14 @@ describe('GET /api/admin/sales', () => {
 
     expect(res.statusCode).toBe(200);
     expect(body.sales[0].kickio_status).toBe('held');
-    expect(body.kickioCounts).toEqual({ synced: 3, held: 2, stuck: 1, total: 6 });
+    expect(body.kickioCounts).toEqual({ synced: 3, held: 2, stuck: 1, dismissed: 1, total: 7 });
     await app.close();
   });
 
   it('filters by kickio_status without changing the counts breakdown', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('count(*) FILTER')) {
-        return { rows: [{ synced: '3', held: '2', stuck: '1', total: '6' }] };
+        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', total: '7' }] };
       }
       if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '1' }] };
       return { rows: [] };
@@ -61,13 +61,40 @@ describe('GET /api/admin/sales', () => {
     expect(listCall?.[0]).toContain('kickio_sync_attempts >=');
     // ...but the breakdown itself still reflects the whole (unfiltered-by-status) set.
     expect(body.kickioCounts.stuck).toBe(1);
-    expect(body.kickioCounts.total).toBe(6);
+    expect(body.kickioCounts.total).toBe(7);
+    await app.close();
+  });
+
+  it('filters by dismissed status, distinct from stuck/held', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('count(*) FILTER')) {
+        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', total: '7' }] };
+      }
+      if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '1' }] };
+      return { rows: [{ id: 'sale-2', kickio_status: 'dismissed' }] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'GET', url: '/api/admin/sales?kickio_status=dismissed' });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.sales[0].kickio_status).toBe('dismissed');
+    const listCall = query.mock.calls.find(([sql]) => (sql as string).includes('FROM sales sa\n'));
+    expect(listCall?.[0]).toContain('kickio_sync_dismissed_at IS NOT NULL');
     await app.close();
   });
 
   it('rejects an invalid kickio_status rather than building bad SQL from it', async () => {
     const query = vi.fn(async (sql: string) => {
-      if (sql.includes('count(*) FILTER')) return { rows: [{ synced: '0', held: '0', stuck: '0', total: '0' }] };
+      if (sql.includes('count(*) FILTER')) {
+        return { rows: [{ synced: '0', held: '0', stuck: '0', dismissed: '0', total: '0' }] };
+      }
       if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '0' }] };
       return { rows: [] };
     });
@@ -175,6 +202,127 @@ describe('POST /api/admin/sales/:id/retry-kickio-sync', () => {
     expect(body.outcome).toEqual({ success: true, productId: 'p1', saleId: 's1', action: 'insert' });
     await app.close();
   });
+
+  it('refuses to retry a dismissed sale', async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ id: 'sale-1', kickio_synced_at: null, kickio_sync_dismissed_at: '2026-09-28T00:00:00Z' }],
+    }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/sale-1/retry-kickio-sync' });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/dismissed/i);
+    await app.close();
+  });
+});
+
+describe('POST /api/admin/sales/:id/dismiss-kickio-sync', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/db.js');
+    vi.doUnmock('../src/middleware/adminAuth.js');
+  });
+
+  it('404s for an unknown sale', async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/missing/dismiss-kickio-sync' });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('refuses to dismiss a sale that has already synced', async () => {
+    const query = vi.fn(async () => ({ rows: [{ kickio_synced_at: '2026-09-27T00:00:00Z' }] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/sale-1/dismiss-kickio-sync' });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/already synced/i);
+    await app.close();
+  });
+
+  it('marks the sale dismissed', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT kickio_synced_at')) return { rows: [{ kickio_synced_at: null }] };
+      return { rows: [] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/sale-1/dismiss-kickio-sync' });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ success: true });
+
+    const updateCall = query.mock.calls.find(([sql]) => (sql as string).includes('kickio_sync_dismissed_at = now()'));
+    expect(updateCall?.[1]).toEqual(['sale-1']);
+    await app.close();
+  });
+});
+
+describe('POST /api/admin/sales/:id/undismiss-kickio-sync', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/db.js');
+    vi.doUnmock('../src/middleware/adminAuth.js');
+  });
+
+  it('404s for an unknown sale', async () => {
+    const query = vi.fn(async () => ({ rowCount: 0 }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/missing/undismiss-kickio-sync' });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('clears the dismissal', async () => {
+    const query = vi.fn(async () => ({ rowCount: 1 }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/sales/sale-1/undismiss-kickio-sync' });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ success: true });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('kickio_sync_dismissed_at = NULL'), ['sale-1']);
+    await app.close();
+  });
 });
 
 describe('POST /api/admin/sales/retry-all-kickio-sync', () => {
@@ -269,6 +417,27 @@ describe('POST /api/admin/sales/:id/set-team', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error).toMatch(/already synced/i);
+    await app.close();
+  });
+
+  it('refuses to set a team on a dismissed sale', async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ id: 'sale-1', kickio_synced_at: null, kickio_sync_dismissed_at: '2026-09-28T00:00:00Z' }],
+    }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/sales/sale-1/set-team',
+      payload: { team: 'Manchester City' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/dismissed/i);
     await app.close();
   });
 

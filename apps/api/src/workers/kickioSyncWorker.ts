@@ -53,15 +53,19 @@ export async function processKickioSync(includeStuck = false): Promise<void> {
     // normal hourly run never passes this - it must keep respecting
     // MAX_SYNC_ATTEMPTS so a row that's failing for a real, ongoing reason
     // doesn't get hammered forever.
+    // kickio_sync_dismissed_at IS NULL excludes anything an admin has
+    // deliberately opted out of syncing (routes/admin/sales.ts's
+    // dismiss-kickio-sync) - in both modes, since a dismissal is a
+    // standing decision, not something a recovery sweep should override.
     const { rows } = await pool.query<SaleForSync & { kickio_sync_attempts: number }>(
       includeStuck
         ? `SELECT id, url_id, price, currency, detected_at, profile, kickio_sync_attempts
            FROM sales
-           WHERE kickio_synced_at IS NULL
+           WHERE kickio_synced_at IS NULL AND kickio_sync_dismissed_at IS NULL
            ORDER BY detected_at ASC`
         : `SELECT id, url_id, price, currency, detected_at, profile, kickio_sync_attempts
            FROM sales
-           WHERE kickio_synced_at IS NULL AND kickio_sync_attempts < $1
+           WHERE kickio_synced_at IS NULL AND kickio_sync_dismissed_at IS NULL AND kickio_sync_attempts < $1
            ORDER BY detected_at ASC`,
       includeStuck ? [] : [MAX_SYNC_ATTEMPTS],
     );
