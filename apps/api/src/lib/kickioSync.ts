@@ -120,6 +120,15 @@ function buildPayloads(
     colour: profile.listing.colour,
     image_url: profile.listing.images[0] ?? null,
     extra_seasons: profile.identity.extra_seasons,
+    // The original listing page, exactly as scraped - not re-derived from
+    // anything that could drift (the source site's URL can outlive its own
+    // page: this is the same snapshot kept in sales.profile.source.url even
+    // after the page later changes or 404s). Lets a Kickio reviewer open
+    // the real listing to eyeball a KickCrawl-sourced team/season/etc guess
+    // against it, particularly team_kickio_match, which is never a
+    // certainty beyond "best available match" - see that field's own doc
+    // comment above.
+    source_url: profile.source.url,
   };
 
   const saleRpc = {

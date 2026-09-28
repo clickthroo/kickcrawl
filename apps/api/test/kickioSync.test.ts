@@ -137,6 +137,10 @@ describe('syncSaleToKickio', () => {
     expect(productBody.p.id).toBe('url-1');
     expect(productBody.p.team).toBe('Manchester United'); // team_kickio_match, not a raw guess
     expect(productBody.p.image_url).toBe('https://www.vintagefootballshirts.com/img/shirt.jpg');
+    // The original listing page, so a Kickio reviewer can check a
+    // KickCrawl-sourced team match (or any other guessed field) against
+    // the real source - see source_url's own comment in buildPayloads().
+    expect(productBody.p.source_url).toBe('https://www.vintagefootballshirts.com/products/man-utd-2012-13-away');
 
     const [saleUrl, saleInit] = fetchSpy.mock.calls[1];
     expect(String(saleUrl)).toContain('/rest/v1/rpc/import_kickio_sale');
