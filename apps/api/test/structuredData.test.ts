@@ -31,6 +31,7 @@ describe('extractStructuredProductData', () => {
       availability: 'https://schema.org/InStock',
       sku: 'MUFC-9091-H',
       images: [],
+      additionalProperties: {},
     });
   });
 
@@ -69,6 +70,7 @@ describe('extractStructuredProductData', () => {
       availability: null,
       sku: null,
       images: [],
+      additionalProperties: {},
     });
   });
 
@@ -84,6 +86,7 @@ describe('extractStructuredProductData', () => {
       availability: null,
       sku: null,
       images: [],
+      additionalProperties: {},
     });
   });
 
@@ -123,6 +126,7 @@ describe('extractStructuredProductData', () => {
       availability: null,
       sku: null,
       images: [],
+      additionalProperties: {},
     });
   });
 
@@ -168,6 +172,69 @@ describe('extractStructuredProductData', () => {
     it('is empty when the Product node has no image field', () => {
       const html = pageWithJsonLd({ '@type': 'Product', offers: { price: '10.00' } });
       expect(extractStructuredProductData(cheerio.load(html)).images).toEqual([]);
+    });
+  });
+
+  describe('additionalProperties', () => {
+    it('reads Product.additionalProperty PropertyValue pairs - confirmed live on cultkits.com', () => {
+      // Real shape from a live Cult Kits product page: an explicit "Team"
+      // field, far more reliable than guessing one from the title text.
+      const html = pageWithJsonLd({
+        '@type': 'Product',
+        offers: { price: '44.99', priceCurrency: 'GBP' },
+        additionalProperty: [
+          { '@type': 'PropertyValue', name: 'Size', value: 'Small' },
+          { '@type': 'PropertyValue', name: 'Team', value: 'Manchester City' },
+          { '@type': 'PropertyValue', name: 'Year', value: '2014' },
+        ],
+      });
+
+      const result = extractStructuredProductData(cheerio.load(html));
+      expect(result.additionalProperties).toEqual({ Size: 'Small', Team: 'Manchester City', Year: '2014' });
+    });
+
+    it('coerces a numeric value to a string, the same way price/sku already are', () => {
+      const html = pageWithJsonLd({
+        '@type': 'Product',
+        offers: { price: '44.99' },
+        additionalProperty: [{ '@type': 'PropertyValue', name: 'Year', value: 2014 }],
+      });
+      expect(extractStructuredProductData(cheerio.load(html)).additionalProperties).toEqual({ Year: '2014' });
+    });
+
+    it('skips a malformed entry (missing name, or a blank value) instead of throwing', () => {
+      const html = pageWithJsonLd({
+        '@type': 'Product',
+        offers: { price: '44.99' },
+        additionalProperty: [
+          { '@type': 'PropertyValue', value: 'orphaned - no name' },
+          { '@type': 'PropertyValue', name: 'Empty', value: '' },
+          { '@type': 'PropertyValue', name: 'Team', value: 'Everton' },
+          'not even an object',
+        ],
+      });
+      expect(extractStructuredProductData(cheerio.load(html)).additionalProperties).toEqual({ Team: 'Everton' });
+    });
+
+    it('is empty when the winning Product node has no additionalProperty at all', () => {
+      const html = pageWithJsonLd({ '@type': 'Product', offers: { price: '44.99' } });
+      expect(extractStructuredProductData(cheerio.load(html)).additionalProperties).toEqual({});
+    });
+
+    it('only reads from the node that actually won the offer, not every Product node on the page', () => {
+      // The multi-Product-block risk this whole file already has to guard
+      // against elsewhere (a related-items carousel next to the real
+      // listing) - a DIFFERENT product's "Team" must never leak into this
+      // one's just because it happened to be first in the script tag.
+      const html = pageWithJsonLd([
+        { '@type': 'Product', additionalProperty: [{ name: 'Team', value: 'Wrong Team' }] }, // no price - never wins
+        {
+          '@type': 'Product',
+          offers: { price: '44.99' },
+          additionalProperty: [{ name: 'Team', value: 'Right Team' }],
+        },
+      ]);
+      expect(extractStructuredProductData(cheerio.load(html)).additionalProperties).toEqual({ Team: 'Right Team' });
     });
   });
 });

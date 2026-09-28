@@ -133,6 +133,19 @@ export interface Sale {
   /** Full Kickio profile as it was at the moment the sale was detected - null for a sale recorded before this was added. */
   profile: KickioProfile | null;
   detected_at: string;
+  kickio_synced_at: string | null;
+  kickio_sync_attempts: number;
+  kickio_sync_error: string | null;
+  kickio_sync_action: string | null;
+  /** Computed server-side (routes/admin/sales.ts) from the three columns above, so the UI never duplicates the MAX_SYNC_ATTEMPTS threshold. */
+  kickio_status: 'synced' | 'held' | 'stuck';
+}
+
+export interface KickioSyncCounts {
+  synced: number;
+  held: number;
+  stuck: number;
+  total: number;
 }
 
 export interface PriceChange {

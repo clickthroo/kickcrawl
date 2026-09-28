@@ -16,6 +16,8 @@ export interface SiteConfig {
   is_active: boolean;
   require_pro_seller: boolean;
   min_seller_feedback: number | null;
+  /** Forces this currency on every fetch to this site via a `?currency=` query param - see 020_site_currency_override.sql for why (Shopify Markets and similar geo-pricing serve a currency picked by the requester's own detected location, with nothing pinning it to what the site's "real" currency is otherwise). Null for every site that doesn't need it. */
+  currency_override: string | null;
 }
 
 /** Finds the configured site whose base_url hostname matches the given URL, if any. */

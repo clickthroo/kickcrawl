@@ -1,5 +1,15 @@
 import { config } from '../config.js';
+import { pool } from '../db.js';
 import type { KickioProfile } from '../services/kickioProfile.js';
+
+// How many hourly sync attempts a held/failing sale gets before
+// kickioSyncWorker.ts stops picking it back up automatically. Shared here
+// (not duplicated in the worker or the admin retry route) so both agree on
+// exactly when a sale counts as "stuck" rather than just "held" - the
+// admin UI needs that same threshold to flag a sale as needing manual
+// attention, and the manual retry endpoint needs it to know it's the one
+// remaining way back for a sale that's already hit the cap.
+export const MAX_SYNC_ATTEMPTS = 5;
 
 export class KickioSyncNotConfiguredError extends Error {
   constructor() {
@@ -150,4 +160,41 @@ export async function syncSaleToKickio(sale: SaleForSync): Promise<KickioSyncOut
     saleId: saleResult.sale_id,
     action: saleResult.action,
   };
+}
+
+/**
+ * Attempts one sale's sync and persists whatever happened - success,
+ * a deliberate hold, or a thrown exception all land in the same
+ * kickio_sync_attempts/kickio_sync_error columns either way. Shared by
+ * workers/kickioSyncWorker.ts's hourly sweep and the admin "retry now"
+ * route (routes/admin/sales.ts), so a manual retry updates the exact same
+ * bookkeeping an automatic one would - a sale retried by hand and then
+ * left alone still ages out via the normal MAX_SYNC_ATTEMPTS path instead
+ * of silently bypassing it.
+ */
+export async function syncAndPersistOutcome(sale: SaleForSync): Promise<KickioSyncOutcome> {
+  try {
+    const outcome = await syncSaleToKickio(sale);
+    if (outcome.success) {
+      await pool.query(
+        `UPDATE sales SET kickio_synced_at = now(), kickio_product_id = $2, kickio_sale_id = $3,
+           kickio_sync_action = $4, kickio_sync_error = NULL WHERE id = $1`,
+        [sale.id, outcome.productId ?? null, outcome.saleId ?? null, outcome.action ?? null],
+      );
+    } else {
+      await pool.query(
+        `UPDATE sales SET kickio_sync_attempts = kickio_sync_attempts + 1, kickio_sync_error = $2 WHERE id = $1`,
+        [sale.id, outcome.error ?? 'unknown error'],
+      );
+    }
+    return outcome;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await pool.query(
+      `UPDATE sales SET kickio_sync_attempts = kickio_sync_attempts + 1, kickio_sync_error = $2 WHERE id = $1`,
+      [sale.id, message],
+    );
+    console.error(`[kickioSync] sale ${sale.id} sync threw:`, message);
+    return { success: false, error: message };
+  }
 }

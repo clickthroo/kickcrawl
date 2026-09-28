@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isNewSale, isPriceChange, runWithConcurrency } from '../src/workers/recheckWorker.js';
+import {
+  isNewSale,
+  isPriceChange,
+  isUnchangedSinceLastCheck,
+  runWithConcurrency,
+  shouldForceRefetch,
+} from '../src/workers/recheckWorker.js';
 import type { SiteConfig } from '../src/lib/siteResolver.js';
 
 describe('isNewSale', () => {
@@ -65,6 +71,47 @@ describe('isPriceChange', () => {
   });
 });
 
+describe('isUnchangedSinceLastCheck', () => {
+  it('is unchanged when the stored value matches what the sitemap currently reports', () => {
+    expect(isUnchangedSinceLastCheck('2026-09-20T10:00:00Z', '2026-09-20T10:00:00Z')).toBe(true);
+  });
+
+  it('is changed when the sitemap now reports a different lastmod', () => {
+    expect(isUnchangedSinceLastCheck('2026-09-20T10:00:00Z', '2026-09-21T10:00:00Z')).toBe(false);
+  });
+
+  it('is never unchanged with nothing stored yet - a url checked for the first time always gets a real fetch', () => {
+    expect(isUnchangedSinceLastCheck(null, '2026-09-20T10:00:00Z')).toBe(false);
+  });
+
+  it('is never unchanged when the url is missing from the sitemap right now - the safe fallback, not a false positive', () => {
+    expect(isUnchangedSinceLastCheck('2026-09-20T10:00:00Z', undefined)).toBe(false);
+    expect(isUnchangedSinceLastCheck('2026-09-20T10:00:00Z', null)).toBe(false);
+  });
+
+  it('is never unchanged with nothing on either side - a site with no sitemap at all always falls through to a real fetch', () => {
+    expect(isUnchangedSinceLastCheck(null, undefined)).toBe(false);
+  });
+});
+
+describe('shouldForceRefetch', () => {
+  it('forces a refetch when nothing has ever been fetched', () => {
+    expect(shouldForceRefetch(null, new Date('2026-09-26T00:00:00Z'), 24)).toBe(true);
+  });
+
+  it('does not force a refetch when the last fetch is well within the window', () => {
+    expect(shouldForceRefetch('2026-09-25T12:00:00Z', new Date('2026-09-26T00:00:00Z'), 24)).toBe(false);
+  });
+
+  it('forces a refetch once the last fetch is at least the full window old', () => {
+    expect(shouldForceRefetch('2026-09-25T00:00:00Z', new Date('2026-09-26T00:00:00Z'), 24)).toBe(true);
+  });
+
+  it('forces a refetch well past the window, not just at the boundary', () => {
+    expect(shouldForceRefetch('2026-09-01T00:00:00Z', new Date('2026-09-26T00:00:00Z'), 24)).toBe(true);
+  });
+});
+
 describe('runWithConcurrency', () => {
   it('runs every item exactly once', async () => {
     const seen: number[] = [];
@@ -123,6 +170,15 @@ describe('runWithConcurrency', () => {
 describe('recheckSite', () => {
   beforeEach(() => {
     vi.resetModules();
+    // Every test here is about the fetch/detection path, not the sitemap-
+    // lastmod skip specifically (that has its own describe block below) -
+    // an empty sitemap is the same as "no lastmod data available", which
+    // makes isUnchangedSinceLastCheck always false and every item fall
+    // through to a real fetch, identical to how these tests behaved before
+    // that optimization existed. Mocked at this shared level (rather than
+    // in each test) mainly so nothing here ever attempts a real network
+    // fetch against baseSite's real https://www.vinted.co.uk.
+    vi.doMock('../src/services/sitemap.js', () => ({ getAllSitemapEntries: vi.fn(async () => []) }));
   });
 
   afterEach(() => {
@@ -132,6 +188,7 @@ describe('recheckSite', () => {
     vi.doUnmock('../src/lib/scrapeCore.js');
     vi.doUnmock('../src/lib/urlStore.js');
     vi.doUnmock('../src/lib/persistResult.js');
+    vi.doUnmock('../src/services/sitemap.js');
   });
 
   const baseSite: SiteConfig = {
@@ -149,6 +206,7 @@ describe('recheckSite', () => {
     is_active: true,
     require_pro_seller: true,
     min_seller_feedback: null,
+    currency_override: null,
   };
 
   const recheckableItem = {
@@ -178,7 +236,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     expect(query).toHaveBeenCalledWith('DELETE FROM urls WHERE id = $1', [recheckableItem.id]);
@@ -205,7 +263,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     const [selectSql] = query.mock.calls[0];
@@ -229,7 +287,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     const [selectSql] = query.mock.calls[0];
@@ -258,7 +316,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
 
     expect(progress.sales).toBe(1);
@@ -292,7 +350,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
 
     expect(progress.priceChanges).toBe(1);
@@ -326,7 +384,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
 
     expect(progress.priceChanges).toBe(0);
@@ -353,7 +411,7 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(siteWithoutSellerFilter, 'job-1', {}, progress);
 
     const updateCall = query.mock.calls.find(([sql]) => String(sql).includes('UPDATE urls SET'));
@@ -383,12 +441,106 @@ describe('recheckSite', () => {
     vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult }));
 
     const { recheckSite } = await import('../src/workers/recheckWorker.js');
-    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, errors: [] as string[] };
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
     await recheckSite(baseSite, 'job-1', {}, progress);
 
     expect(query).not.toHaveBeenCalledWith('DELETE FROM urls WHERE id = $1', [recheckableItem.id]);
     expect(markUrlFetched).toHaveBeenCalledWith(baseSite.id, recheckableItem.url, 200, undefined);
     expect(persistScrapeResult).toHaveBeenCalled();
+  });
+
+  it('skips the real fetch entirely when the sitemap reports the same lastmod stored from the last check', async () => {
+    // The actual point of this whole feature: no scrapePage call, no
+    // markUrlFetched, no persistScrapeResult - just counted as checked.
+    // last_fetched_at is recent, so the force-refetch safety net (below)
+    // doesn't kick in and mask what this test is actually checking.
+    const unchangedItem = {
+      ...recheckableItem,
+      sitemap_lastmod: '2026-09-20T10:00:00Z',
+      last_fetched_at: new Date().toISOString(),
+    };
+    const query = vi.fn().mockResolvedValue({ rows: [unchangedItem] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/services/sitemap.js', () => ({
+      getAllSitemapEntries: vi.fn(async () => [{ loc: unchangedItem.url, lastmod: '2026-09-20T10:00:00Z' }]),
+    }));
+    const scrapePage = vi.fn();
+    const markUrlFetched = vi.fn();
+    const persistScrapeResult = vi.fn();
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
+    await recheckSite(baseSite, 'job-1', {}, progress);
+
+    expect(scrapePage).not.toHaveBeenCalled();
+    expect(markUrlFetched).not.toHaveBeenCalled();
+    expect(persistScrapeResult).not.toHaveBeenCalled();
+    expect(progress.checked).toBe(1);
+    expect(progress.skippedViaSitemap).toBe(1);
+  });
+
+  it('still fetches for real once a day even when the sitemap keeps reporting the same lastmod - the safety net for sites whose sitemap never reflects a stock change', async () => {
+    // Same matching-lastmod setup as the "skips the real fetch" test above,
+    // but last_fetched_at is over 24h old - a sold item whose listing markup
+    // never changed still needs to be caught eventually, not skipped forever.
+    const staleItem = {
+      ...recheckableItem,
+      sitemap_lastmod: '2026-09-20T10:00:00Z',
+      last_fetched_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+    };
+    const query = vi.fn().mockResolvedValue({ rows: [staleItem] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/services/sitemap.js', () => ({
+      getAllSitemapEntries: vi.fn(async () => [{ loc: staleItem.url, lastmod: '2026-09-20T10:00:00Z' }]),
+    }));
+    const scrapePage = vi.fn(async () => ({
+      success: true,
+      markdown: '[RB Shirts](https://www.vinted.co.uk/member/1)\n[2263](https://www.vinted.co.uk/member/1)\nPro',
+      metadata: { sourceURL: staleItem.url, statusCode: 200, title: 'Sheffield Wednesday shirt', image: null },
+      extracted: {},
+    }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(staleItem.id) }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
+    await recheckSite(baseSite, 'job-1', {}, progress);
+
+    expect(scrapePage).toHaveBeenCalledOnce();
+    expect(progress.skippedViaSitemap).toBe(0);
+  });
+
+  it('fetches for real and records the new lastmod when the sitemap reports a change since the last check', async () => {
+    const changedItem = { ...recheckableItem, sitemap_lastmod: '2026-09-20T10:00:00Z' };
+    const query = vi.fn().mockResolvedValue({ rows: [changedItem] });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/services/sitemap.js', () => ({
+      // A newer lastmod than what's stored - must NOT be treated as unchanged.
+      getAllSitemapEntries: vi.fn(async () => [{ loc: changedItem.url, lastmod: '2026-09-25T10:00:00Z' }]),
+    }));
+    const scrapePage = vi.fn(async () => ({
+      success: true,
+      markdown: 'Add to Bag',
+      metadata: { sourceURL: changedItem.url, statusCode: 200, title: 'Sheffield Wednesday shirt', image: null },
+      extracted: {},
+    }));
+    vi.doMock('../src/lib/scrapeCore.js', () => ({ scrapePage }));
+    vi.doMock('../src/lib/urlStore.js', () => ({ markUrlFetched: vi.fn().mockResolvedValue(changedItem.id) }));
+    vi.doMock('../src/lib/persistResult.js', () => ({ persistScrapeResult: vi.fn() }));
+
+    const { recheckSite } = await import('../src/workers/recheckWorker.js');
+    const progress = { checked: 0, total: 0, sales: 0, priceChanges: 0, skippedViaSitemap: 0, errors: [] as string[] };
+    await recheckSite({ ...baseSite, require_pro_seller: false }, 'job-1', {}, progress);
+
+    expect(scrapePage).toHaveBeenCalledOnce();
+    expect(progress.skippedViaSitemap).toBe(0);
+    const lastmodCall = query.mock.calls.find(([sql]) => String(sql).includes('sitemap_lastmod = $2'));
+    expect(lastmodCall).toBeDefined();
+    expect(lastmodCall![1]).toEqual([changedItem.id, '2026-09-25T10:00:00Z']);
   });
 });
 

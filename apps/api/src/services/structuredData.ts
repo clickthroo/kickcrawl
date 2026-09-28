@@ -7,9 +7,21 @@ export interface StructuredProductData {
   sku: string | null;
   /** Every image found across all Product nodes, in document order - schema.org's Product.image can be a single URL, an ImageObject, or an array of either. */
   images: string[];
+  /**
+   * schema.org's Product.additionalProperty - a retailer-defined list of
+   * {name, value} pairs (PropertyValue nodes) for whatever facts don't fit
+   * the fixed Product/Offer fields above. Confirmed live on cultkits.com:
+   * "Team": "Manchester City" sits right here, explicit and unambiguous -
+   * a far more reliable source than guessTeamFromTitle's title-text
+   * heuristic, which has no way to tell a team name apart from an adjacent
+   * player name when nothing else separates them in the title. Keyed by
+   * whatever name the retailer used (kickioProfile.ts's caseInsensitiveGet
+   * already normalises case/spacing on lookup, so this doesn't need to).
+   */
+  additionalProperties: Record<string, string>;
 }
 
-type OfferData = Omit<StructuredProductData, 'images'>;
+type OfferData = Omit<StructuredProductData, 'images' | 'additionalProperties'>;
 
 const EMPTY_OFFER: OfferData = { price: null, currency: null, availability: null, sku: null };
 
@@ -67,6 +79,20 @@ function readOfferData(node: JsonLdNode): OfferData {
   };
 }
 
+/** schema.org's Product.additionalProperty is an array of PropertyValue nodes ({ name, value }) - anything malformed (not an object, no string/number value) is skipped rather than thrown on, same tolerance as the rest of this file. */
+function readAdditionalProperties(node: JsonLdNode): Record<string, string> {
+  const raw = node.additionalProperty;
+  if (!Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const name = (entry as JsonLdNode).name;
+    const value = asString((entry as JsonLdNode).value);
+    if (typeof name === 'string' && name.trim() && value) out[name.trim()] = value;
+  }
+  return out;
+}
+
 /** schema.org's Product.image is a single URL string, an ImageObject ({ url: ... }), or an array of either. */
 function readImages(node: JsonLdNode): string[] {
   const raw = node.image;
@@ -96,6 +122,11 @@ function readImages(node: JsonLdNode): string[] {
 export function extractStructuredProductData($: CheerioAPI): StructuredProductData {
   let offer: OfferData = EMPTY_OFFER;
   const images: string[] = [];
+  // From the SAME node that won the offer fields above, not merged across
+  // every Product node on the page - a page with more than one Product
+  // block (a related-items carousel alongside the real listing) must never
+  // let some OTHER product's "Team" leak into this one's.
+  let additionalProperties: Record<string, string> = {};
 
   for (const script of $('script[type="application/ld+json"]').toArray()) {
     const raw = $(script).contents().text();
@@ -114,7 +145,10 @@ export function extractStructuredProductData($: CheerioAPI): StructuredProductDa
       images.push(...readImages(product));
       if (offer.price === null) {
         const data = readOfferData(product);
-        if (data.price) offer = data;
+        if (data.price) {
+          offer = data;
+          additionalProperties = readAdditionalProperties(product);
+        }
       }
     }
   }
@@ -136,5 +170,5 @@ export function extractStructuredProductData($: CheerioAPI): StructuredProductDa
     }
   }
 
-  return { ...offer, images };
+  return { ...offer, images, additionalProperties };
 }

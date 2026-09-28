@@ -157,3 +157,68 @@ describe('syncSaleToKickio', () => {
     await expect(syncSaleToKickio(saleWithProfile())).rejects.toThrow(/import_kickio_product failed: 503/);
   });
 });
+
+describe('syncAndPersistOutcome', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../src/config.js');
+    vi.doUnmock('../src/db.js');
+  });
+
+  async function loadWithDb(configOverrides: Partial<typeof CONFIGURED> = CONFIGURED) {
+    vi.resetModules();
+    vi.doMock('../src/config.js', () => ({ config: configOverrides }));
+    const query = vi.fn(async () => ({ rows: [] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    const mod = await import('../src/lib/kickioSync.js');
+    return { ...mod, query };
+  }
+
+  it('marks the sale synced and clears any prior error on success', async () => {
+    const { syncAndPersistOutcome, query } = await loadWithDb();
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ product_id: 'product-1', matched_by: 'new', action: 'insert' }))
+      .mockResolvedValueOnce(jsonResponse({ action: 'insert', product_id: 'product-1', sale_id: 'sale-1' }));
+
+    const outcome = await syncAndPersistOutcome(saleWithProfile());
+
+    expect(outcome.success).toBe(true);
+    const update = query.mock.calls.find(([sql]) => String(sql).includes('kickio_synced_at = now()'));
+    expect(update).toBeDefined();
+    expect(update![1]).toEqual(['sale-1', 'product-1', 'sale-1', 'insert']);
+  });
+
+  it('bumps attempts and records the reason on a deliberate hold, without touching kickio_synced_at', async () => {
+    const { syncAndPersistOutcome, query } = await loadWithDb();
+    const fetchSpy = vi.spyOn(global, 'fetch');
+
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2012-13 Manchester United Nike Away Shirt *BNIB* M',
+    });
+    const outcome = await syncAndPersistOutcome(saleWithProfile({ profile }));
+
+    expect(outcome.success).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const update = query.mock.calls.find(([sql]) => String(sql).includes('kickio_sync_attempts = kickio_sync_attempts + 1'));
+    expect(update).toBeDefined();
+    expect(update![1][0]).toBe('sale-1');
+    expect(String(update![1][1])).toMatch(/no confident kickio team match/i);
+  });
+
+  it('bumps attempts and records the message when the sync call itself throws', async () => {
+    const { syncAndPersistOutcome, query } = await loadWithDb();
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+      new Response('service unavailable', { status: 503, statusText: 'Service Unavailable' }),
+    );
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const outcome = await syncAndPersistOutcome(saleWithProfile());
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toMatch(/import_kickio_product failed: 503/);
+    const update = query.mock.calls.find(([sql]) => String(sql).includes('kickio_sync_attempts = kickio_sync_attempts + 1'));
+    expect(update![1][1]).toMatch(/import_kickio_product failed: 503/);
+    expect(errorSpy).toHaveBeenCalled();
+  });
+});

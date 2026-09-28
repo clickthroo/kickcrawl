@@ -426,6 +426,18 @@ export function detectShirtType(text: string): ShirtTypeResult {
 // a fallback and is always reported as inferred, never certain).
 // =========================================================================
 
+// Words that can never be part of a real player name, for the two "player
+// name adjacent to a marked shirt number" strips below - kit/type noise
+// plus every known manufacturer (MANUFACTURERS, defined above). Confirmed
+// missing on a real listing ("...Adidas #9 Benzema"): "Adidas" sat
+// immediately before the marker with nothing else between it and the
+// number, so the existing name-before-# strip read it as if it WERE the
+// player name and consumed "Adidas #9" whole, leaving "Benzema" behind
+// attached to the team guess - and, separately, stranding the number-
+// after strip below with no "#9" left to anchor on once the first strip
+// had already consumed it.
+const TEAM_GUESS_PLAYER_NOISE = `Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Issue|Match|Player|Retail|Authentic|${MANUFACTURERS.map((m) => escapeRegex(m)).join('|')}`;
+
 export function guessTeamFromTitle(title: string): string {
   // Strip a trailing " - Site Name" or " | Site Name" suffix - common on
   // scraped page <title>s - by cutting at whichever delimiter appears
@@ -512,7 +524,25 @@ export function guessTeamFromTitle(title: string): string {
     // it before the later Match-Issue phrase strip ever got a chance to
     // see it as a whole phrase.
     .replace(
-      /\b(?:(?!(?:Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Issue|Match|Player|Retail|Authentic)\b)\p{Lu}[\p{Ll}']+\s+){0,2}(?!(?:Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Issue|Match|Player|Retail|Authentic)\b)\p{Lu}[\p{Ll}']+\s*#\d+/gu,
+      new RegExp(
+        `\\b(?:(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']+\\s+){0,2}(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']+\\s*#\\d+`,
+        'gu',
+      ),
+      '',
+    )
+    // Strip a leading "#<number> <player name>" span too - the reverse
+    // order, confirmed as this retailer's own convention on
+    // casualfootballshirts.co.uk ("...Adidas #9 Benzema", never "Benzema
+    // #9"). Bounded to at most 2 words after the "#" (tighter than the
+    // 3-word bound above, deliberately: unlike scanning backward from a
+    // number toward the start of the title, scanning forward risks running
+    // into genuinely unrelated following text - e.g. this same retailer's
+    // own product descriptions continue past a player's name into
+    // "Teammates: Including ..." on the very next line) and excludes the
+    // same kit/noise words for the same reason (an unmarked "#1 Goalkeeper
+    // Shirt" must not read "Goalkeeper" as if it were a name).
+    .replace(
+      new RegExp(`#\\d+\\s+(?:(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']+\\s*){1,2}`, 'gu'),
       '',
     )
     .replace(/#\d+/g, '');
@@ -972,6 +1002,20 @@ export function matchKickioTeam(
 const NAME_WORD = "[\\p{L}][\\p{L}'’.-]*";
 const NAME_WORDS_TAIL = new RegExp(`(?:${NAME_WORD}\\s+){0,2}${NAME_WORD}$`, 'u');
 
+// The mirror of NAME_WORDS_TAIL for a name written AFTER the marker
+// ("#9 Benzema") instead of before it ("Benzema #9") - confirmed as its
+// own retailer's standing convention on casualfootballshirts.co.uk, not a
+// one-off. Capped to 2 words rather than NAME_WORDS_TAIL's 3: unlike
+// scanning backward toward the start of a title (naturally bounded by the
+// title itself), scanning forward risks running into unrelated following
+// text - this retailer's own product descriptions continue past a
+// player's name into "Teammates: Including ..." on the next line, and
+// since \s+ matches a newline too, an uncapped version could walk straight
+// into it. Anchored to the START of the remaining text (not required to
+// reach its end), so it naturally stops at 2 words regardless of what
+// follows.
+const NAME_WORDS_HEAD = new RegExp(`^(?:${NAME_WORD}\\s+){0,1}${NAME_WORD}`, 'u');
+
 // A single-word (possibly accented, hyphenated, or apostrophised) surname
 // immediately followed by a shirt number at the very end of the text, with
 // or without a "#" - the common back-print shape a seller types out
@@ -1016,13 +1060,24 @@ function stripTrailingSizeCode(text: string): string {
 // excluded it was the only thing left over once "Goalkeeper"/"Shirt" (see
 // above) were already stripped.
 const PLAYER_NAME_NOISE_WORDS = new RegExp(
-  `\\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Goalkeeper|GK|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC|Track|Pants|Bottoms|Drill|${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`,
+  `\\b(Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Goalkeeper|GK|Football|Long Sleeve|Short Sleeve|Authentic|Retail|Player Issue|Reissue|Special|Seller|Feedback|Rated|Rating|Ratings|Reviews?|Stars?|Followers?|Utd|A?FC|Track|Pants|Bottoms|Drill|${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')}|${MANUFACTURERS.map((m) => escapeRegex(m)).join('|')})\\b`,
   'gi',
 );
+
+// A bare clothing-size letter code ("M", "XL", "3XL", ...) and nothing
+// else - confirmed on a real listing ("...Goalkeeper Shirt #1 M"): once
+// the noise-word strip above empties out everything else, a trailing size
+// letter sitting right next to the marker (the seller's own "#1 M" shape)
+// is all that's left, and without this check it reads as if "M" were the
+// player's name. Checked against the WHOLE cleaned candidate, not a
+// substring - a genuine surname that merely contains these letters (there
+// is no such single-letter surname in practice) is never at risk.
+const BARE_SIZE_CODE = /^(?:x{0,3}s|m|l|x{1,6}l|[2-6]xl)$/i;
 
 function cleanPlayerNameCandidate(raw: string): string | null {
   const cleaned = raw.trim().replace(PLAYER_NAME_NOISE_WORDS, '').trim();
   if (!cleaned || !/[A-Za-zÀ-ÿ]/.test(cleaned)) return null;
+  if (BARE_SIZE_CODE.test(cleaned)) return null;
   return cleaned;
 }
 
@@ -1070,13 +1125,15 @@ export function extractPlayerNumber(text: string): string | null {
 }
 
 export function extractPlayerNameFromTitle(text: string): string | null {
-  // A name is read off the words immediately BEFORE a marked number only -
+  // A name is read off the words immediately BEFORE a marked number first -
   // "Rooney #10" / "Ronaldo No.7", the well-established convention this
   // already handled correctly for "#". A name written AFTER the number
-  // ("#10 Rooney") is deliberately not matched: without real evidence
-  // that sellers actually write it that way, guessing at it risks
-  // preferring an unrelated word before the marker (a team abbreviation
-  // like "Utd") over ever checking after it for the real name.
+  // ("#9 Benzema") is checked next, only when nothing usable was found
+  // before it - now confirmed as its own retailer's standing convention
+  // (casualfootballshirts.co.uk writes every marked shirt number this way
+  // round, never the reverse), not a guess. "Before" still wins whenever
+  // it finds something real, so this can never override the established
+  // convention on every other site that already relies on it.
   const marked = findMarkedNumber(text);
   if (marked) {
     const before = text.slice(0, marked.index).trim().match(NAME_WORDS_TAIL);
@@ -1084,10 +1141,16 @@ export function extractPlayerNameFromTitle(text: string): string | null {
       const cleaned = cleanPlayerNameCandidate(before[0]);
       if (cleaned) return cleaned;
     }
+    const afterText = text.slice(marked.index + marked.length).trimStart();
+    const after = afterText.match(NAME_WORDS_HEAD);
+    if (after) {
+      const cleaned = cleanPlayerNameCandidate(after[0]);
+      if (cleaned) return cleaned;
+    }
   }
 
-  // No usable name before a marker - fall back to the conservative, end-
-  // anchored bare pattern (see TRAILING_NAME_NUMBER above).
+  // No usable name on either side of a marker - fall back to the
+  // conservative, end-anchored bare pattern (see TRAILING_NAME_NUMBER above).
   const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
   if (tail) {
     const cleaned = cleanPlayerNameCandidate(tail[1]);
@@ -1362,9 +1425,15 @@ export function gradeConditionText(raw: string | null | undefined, hostname?: st
     }
   }
 
-  const rating = l.match(/\b(\d{1,2})\s*\/\s*10\b/);
+  // Half-point scores (e.g. "8.5/10") are real, common seller wording -
+  // confirmed on casualfootballshirts.co.uk, which grades roughly half its
+  // catalog that way. The previous pattern only captured whole digits
+  // immediately before "/10", so "8.5/10" silently matched on just the
+  // ".5" - landing on "5/10" (Fair) instead of the correct "Very Good",
+  // a genuine two-tier misgrade, not just a missed parse.
+  const rating = l.match(/\b(\d{1,2}(?:\.\d+)?)\s*\/\s*10\b/);
   if (rating) {
-    const r = parseInt(rating[1], 10);
+    const r = parseFloat(rating[1]);
     if (r === 10) return 'Mint';
     if (r >= 8) return 'Very Good';
     if (r >= 6) return 'Good';

@@ -22,20 +22,28 @@ async function fetchText(url: string): Promise<string | null> {
   }
 }
 
-function extractLocs(node: unknown): string[] {
-  const locs: string[] = [];
+export interface SitemapEntry {
+  loc: string;
+  /** The <lastmod> a site's own sitemap reported for this url, verbatim - null when the entry has none at all. */
+  lastmod: string | null;
+}
+
+function extractEntries(node: unknown): SitemapEntry[] {
+  const entries: SitemapEntry[] = [];
   const arr = Array.isArray(node) ? node : node ? [node] : [];
   for (const entry of arr) {
     if (entry && typeof entry === 'object' && 'loc' in entry) {
       const loc = (entry as { loc: unknown }).loc;
-      if (typeof loc === 'string') locs.push(loc);
+      if (typeof loc !== 'string') continue;
+      const lastmod = (entry as { lastmod?: unknown }).lastmod;
+      entries.push({ loc, lastmod: typeof lastmod === 'string' ? lastmod : null });
     }
   }
-  return locs;
+  return entries;
 }
 
-/** Parses a sitemap (or sitemap index) URL and returns all page URLs found, recursing into nested sitemaps. */
-export async function parseSitemap(url: string, seen = new Set<string>()): Promise<string[]> {
+/** Parses a sitemap (or sitemap index) URL and returns every entry found, recursing into nested sitemaps. */
+export async function parseSitemapEntries(url: string, seen = new Set<string>()): Promise<SitemapEntry[]> {
   if (seen.has(url) || seen.size >= MAX_NESTED_SITEMAPS) return [];
   seen.add(url);
 
@@ -50,15 +58,15 @@ export async function parseSitemap(url: string, seen = new Set<string>()): Promi
   }
 
   if (doc.urlset) {
-    return extractLocs(doc.urlset.url);
+    return extractEntries(doc.urlset.url);
   }
 
   if (doc.sitemapindex) {
-    const nestedUrls = extractLocs(doc.sitemapindex.sitemap);
-    const results: string[] = [];
-    for (const nested of nestedUrls) {
-      const urls = await parseSitemap(nested, seen);
-      results.push(...urls);
+    const nested = extractEntries(doc.sitemapindex.sitemap);
+    const results: SitemapEntry[] = [];
+    for (const entry of nested) {
+      const entries = await parseSitemapEntries(entry.loc, seen);
+      results.push(...entries);
     }
     return results;
   }
@@ -76,13 +84,25 @@ export async function discoverSitemapUrls(origin: string): Promise<string[]> {
   return text ? [conventional] : [];
 }
 
+/** Every entry (url + lastmod) discoverable from a site's sitemap(s), deduplicated by url, or empty if none exist. */
+export async function getAllSitemapEntries(origin: string): Promise<SitemapEntry[]> {
+  const sitemapUrls = await discoverSitemapUrls(origin);
+  const seenLocs = new Set<string>();
+  const all: SitemapEntry[] = [];
+  for (const sitemapUrl of sitemapUrls) {
+    const entries = await parseSitemapEntries(sitemapUrl);
+    for (const entry of entries) {
+      if (!seenLocs.has(entry.loc)) {
+        seenLocs.add(entry.loc);
+        all.push(entry);
+      }
+    }
+  }
+  return all;
+}
+
 /** Returns every URL discoverable from a site's sitemap(s), or an empty array if none exist. */
 export async function getAllSitemapUrls(origin: string): Promise<string[]> {
-  const sitemapUrls = await discoverSitemapUrls(origin);
-  const all = new Set<string>();
-  for (const sitemapUrl of sitemapUrls) {
-    const urls = await parseSitemap(sitemapUrl);
-    urls.forEach((u) => all.add(u));
-  }
-  return [...all];
+  const entries = await getAllSitemapEntries(origin);
+  return entries.map((e) => e.loc);
 }

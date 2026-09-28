@@ -6,6 +6,7 @@ import { htmlToMarkdown } from '../services/markdown.js';
 import { extractLinks } from '../services/links.js';
 import { extractBySelectors, type SelectorMap } from '../services/extractor.js';
 import { extractStructuredProductData } from '../services/structuredData.js';
+import { withQueryParam, stripQueryParam } from './queryParams.js';
 import type { SiteConfig } from './siteResolver.js';
 
 export type ScrapeFormat = 'markdown' | 'html' | 'links' | 'screenshot';
@@ -49,7 +50,21 @@ export async function scrapePage(
   const useBrowser = opts.useBrowser ?? site?.use_browser_default ?? false;
   const waitFor = opts.waitFor ?? (useBrowser ? DEFAULT_BROWSER_WAIT_MS : 0);
 
-  const result = await fetchPage(url, {
+  // Some sites (Shopify Markets and similar geo-pricing setups) pick a
+  // visitor's currency by the request's own perceived location, with
+  // nothing pinning it to the site's "real" currency otherwise - confirmed
+  // on casualfootballshirts.co.uk, where this app's own outbound requests
+  // were served genuine US-market pricing (USD, ~50% off the true GBP
+  // price) with no session/cookie carried between our stateless per-page
+  // fetches to ever correct it. `?currency=<code>` is Shopify's own
+  // supported override and reliably pins the market regardless of
+  // requester geolocation. Applied only to the outbound fetch URL, never
+  // to what this function reports back as the page's URL (below) - the
+  // override must never leak into a stored/canonical URL, since nothing
+  // else (sitemap lastmod matching, dedup, admin links) expects it there.
+  const fetchUrl = site?.currency_override ? withQueryParam(url, 'currency', site.currency_override) : url;
+
+  const result = await fetchPage(fetchUrl, {
     useBrowser,
     waitFor,
     proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
@@ -77,12 +92,16 @@ export async function scrapePage(
   // blocked request.
   let finalResult = result;
   if (result.blocked) {
-    finalResult = await fetchPage(url, {
+    finalResult = await fetchPage(fetchUrl, {
       useBrowser: true,
       waitFor: opts.waitFor ?? DEFAULT_BROWSER_WAIT_MS,
       proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
       rateLimitRps: site?.rate_limit_rps,
     });
+  }
+
+  if (site?.currency_override) {
+    finalResult = { ...finalResult, finalUrl: stripQueryParam(finalResult.finalUrl, 'currency') };
   }
 
   // Still blocked after the retry - report it as the failure it is rather
@@ -141,6 +160,19 @@ export async function scrapePage(
     if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
     if (structured.availability && !extracted.availability) extracted.availability = structured.availability;
     if (structured.sku && !extracted.sku) extracted.sku = structured.sku;
+    // Same "selector always wins" precedence as the fixed fields above -
+    // a retailer's own Product.additionalProperty (Team, Year, ...) is
+    // explicit, structured data, strictly more trustworthy than anything
+    // buildKickioProfile would otherwise have to guess from title text
+    // (see guessTeamFromTitle's own doc comment on why that's inherently
+    // ambiguous without a real field to fall back on).
+    const extractedKeysLower = new Set(Object.keys(extracted).map((k) => k.toLowerCase()));
+    for (const [key, value] of Object.entries(structured.additionalProperties)) {
+      // Case-insensitive check, not `key in extracted` - a selector-set
+      // "team" must still win over a same-page additionalProperty "Team",
+      // not sit shadowed underneath it as a second, differently-cased key.
+      if (!extractedKeysLower.has(key.toLowerCase())) extracted[key] = value;
+    }
 
     // Merge in whatever schema.org's Product.image gave us on top of the
     // og:image tags extractMetadata already found - a page can carry its

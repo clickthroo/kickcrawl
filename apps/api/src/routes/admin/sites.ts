@@ -20,6 +20,7 @@ const siteSchema = z.object({
   is_active: z.boolean().optional().default(true),
   require_pro_seller: z.boolean().optional().default(false),
   min_seller_feedback: z.number().int().positive().nullable().optional().default(null),
+  currency_override: z.string().nullable().optional().default(null),
 });
 
 interface SiteRow {
@@ -98,8 +99,9 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { rows } = await pool.query(
         `INSERT INTO sites (name, base_url, rate_limit_rps, max_depth, use_browser_default, skip_browser_for_items,
-           use_proxy, default_selectors, allowed_paths, denied_paths, is_active, require_pro_seller, min_seller_feedback)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+           use_proxy, default_selectors, allowed_paths, denied_paths, is_active, require_pro_seller, min_seller_feedback,
+           currency_override)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
         [
           s.name,
           s.base_url,
@@ -114,6 +116,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
           s.is_active,
           s.require_pro_seller,
           s.min_seller_feedback,
+          s.currency_override,
         ],
       );
       return reply.send({ success: true, site: rows[0] });
@@ -143,6 +146,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
          is_active = COALESCE($12, is_active),
          require_pro_seller = COALESCE($13, require_pro_seller),
          min_seller_feedback = $14,
+         currency_override = $15,
          updated_at = now()
        WHERE id = $1 RETURNING *`,
       [
@@ -160,6 +164,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
         s.is_active,
         s.require_pro_seller,
         s.min_seller_feedback,
+        s.currency_override,
       ],
     );
     if (!rows[0]) return reply.code(404).send({ success: false, error: 'Site not found' });
