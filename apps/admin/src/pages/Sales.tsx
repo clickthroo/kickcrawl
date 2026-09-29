@@ -3,7 +3,7 @@ import { api, ApiError } from '../lib/api';
 import type { KickioSyncCounts, Sale, Site } from '../lib/types';
 import { Badge, Button, Card, ErrorBanner, KickioProfilePanel, PageHeader, Select, Spinner, Thumbnail } from '../components/ui';
 
-type KickioStatus = '' | 'synced' | 'held' | 'stuck';
+type KickioStatus = '' | 'synced' | 'held' | 'stuck' | 'dismissed';
 
 const KICKIO_TEAMS_DATALIST_ID = 'kickio-teams-datalist';
 
@@ -67,7 +67,12 @@ export default function Sales() {
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [dismissingId, setDismissingId] = useState<string | null>(null);
+  const [resyncingId, setResyncingId] = useState<string | null>(null);
+  const [resyncMessages, setResyncMessages] = useState<Record<string, string>>({});
   const [kickioTeamNames, setKickioTeamNames] = useState<string[]>([]);
+  const [retryingAll, setRetryingAll] = useState(false);
+  const [retryAllMessage, setRetryAllMessage] = useState<string | null>(null);
   const pageSize = 25;
 
   useEffect(() => {
@@ -130,6 +135,83 @@ export default function Sales() {
     }
   }
 
+  async function dismissSale(saleId: string) {
+    setDismissingId(saleId);
+    try {
+      // Excludes the sale from both the hourly worker and the manual
+      // "retry all" recovery sweep going forward - a standing decision,
+      // not a one-off skip, so it persists until explicitly undone.
+      await api.post(`/admin/sales/${saleId}/dismiss-kickio-sync`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to dismiss');
+    } finally {
+      setDismissingId(null);
+      await loadSales();
+    }
+  }
+
+  async function undismissSale(saleId: string) {
+    setDismissingId(saleId);
+    try {
+      await api.post(`/admin/sales/${saleId}/undismiss-kickio-sync`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to undismiss');
+    } finally {
+      setDismissingId(null);
+      await loadSales();
+    }
+  }
+
+  async function forceResync(saleId: string) {
+    setResyncingId(saleId);
+    setResyncMessages((m) => ({ ...m, [saleId]: '' }));
+    try {
+      // Re-fetches the original listing page fresh and rebuilds its
+      // profile with today's mapping code before resending - the only
+      // way to correct an already-synced sale whose team/player/etc was
+      // wrong at the time it was sent (a mapping bug, since fixed, but
+      // fixing the code never retroactively corrects a snapshot already
+      // taken and already sent). Can genuinely fail (502) when the
+      // source page is no longer reachable - some retailers remove a
+      // one-off listing once it's sold - so both outcomes are shown.
+      const res = await api.post<{ success: boolean; outcome?: { success: boolean; error?: string } }>(
+        `/admin/sales/${saleId}/force-resync-kickio`,
+      );
+      setResyncMessages((m) => ({
+        ...m,
+        [saleId]: res.outcome?.success
+          ? 'Resynced with freshly re-scraped data.'
+          : `Resync attempted, but the sync itself is still held: ${res.outcome?.error ?? 'unknown reason'}`,
+      }));
+    } catch (err) {
+      setResyncMessages((m) => ({
+        ...m,
+        [saleId]: err instanceof ApiError ? err.message : 'Force resync failed',
+      }));
+    } finally {
+      setResyncingId(null);
+      await loadSales();
+    }
+  }
+
+  async function retryAllStuck() {
+    setRetryingAll(true);
+    setRetryAllMessage(null);
+    try {
+      // Runs as a background job (kickioSyncWorker's recovery sweep), not
+      // inline - a real backlog can take longer than an HTTP request
+      // should ever block for, so this only queues it. Progress shows up
+      // on the Jobs page like any other job; the counts here won't move
+      // until it's actually done and this page is reloaded/refetched.
+      await api.post('/admin/sales/retry-all-kickio-sync');
+      setRetryAllMessage('Queued - check the Jobs page for progress, then refresh this page once it completes.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to queue the retry-all sweep');
+    } finally {
+      setRetryingAll(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -181,6 +263,7 @@ export default function Sales() {
               <option value="synced">Synced{counts ? ` (${counts.synced})` : ''}</option>
               <option value="held">Held{counts ? ` (${counts.held})` : ''}</option>
               <option value="stuck">Stuck{counts ? ` (${counts.stuck})` : ''}</option>
+              <option value="dismissed">Dismissed{counts ? ` (${counts.dismissed})` : ''}</option>
             </Select>
           </div>
         </div>
@@ -188,9 +271,27 @@ export default function Sales() {
       </Card>
 
       {counts && counts.stuck > 0 && (
-        <ErrorBanner
-          message={`${counts.stuck} sale${counts.stuck === 1 ? '' : 's'} exceeded the automatic retry limit and stopped syncing to Kickio - filter by "Stuck" below to review and retry them.`}
-        />
+        <div className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            {counts.stuck} sale{counts.stuck === 1 ? '' : 's'} exceeded the automatic retry limit and stopped
+            syncing to Kickio - filter by "Stuck" below to review individually, or retry all of them at once
+            (e.g. after an upstream Kickio-side fix that's since resolved whatever was blocking them).
+          </span>
+          <Button
+            variant="secondary"
+            className="!min-h-0 shrink-0 !py-1.5 text-xs"
+            disabled={retryingAll}
+            onClick={retryAllStuck}
+          >
+            {retryingAll ? 'Queuing…' : 'Retry all now'}
+          </Button>
+        </div>
+      )}
+
+      {retryAllMessage && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          {retryAllMessage}
+        </div>
       )}
 
       {error && <ErrorBanner message={error} />}
@@ -244,11 +345,15 @@ export default function Sales() {
 
               {/* Not shown at all once synced - kickio_sync_error is
                   cleared on success, so a synced sale has nothing to
-                  explain here. A held/stuck one shows exactly why Kickio
-                  hasn't received it and how many hourly attempts it's had,
-                  plus a way to try again right now instead of waiting for
-                  (or, once stuck, never getting) the next automatic cycle. */}
-              {!s.kickio_synced_at && (
+                  explain here. A dismissed one gets its own quieter panel
+                  (below) - Retry/Set team don't apply to something an
+                  admin has deliberately opted out of. A held/stuck one
+                  shows exactly why Kickio hasn't received it and how many
+                  hourly attempts it's had, plus a way to try again right
+                  now instead of waiting for (or, once stuck, never
+                  getting) the next automatic cycle, and a way to opt it
+                  out entirely if it just shouldn't be sent at all. */}
+              {!s.kickio_synced_at && !s.kickio_sync_dismissed_at && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   <div className="min-w-0">
                     <span className="font-medium text-slate-700">Not synced to Kickio</span>
@@ -265,7 +370,58 @@ export default function Sales() {
                     >
                       {retryingId === s.id ? 'Retrying…' : 'Retry now'}
                     </Button>
+                    <Button
+                      variant="secondary"
+                      className="!min-h-0 !py-1 text-xs text-slate-500"
+                      disabled={dismissingId === s.id}
+                      onClick={() => dismissSale(s.id)}
+                    >
+                      {dismissingId === s.id ? 'Dismissing…' : 'Dismiss'}
+                    </Button>
                   </div>
+                </div>
+              )}
+
+              {/* Nothing to show for a routine synced sale beyond the
+                  Badge above, except when it's been re-checked - Force
+                  resync exists specifically for a sale whose data was
+                  wrong at the time it synced (a mapping bug since fixed),
+                  not for routine sales, so it stays a deliberate, visible
+                  action rather than something that runs automatically. */}
+              {s.kickio_synced_at && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <div className="min-w-0">
+                    <span className="font-medium text-slate-700">Synced to Kickio</span>
+                    <span className="text-slate-400"> (since {new Date(s.kickio_synced_at).toLocaleString()})</span>
+                    {resyncMessages[s.id] && <div className="mt-0.5 text-slate-500">{resyncMessages[s.id]}</div>}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="!min-h-0 !py-1 text-xs"
+                    disabled={resyncingId === s.id}
+                    onClick={() => forceResync(s.id)}
+                    title="Re-fetch the source listing and resend corrected data to Kickio"
+                  >
+                    {resyncingId === s.id ? 'Resyncing…' : 'Force resync'}
+                  </Button>
+                </div>
+              )}
+
+              {s.kickio_sync_dismissed_at && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <div className="min-w-0">
+                    <span className="font-medium text-slate-700">Dismissed</span>
+                    <span className="text-slate-500"> — excluded from Kickio sync</span>
+                    <span className="text-slate-400"> (since {new Date(s.kickio_sync_dismissed_at).toLocaleString()})</span>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="!min-h-0 !py-1 text-xs"
+                    disabled={dismissingId === s.id}
+                    onClick={() => undismissSale(s.id)}
+                  >
+                    {dismissingId === s.id ? 'Undismissing…' : 'Undismiss'}
+                  </Button>
                 </div>
               )}
 

@@ -15,6 +15,8 @@ export interface Site {
   /** Seller-trust filters for marketplaces where the listing's own seller matters (e.g. Vinted's Pro badge). */
   require_pro_seller: boolean;
   min_seller_feedback: number | null;
+  /** Opt-in gate for the "list on Kickio while still active" pipeline (workers/kickioListingSyncWorker.ts) - off by default for every site. */
+  list_on_kickio: boolean;
   created_at: string;
   updated_at: string;
   url_count?: number;
@@ -137,14 +139,17 @@ export interface Sale {
   kickio_sync_attempts: number;
   kickio_sync_error: string | null;
   kickio_sync_action: string | null;
-  /** Computed server-side (routes/admin/sales.ts) from the three columns above, so the UI never duplicates the MAX_SYNC_ATTEMPTS threshold. */
-  kickio_status: 'synced' | 'held' | 'stuck';
+  /** Set once an admin has opted this sale out of Kickio sync entirely - see dismiss-kickio-sync/undismiss-kickio-sync. */
+  kickio_sync_dismissed_at: string | null;
+  /** Computed server-side (routes/admin/sales.ts) from the four columns above, so the UI never duplicates the MAX_SYNC_ATTEMPTS threshold. */
+  kickio_status: 'synced' | 'held' | 'stuck' | 'dismissed';
 }
 
 export interface KickioSyncCounts {
   synced: number;
   held: number;
   stuck: number;
+  dismissed: number;
   total: number;
 }
 

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
 import { profileFilterConditions, type ItemFilters } from '../src/routes/admin/urls.js';
 
 describe('profileFilterConditions', () => {
@@ -50,5 +51,102 @@ describe('profileFilterConditions', () => {
       'u.manufacturer ILIKE $4',
     ]);
     expect(params).toEqual(['existing-site-id', 'Out of Stock', '%Arsenal%', '%Adidas%']);
+  });
+});
+
+describe('POST /api/admin/urls/:id/test-list-on-kickio', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/db.js');
+    vi.doUnmock('../src/middleware/adminAuth.js');
+    vi.doUnmock('../src/lib/kickioSync.js');
+    vi.doUnmock('../src/services/kickioProfile.js');
+    vi.doUnmock('../src/lib/currencyRates.js');
+    vi.doUnmock('../src/lib/kickioTeams.js');
+  });
+
+  const SCRAPED_ROW = {
+    id: 'url-1',
+    url: 'https://www.vintagefootballshirts.com/products/man-utd-2012-13-away',
+    preview_title: '2012-13 Manchester United Nike Away Shirt *BNIB* M',
+    preview_image: 'https://img/1.jpg',
+    preview_images: ['https://img/1.jpg'],
+    preview_extracted: { team: 'Manchester United' },
+    preview_markdown: 'In stock',
+    last_fetched_at: '2026-09-29T00:00:00Z',
+  };
+
+  it('404s for an unknown url', async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminUrlRoutes } = await import('../src/routes/admin/urls.js');
+    const app = Fastify();
+    await app.register(adminUrlRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/urls/missing/test-list-on-kickio' });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('refuses an item with nothing scraped yet', async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ ...SCRAPED_ROW, preview_title: null, preview_extracted: null, preview_markdown: null }],
+    }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminUrlRoutes } = await import('../src/routes/admin/urls.js');
+    const app = Fastify();
+    await app.register(adminUrlRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/urls/url-1/test-list-on-kickio' });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/nothing scraped/i);
+    await app.close();
+  });
+
+  it('builds a profile from cached scrape data (no re-scrape) and passes it to testListProductOnKickio', async () => {
+    const query = vi.fn(async () => ({ rows: [SCRAPED_ROW] }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    vi.doMock('../src/lib/currencyRates.js', () => ({ getCurrencyRates: vi.fn(async () => ({})) }));
+    vi.doMock('../src/lib/kickioTeams.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/lib/kickioTeams.js')>();
+      return { ...actual, getKickioTeamsForMatching: vi.fn(async () => null) };
+    });
+
+    const testListProductOnKickio = vi.fn(async () => ({
+      success: true,
+      productId: 'p1',
+      matchedBy: 'new',
+      action: 'insert',
+    }));
+    vi.doMock('../src/lib/kickioSync.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/lib/kickioSync.js')>();
+      return { ...actual, testListProductOnKickio };
+    });
+
+    const { adminUrlRoutes } = await import('../src/routes/admin/urls.js');
+    const app = Fastify();
+    await app.register(adminUrlRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/urls/url-1/test-list-on-kickio' });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.outcome).toEqual({ success: true, productId: 'p1', matchedBy: 'new', action: 'insert' });
+
+    expect(testListProductOnKickio).toHaveBeenCalledTimes(1);
+    const [urlIdArg, profileArg] = testListProductOnKickio.mock.calls[0];
+    expect(urlIdArg).toBe('url-1');
+    expect(profileArg.source.url).toBe(SCRAPED_ROW.url);
+    expect(profileArg.identity.team).toBe('Manchester United');
+    await app.close();
   });
 });

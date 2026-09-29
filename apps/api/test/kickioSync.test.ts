@@ -137,6 +137,10 @@ describe('syncSaleToKickio', () => {
     expect(productBody.p.id).toBe('url-1');
     expect(productBody.p.team).toBe('Manchester United'); // team_kickio_match, not a raw guess
     expect(productBody.p.image_url).toBe('https://www.vintagefootballshirts.com/img/shirt.jpg');
+    // The original listing page, so a Kickio reviewer can check a
+    // KickCrawl-sourced team match (or any other guessed field) against
+    // the real source - see source_url's own comment in buildPayloads().
+    expect(productBody.p.source_url).toBe('https://www.vintagefootballshirts.com/products/man-utd-2012-13-away');
 
     const [saleUrl, saleInit] = fetchSpy.mock.calls[1];
     expect(String(saleUrl)).toContain('/rest/v1/rpc/import_kickio_sale');
@@ -155,6 +159,74 @@ describe('syncSaleToKickio', () => {
     );
 
     await expect(syncSaleToKickio(saleWithProfile())).rejects.toThrow(/import_kickio_product failed: 503/);
+  });
+});
+
+describe('testListProductOnKickio', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../src/config.js');
+  });
+
+  // A profile built without a price at all - unlike a sale, an active
+  // (not yet sold) listing has no "sold at this price" to speak of, so
+  // this must work from a profile alone, with no SaleForSync-shaped
+  // object (price, detected_at, ...) involved anywhere.
+  function activeProfile(kickioTeams?: { name: string; slug: string; country?: string }[]) {
+    return buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/man-utd-2012-13-away',
+      title: '2012-13 Manchester United Nike Away Shirt *BNIB* M',
+      images: ['https://www.vintagefootballshirts.com/img/shirt.jpg'],
+      kickioTeams,
+    });
+  }
+
+  it('holds - never calls Kickio - when there is no confident team match', async () => {
+    const { testListProductOnKickio } = await loadModule();
+    const fetchSpy = vi.spyOn(global, 'fetch');
+
+    const outcome = await testListProductOnKickio('url-1', activeProfile());
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toMatch(/no confident kickio team match/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('calls ONLY import_kickio_product - never import_kickio_sale, and never touches the sales table', async () => {
+    const { testListProductOnKickio } = await loadModule();
+    const fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ product_id: 'product-123', matched_by: 'new', action: 'insert' }));
+
+    const teams = [{ name: 'Manchester United', slug: 'manchester-united', country: 'England' }];
+    const outcome = await testListProductOnKickio('url-1', activeProfile(teams));
+
+    expect(outcome).toEqual({
+      success: true,
+      productId: 'product-123',
+      matchedBy: 'new',
+      action: 'insert',
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toContain('/rest/v1/rpc/import_kickio_product');
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.p.id).toBe('url-1');
+    expect(body.p.team).toBe('Manchester United');
+    expect(body.p.source_url).toBe('https://www.vintagefootballshirts.com/products/man-utd-2012-13-away');
+  });
+
+  it('surfaces a Kickio RPC error as a failed outcome rather than throwing', async () => {
+    const { testListProductOnKickio } = await loadModule();
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+      new Response('service unavailable', { status: 503, statusText: 'Service Unavailable' }),
+    );
+
+    const teams = [{ name: 'Manchester United', slug: 'manchester-united', country: 'England' }];
+    const outcome = await testListProductOnKickio('url-1', activeProfile(teams));
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toMatch(/import_kickio_product failed: 503/);
   });
 });
 

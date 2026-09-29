@@ -30,8 +30,8 @@ async function recordOutcome(sale: SaleForSync, progress: Progress): Promise<voi
   }
 }
 
-async function processKickioSync(): Promise<void> {
-  const jobId = await createJob('kickio_sync', null, {}, 'running');
+export async function processKickioSync(includeStuck = false): Promise<void> {
+  const jobId = await createJob('kickio_sync', null, { includeStuck }, 'running');
   const progress: Progress = { checked: 0, synced: 0, held: 0, errors: [] };
 
   try {
@@ -45,12 +45,29 @@ async function processKickioSync(): Promise<void> {
       return;
     }
 
+    // includeStuck (only ever set by the admin "retry all" recovery sweep,
+    // routes/admin/sales.ts's retry-all-kickio-sync) drops the attempts
+    // cap entirely - the whole point of that route is to unstick rows the
+    // hourly sweep below has permanently given up on, after an upstream
+    // outage (e.g. Kickio's own database) that's since been fixed. The
+    // normal hourly run never passes this - it must keep respecting
+    // MAX_SYNC_ATTEMPTS so a row that's failing for a real, ongoing reason
+    // doesn't get hammered forever.
+    // kickio_sync_dismissed_at IS NULL excludes anything an admin has
+    // deliberately opted out of syncing (routes/admin/sales.ts's
+    // dismiss-kickio-sync) - in both modes, since a dismissal is a
+    // standing decision, not something a recovery sweep should override.
     const { rows } = await pool.query<SaleForSync & { kickio_sync_attempts: number }>(
-      `SELECT id, url_id, price, currency, detected_at, profile, kickio_sync_attempts
-       FROM sales
-       WHERE kickio_synced_at IS NULL AND kickio_sync_attempts < $1
-       ORDER BY detected_at ASC`,
-      [MAX_SYNC_ATTEMPTS],
+      includeStuck
+        ? `SELECT id, url_id, price, currency, detected_at, profile, kickio_sync_attempts
+           FROM sales
+           WHERE kickio_synced_at IS NULL AND kickio_sync_dismissed_at IS NULL
+           ORDER BY detected_at ASC`
+        : `SELECT id, url_id, price, currency, detected_at, profile, kickio_sync_attempts
+           FROM sales
+           WHERE kickio_synced_at IS NULL AND kickio_sync_dismissed_at IS NULL AND kickio_sync_attempts < $1
+           ORDER BY detected_at ASC`,
+      includeStuck ? [] : [MAX_SYNC_ATTEMPTS],
     );
 
     await pool.query(`UPDATE jobs SET total_pages = $2 WHERE id = $1`, [jobId, rows.length]);
@@ -78,8 +95,8 @@ async function processKickioSync(): Promise<void> {
 export function startKickioSyncWorker(): Worker {
   const worker = new Worker(
     'kickio_sync',
-    async () => {
-      await processKickioSync();
+    async (job) => {
+      await processKickioSync(job.data?.includeStuck === true);
     },
     {
       connection: redisConnection,
@@ -116,4 +133,20 @@ export async function scheduleKickioSync(): Promise<void> {
     }
   }
   await kickioSyncQueue.add('kickio_sync', {}, { repeat: { every: KICKIO_SYNC_INTERVAL_MS } });
+}
+
+/**
+ * A one-off, admin-triggered sweep of EVERY unsynced sale, including ones
+ * already "stuck" past MAX_SYNC_ATTEMPTS - the actual replay mechanism for
+ * routes/admin/sales.ts's retry-all-kickio-sync route. Built for exactly
+ * the scenario that motivated it: Kickio's own database was broken for a
+ * stretch (an ambiguous overloaded SQL function - see session history),
+ * so every sale that failed during that window kept failing right up
+ * until it hit the attempts cap and got permanently excluded from the
+ * normal hourly sweep above. Once the upstream cause is actually fixed,
+ * those rows need one bulk pass that ignores the cap, not dozens of
+ * individual manual retries.
+ */
+export async function enqueueKickioSyncRecoverySweep(): Promise<void> {
+  await kickioSyncQueue.add('kickio_sync', { includeStuck: true });
 }

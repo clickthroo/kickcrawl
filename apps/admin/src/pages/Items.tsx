@@ -41,6 +41,8 @@ export default function Items() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [rescraping, setRescraping] = useState<string | null>(null);
+  const [testListingId, setTestListingId] = useState<string | null>(null);
+  const [testListingResults, setTestListingResults] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const pageSize = 25;
 
@@ -93,6 +95,36 @@ export default function Items() {
       setError(err instanceof ApiError ? err.message : 'Re-scrape failed');
     } finally {
       setRescraping(null);
+    }
+  }
+
+  async function testListOnKickio(urlId: string) {
+    setTestListingId(urlId);
+    setTestListingResults((r) => ({ ...r, [urlId]: '' }));
+    try {
+      // EXPERIMENTAL - see lib/kickioSync.ts's testListProductOnKickio for
+      // why this exists: finding out what Kickio's own database actually
+      // does with a still-active item (no sale attached) before any real
+      // "list on discovery" pipeline gets built. Never touches this
+      // item's own status/sales in kickcrawl - purely a one-off probe.
+      const res = await api.post<{
+        success: boolean;
+        outcome?: { success: boolean; error?: string; productId?: string; matchedBy?: string; action?: string };
+      }>(`/admin/urls/${urlId}/test-list-on-kickio`);
+      const o = res.outcome;
+      setTestListingResults((r) => ({
+        ...r,
+        [urlId]: o?.success
+          ? `Sent - product ${o.productId} (${o.matchedBy}, ${o.action}). Check Kickio's Review Queue.`
+          : `Held: ${o?.error ?? 'unknown reason'}`,
+      }));
+    } catch (err) {
+      setTestListingResults((r) => ({
+        ...r,
+        [urlId]: err instanceof ApiError ? err.message : 'Test push failed',
+      }));
+    } finally {
+      setTestListingId(null);
     }
   }
 
@@ -290,16 +322,35 @@ export default function Items() {
                     )}
                     <div>Code {u.last_status_code ?? '—'}</div>
                   </div>
-                  <Button
-                    variant="secondary"
-                    onClick={() => rescrape(u.id)}
-                    disabled={rescraping === u.id}
-                    className="px-3 py-1.5 text-xs sm:mt-1"
-                  >
-                    {rescraping === u.id ? 'Scraping…' : 'Re-scrape'}
-                  </Button>
+                  <div className="flex gap-2 sm:mt-1">
+                    <Button
+                      variant="secondary"
+                      onClick={() => rescrape(u.id)}
+                      disabled={rescraping === u.id}
+                      className="px-3 py-1.5 text-xs"
+                    >
+                      {rescraping === u.id ? 'Scraping…' : 'Re-scrape'}
+                    </Button>
+                    {u.preview_profile && (
+                      <Button
+                        variant="secondary"
+                        onClick={() => testListOnKickio(u.id)}
+                        disabled={testListingId === u.id}
+                        className="px-3 py-1.5 text-xs"
+                        title="EXPERIMENTAL - pushes this item to Kickio as a product with no sale attached, to see what Kickio does with it"
+                      >
+                        {testListingId === u.id ? 'Sending…' : 'Test: list on Kickio'}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
+
+              {testListingResults[u.id] && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {testListingResults[u.id]}
+                </div>
+              )}
 
               {u.preview_profile ? (
                 <KickioProfilePanel profile={u.preview_profile} />

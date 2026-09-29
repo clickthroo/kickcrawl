@@ -32,3 +32,9 @@ export const recheckQueue = new Queue('recheck', { connection: redisConnection }
 // synced row in the local sales table (workers/kickioSyncWorker.ts),
 // nothing per-job to pass in.
 export const kickioSyncQueue = new Queue('kickio_sync', { connection: redisConnection });
+
+// A single global sweep of every opted-in site's active inventory
+// (workers/kickioListingSyncWorker.ts) - list/refresh anything In Stock,
+// delist anything that's since sold. Same "nothing per-job to pass in"
+// shape as kickioSyncQueue above.
+export const kickioListingSyncQueue = new Queue('kickio_listing_sync', { connection: redisConnection });

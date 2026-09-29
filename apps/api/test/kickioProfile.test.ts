@@ -1681,6 +1681,25 @@ describe('buildKickioProfile', () => {
     expect(profile.identity.number).toBe('7');
   });
 
+  it('strips a leaked team name from the player field when an explicit/corrected team field doesn\'t textually match the title\'s own wording (real Cult Kits typo)', () => {
+    // Real listing: title has a genuine seller typo ("Machester" missing
+    // an "n"), but the page's own structured data supplies the correctly
+    // spelled team via `extracted.team`. normalizePlayerName's first pass
+    // strips leading TEAM-token matches against that corrected spelling,
+    // which never matches the title's own "Machester" - previously
+    // leaving the whole "Machester United" stuck to the player name
+    // instead of stripping it, surfacing "Machester United Berbatov"
+    // instead of just "Berbatov".
+    const profile = buildKickioProfile({
+      url: 'https://www.cultkits.com/products/2009-2010-machester-united-berbatov-9-home-shirt-s-nike',
+      title: '2009/2010 Machester United Berbatov #9 Home Shirt (S) Nike',
+      extracted: { team: 'Manchester United' },
+    });
+    expect(profile.identity.team).toBe('Manchester United');
+    expect(profile.identity.player).toBe('Berbatov');
+    expect(profile.identity.number).toBe('9');
+  });
+
   it('falls back to the description for player name/number when the title alone has nothing', () => {
     // Same "title first, then widen only on a miss" strategy already
     // used for season parsing - a player name/number is almost always in

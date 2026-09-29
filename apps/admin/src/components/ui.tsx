@@ -101,6 +101,7 @@ const STATUS_STYLES: Record<string, string> = {
   synced: 'bg-green-100 text-green-700',
   held: 'bg-amber-100 text-amber-700',
   stuck: 'bg-red-100 text-red-700',
+  dismissed: 'bg-slate-200 text-slate-600',
 };
 
 export function Badge({ status }: { status: string }) {
