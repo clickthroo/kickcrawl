@@ -40,7 +40,11 @@ export interface KickioSyncOutcome {
 
 const KICKIO_RPC_TIMEOUT_MS = 15_000;
 
-async function callKickioRpc<T>(fn: string, payload: object): Promise<T> {
+// Exported so lib/kickioListingSync.ts can share this same RPC-calling
+// machinery (timeout, auth headers, error surfacing) instead of
+// duplicating it - both files talk to the same Kickio PostgREST RPC
+// convention (a single jsonb `p` parameter).
+export async function callKickioRpc<T>(fn: string, payload: object): Promise<T> {
   if (!isKickioSyncConfigured()) {
     throw new KickioSyncNotConfiguredError();
   }
@@ -120,7 +124,7 @@ function deriveIdentity(profile: KickioProfile): KickioIdentityFields | { hold: 
   };
 }
 
-interface KickioProductPayload extends KickioIdentityFields {
+export interface KickioProductPayload extends KickioIdentityFields {
   id: string;
   player: string | null;
   number: string | null;
@@ -131,14 +135,16 @@ interface KickioProductPayload extends KickioIdentityFields {
 }
 
 /**
- * Builds the import_kickio_product payload - shared by both the real
- * sale-triggered sync below and testListProductOnKickio's experimental,
- * no-sale-attached push. A concrete return type (not a bare
- * Record<string, unknown>) so `'hold' in result` actually narrows -
- * TypeScript can't exclude an index-signature type from a "has this
- * property" check, since it could always have it.
+ * Builds the import_kickio_product payload - shared by the real
+ * sale-triggered sync below, testListProductOnKickio's experimental
+ * no-sale-attached push, and lib/kickioListingSync.ts's real listing
+ * payload (a listing is this same shape plus price/condition/size/
+ * quantity). A concrete return type (not a bare Record<string, unknown>)
+ * so `'hold' in result` actually narrows - TypeScript can't exclude an
+ * index-signature type from a "has this property" check, since it could
+ * always have it. Exported for that reuse.
  */
-function buildProductPayload(urlId: string, profile: KickioProfile): KickioProductPayload | { hold: string } {
+export function buildProductPayload(urlId: string, profile: KickioProfile): KickioProductPayload | { hold: string } {
   const identity = deriveIdentity(profile);
   if ('hold' in identity) return identity;
 

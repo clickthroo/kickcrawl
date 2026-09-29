@@ -18,6 +18,7 @@ const EMPTY: Omit<Site, 'id' | 'created_at' | 'updated_at'> = {
   is_active: true,
   require_pro_seller: false,
   min_seller_feedback: null,
+  list_on_kickio: false,
 };
 
 export default function SiteForm() {
@@ -238,6 +239,26 @@ export default function SiteForm() {
               placeholder="e.g. 100"
             />
           </div>
+        </Card>
+
+        <Card className="space-y-4">
+          <div>
+            <h2 className="text-sm font-medium text-slate-700">Kickio listing sync</h2>
+            <p className="mt-1 text-xs text-slate-400">
+              While on, every In Stock item from this site is submitted (and kept refreshed hourly - price
+              changes included) to Kickio's Review Queue, and automatically pulled back once it sells. Off by
+              default - only turn this on for a site you've decided should list live on Kickio.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={form.list_on_kickio}
+              onChange={(e) => setForm({ ...form, list_on_kickio: e.target.checked })}
+            />
+            List active items on Kickio
+          </label>
         </Card>
 
         <div className="flex flex-col gap-2 sm:flex-row">

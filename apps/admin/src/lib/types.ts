@@ -15,6 +15,8 @@ export interface Site {
   /** Seller-trust filters for marketplaces where the listing's own seller matters (e.g. Vinted's Pro badge). */
   require_pro_seller: boolean;
   min_seller_feedback: number | null;
+  /** Opt-in gate for the "list on Kickio while still active" pipeline (workers/kickioListingSyncWorker.ts) - off by default for every site. */
+  list_on_kickio: boolean;
   created_at: string;
   updated_at: string;
   url_count?: number;
