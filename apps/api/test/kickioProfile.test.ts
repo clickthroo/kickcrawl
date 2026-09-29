@@ -1511,6 +1511,30 @@ describe('buildKickioProfile', () => {
     expect(profile.needs_review).toBe(false);
   });
 
+  it("passes the listing's own description straight through from extracted.description, distinct from the input.description haystack field", () => {
+    // input.description is the whole page's markdown, used only as search
+    // text for player/team matching (see buildKickioProfile's own local
+    // `description`/`haystack`) - listing.description on the OUTPUT profile
+    // is a different thing entirely: the clean product copy scrapeCore.ts
+    // already resolved (site selector > schema.org Product.description >
+    // meta/og:description) and merged into extracted.description.
+    const profile = buildKickioProfile({
+      url: 'https://www.cultkits.com/products/dc-united-200809-home-shirt-s-adidas',
+      title: '2008/09 DC United Home Shirt (S) Adidas',
+      description: 'Some unrelated full-page markdown text used only for matching.',
+      extracted: { description: "Shop this club's classic 2008/09 home shirt." },
+    });
+    expect(profile.listing.description).toBe("Shop this club's classic 2008/09 home shirt.");
+  });
+
+  it('leaves listing.description null when nothing was extracted for it', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.cultkits.com/products/x',
+      title: '2008/09 DC United Home Shirt (S) Adidas',
+    });
+    expect(profile.listing.description).toBeNull();
+  });
+
   it('maps a real training-top and pre-match-shirt listing to their own Type values end to end, with no leftover "no dedicated Type value" review reason', () => {
     // Real titles: "2024-25 Rangers Castore 1/4 Zip Training Top *BNIB*
     // TM7125-033" and "2025-26 Celtic adidas Pre-Match Shirt *BNIB*

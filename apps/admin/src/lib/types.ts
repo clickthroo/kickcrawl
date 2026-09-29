@@ -77,6 +77,8 @@ export interface KickioProfile {
   };
   listing: {
     condition: string | null;
+    /** The retailer's own listing write-up - schema.org's Product.description, a site-configured selector, or the page's meta/og:description as a last resort. */
+    description: string | null;
     size: string | null;
     manufacturer: string | null;
     colour: string | null;
@@ -103,7 +105,7 @@ export interface Job {
   id: string;
   site_id: string | null;
   site_name: string | null;
-  type: 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck' | 'kickio_sync';
+  type: 'scrape' | 'map' | 'crawl' | 'extract' | 'recheck' | 'kickio_sync' | 'kickio_listing_sync';
   status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
   payload: Record<string, unknown>;
   total_pages: number;

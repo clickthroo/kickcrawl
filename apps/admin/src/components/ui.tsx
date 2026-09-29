@@ -282,6 +282,12 @@ export function KickioProfilePanel({ profile }: { profile: KickioProfile | null 
             />
           ))}
         </div>
+        {listing.description && (
+          <details className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+            <summary className="cursor-pointer text-xs font-medium text-slate-500">Description</summary>
+            <p className="mt-1 whitespace-pre-line text-xs text-slate-600">{listing.description}</p>
+          </details>
+        )}
         {needs_review && review_reason && (
           <p className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">{review_reason}</p>
         )}

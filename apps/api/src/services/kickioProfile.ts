@@ -47,6 +47,17 @@ export interface KickioIdentity {
 
 export interface KickioListing {
   condition: string | null;
+  /**
+   * The retailer's own listing write-up - schema.org's Product.description
+   * when the page has a JSON-LD Product block (extractStructuredProductData,
+   * confirmed live on cultkits.com and casualfootballshirts.co.uk to carry
+   * the real seller text, not just an SEO snippet), a site-configured
+   * selector when one's set (always wins - see scrapeCore.ts), or the
+   * page's own meta/og:description as a last resort. Passed through as-is,
+   * never canonicalized - free text, not one of Kickio's fixed
+   * vocabularies.
+   */
+  description: string | null;
   size: string | null;
   manufacturer: string | null;
   colour: string | null;
@@ -2165,6 +2176,18 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     condition = gradeConditionText(title, hostname) ?? gradeConditionText(haystack, hostname);
   }
 
+  // ---- Description ----
+  // The retailer's own listing copy - a site-configured selector always
+  // wins (see scrapeCore.ts's precedence), otherwise whatever it already
+  // filled in from schema.org's Product.description or, failing that, the
+  // page's own meta/og:description. Passed straight through, never
+  // canonicalized or guessed at - free text, not one of Kickio's fixed
+  // vocabularies, so there's nothing here to grade or validate. Named
+  // distinctly from the `description` local above (input.description,
+  // the whole page's markdown - used only as haystack text to search, not
+  // the clean listing copy this becomes on the output profile).
+  const listingDescription = caseInsensitiveGet(extracted, 'description', 'productDescription');
+
   // ---- Size ----
   const explicitSize = caseInsensitiveGet(extracted, 'size', 'variant');
   const size = explicitSize
@@ -2315,6 +2338,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     },
     listing: {
       condition,
+      description: listingDescription,
       size,
       manufacturer,
       colour,
