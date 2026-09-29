@@ -68,6 +68,8 @@ export default function Sales() {
   const [error, setError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
+  const [resyncingId, setResyncingId] = useState<string | null>(null);
+  const [resyncMessages, setResyncMessages] = useState<Record<string, string>>({});
   const [kickioTeamNames, setKickioTeamNames] = useState<string[]>([]);
   const [retryingAll, setRetryingAll] = useState(false);
   const [retryAllMessage, setRetryAllMessage] = useState<string | null>(null);
@@ -156,6 +158,38 @@ export default function Sales() {
       setError(err instanceof ApiError ? err.message : 'Failed to undismiss');
     } finally {
       setDismissingId(null);
+      await loadSales();
+    }
+  }
+
+  async function forceResync(saleId: string) {
+    setResyncingId(saleId);
+    setResyncMessages((m) => ({ ...m, [saleId]: '' }));
+    try {
+      // Re-fetches the original listing page fresh and rebuilds its
+      // profile with today's mapping code before resending - the only
+      // way to correct an already-synced sale whose team/player/etc was
+      // wrong at the time it was sent (a mapping bug, since fixed, but
+      // fixing the code never retroactively corrects a snapshot already
+      // taken and already sent). Can genuinely fail (502) when the
+      // source page is no longer reachable - some retailers remove a
+      // one-off listing once it's sold - so both outcomes are shown.
+      const res = await api.post<{ success: boolean; outcome?: { success: boolean; error?: string } }>(
+        `/admin/sales/${saleId}/force-resync-kickio`,
+      );
+      setResyncMessages((m) => ({
+        ...m,
+        [saleId]: res.outcome?.success
+          ? 'Resynced with freshly re-scraped data.'
+          : `Resync attempted, but the sync itself is still held: ${res.outcome?.error ?? 'unknown reason'}`,
+      }));
+    } catch (err) {
+      setResyncMessages((m) => ({
+        ...m,
+        [saleId]: err instanceof ApiError ? err.message : 'Force resync failed',
+      }));
+    } finally {
+      setResyncingId(null);
       await loadSales();
     }
   }
@@ -345,6 +379,31 @@ export default function Sales() {
                       {dismissingId === s.id ? 'Dismissing…' : 'Dismiss'}
                     </Button>
                   </div>
+                </div>
+              )}
+
+              {/* Nothing to show for a routine synced sale beyond the
+                  Badge above, except when it's been re-checked - Force
+                  resync exists specifically for a sale whose data was
+                  wrong at the time it synced (a mapping bug since fixed),
+                  not for routine sales, so it stays a deliberate, visible
+                  action rather than something that runs automatically. */}
+              {s.kickio_synced_at && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <div className="min-w-0">
+                    <span className="font-medium text-slate-700">Synced to Kickio</span>
+                    <span className="text-slate-400"> (since {new Date(s.kickio_synced_at).toLocaleString()})</span>
+                    {resyncMessages[s.id] && <div className="mt-0.5 text-slate-500">{resyncMessages[s.id]}</div>}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="!min-h-0 !py-1 text-xs"
+                    disabled={resyncingId === s.id}
+                    onClick={() => forceResync(s.id)}
+                    title="Re-fetch the source listing and resend corrected data to Kickio"
+                  >
+                    {resyncingId === s.id ? 'Resyncing…' : 'Force resync'}
+                  </Button>
                 </div>
               )}
 

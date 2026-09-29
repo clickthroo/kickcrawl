@@ -2,8 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db.js';
 import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { MAX_SYNC_ATTEMPTS, syncAndPersistOutcome, type SaleForSync } from '../../lib/kickioSync.js';
-import { getKickioTeams, KickioTeamsNotConfiguredError } from '../../lib/kickioTeams.js';
+import { getKickioTeams, getKickioTeamsForMatching, KickioTeamsNotConfiguredError } from '../../lib/kickioTeams.js';
 import { enqueueKickioSyncRecoverySweep } from '../../workers/kickioSyncWorker.js';
+import { scrapePage } from '../../lib/scrapeCore.js';
+import { buildKickioProfile } from '../../services/kickioProfile.js';
+import { getCurrencyRates } from '../../lib/currencyRates.js';
 
 // A sale's Kickio sync status, derived from the same four columns every
 // time - kept as one function so the list filter, the counts breakdown,
@@ -133,6 +136,101 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
     // not the HTTP status - a 4xx/5xx here is reserved for the request
     // itself being invalid (sale not found, already synced).
     const outcome = await syncAndPersistOutcome(sale);
+    return reply.send({ success: true, outcome });
+  });
+
+  // The counterpart to retry-kickio-sync for a sale that's ALREADY
+  // synced - the only way back when what went wrong wasn't a failed
+  // sync but a bad one: a mapping bug (kickioProfile.ts) sent the wrong
+  // team/player/season/etc for a listing before the bug was fixed.
+  // Fixing that bug never retroactively corrects a snapshot already
+  // taken and already sent - syncAndPersistOutcome/retry-kickio-sync
+  // above only ever have the stored `profile` to work with, and that's
+  // exactly what's wrong. Re-scrapes the ORIGINAL listing page fresh
+  // (the same scrapePage() call routes/admin/urls.ts's own rescrape
+  // route uses) so the corrected profile is built from real, current
+  // page data using TODAY's mapping code, not a re-send of the same
+  // stale, already-wrong snapshot. sales.price/currency/detected_at (the
+  // actual historical sale) are left untouched - only `profile`, and
+  // whatever gets derived from it and sent to Kickio, is refreshed.
+  // Requires the source page to still be reachable - a sold one-off
+  // listing some retailers remove once sold (confirmed on a real Cult
+  // Kits example this same session) fails here with a clear reason
+  // rather than silently reusing the stale data.
+  app.post('/api/admin/sales/:id/force-resync-kickio', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query(
+      `SELECT
+         sa.id, sa.url_id, sa.site_id, sa.price, sa.currency, sa.detected_at, sa.kickio_synced_at,
+         u.url,
+         s.name, s.base_url, s.rate_limit_rps, s.max_depth, s.use_browser_default,
+         s.skip_browser_for_items, s.use_proxy, s.default_selectors, s.allowed_paths, s.denied_paths,
+         s.is_active, s.require_pro_seller, s.min_seller_feedback, s.currency_override
+       FROM sales sa
+       JOIN urls u ON u.id = sa.url_id
+       JOIN sites s ON s.id = sa.site_id
+       WHERE sa.id = $1`,
+      [id],
+    );
+    const row = rows[0];
+    if (!row) return reply.code(404).send({ success: false, error: 'Sale not found' });
+    if (!row.kickio_synced_at) {
+      return reply
+        .code(400)
+        .send({ success: false, error: 'This sale has not synced yet - use Retry, not Force resync' });
+    }
+
+    const result = await scrapePage(
+      row.url,
+      { formats: ['markdown'] },
+      {
+        id: row.site_id,
+        name: row.name,
+        base_url: row.base_url,
+        rate_limit_rps: row.rate_limit_rps,
+        max_depth: row.max_depth,
+        use_browser_default: row.use_browser_default,
+        skip_browser_for_items: row.skip_browser_for_items,
+        use_proxy: row.use_proxy,
+        default_selectors: row.default_selectors,
+        allowed_paths: row.allowed_paths,
+        denied_paths: row.denied_paths,
+        is_active: row.is_active,
+        require_pro_seller: row.require_pro_seller,
+        min_seller_feedback: row.min_seller_feedback,
+        currency_override: row.currency_override,
+      },
+    );
+    if (!result.success) {
+      return reply.code(502).send({
+        success: false,
+        error: `Could not re-fetch the source listing to rebuild its profile: ${result.error ?? 'unknown fetch error'}`,
+      });
+    }
+
+    const profile = buildKickioProfile({
+      url: row.url,
+      title: result.metadata.title,
+      description: result.markdown?.slice(0, 4000) ?? null,
+      images: result.metadata.image ? [result.metadata.image] : [],
+      extracted: result.extracted,
+      currencyRates: await getCurrencyRates(),
+      kickioTeams: await getKickioTeamsForMatching(),
+    });
+    await pool.query(`UPDATE sales SET profile = $2 WHERE id = $1`, [id, JSON.stringify(profile)]);
+
+    // Same shared sync-and-persist path as retry-kickio-sync - Kickio's
+    // own match_or_create_product updates the existing product record
+    // (matched by the same url_id used as external ref the first time),
+    // it doesn't create a duplicate.
+    const outcome = await syncAndPersistOutcome({
+      id: row.id,
+      url_id: row.url_id,
+      price: row.price,
+      currency: row.currency,
+      detected_at: row.detected_at,
+      profile,
+    });
     return reply.send({ success: true, outcome });
   });
 
