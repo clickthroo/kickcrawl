@@ -2058,8 +2058,42 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // 4000 chars of nav breadcrumbs, "similar items", legal boilerplate),
     // not a clean product description - scanning it unconditionally would
     // risk the exact kind of false match season parsing already hit once.
-    let rawPlayer = explicitPlayer ?? extractPlayerNameFromTitle(title) ?? extractPlayerNameFromTitle(description);
+    const titlePlayer = extractPlayerNameFromTitle(title);
+    let rawPlayer = explicitPlayer ?? titlePlayer ?? extractPlayerNameFromTitle(description);
+    const preStripWordCount = rawPlayer ? rawPlayer.trim().split(/\s+/).length : 0;
     rawPlayer = normalizePlayerName(team, rawPlayer);
+    const postStripWordCount = rawPlayer ? rawPlayer.trim().split(/\s+/).length : 0;
+    // normalizePlayerName strips team-name tokens by exact (lowercased)
+    // text match - fine when `team` and the title agree, but `team` can
+    // come from an explicit, corrected source (a structured "Team" field)
+    // that doesn't textually match the seller's own title wording.
+    // Confirmed on a real Cult Kits listing: explicit Team field
+    // "Manchester United", title's own typo "2009/2010 Machester United
+    // Berbatov #9 ..." - none of "Machester"'s words matched any token of
+    // the correctly-spelled team, so the exact-match strip above changed
+    // nothing at all, leaving the whole "Machester United Berbatov" as
+    // the player. When that happens for a confident, explicit team (never
+    // for a title-guessed one - that's already derived from this same
+    // text and has no such spelling mismatch to correct for), fall back
+    // to a POSITIONAL strip: take the team's own word COUNT off the
+    // front, trusting an explicit team's length even when its spelling
+    // doesn't match the title. Guarded on the strip having changed
+    // nothing (not "always run this too") so a genuinely correct result
+    // from the exact-match pass is never second-guessed.
+    if (
+      rawPlayer &&
+      !explicitPlayer &&
+      titlePlayer &&
+      team &&
+      confidence.team === 'certain' &&
+      postStripWordCount === preStripWordCount
+    ) {
+      const teamWordCount = team.trim().split(/\s+/).length;
+      const words = rawPlayer.trim().split(/\s+/);
+      if (words.length > teamWordCount) {
+        rawPlayer = normalizePlayerName(null, words.slice(teamWordCount).join(' '));
+      }
+    }
     const manufacturerForStrip =
       caseInsensitiveGet(extracted, 'manufacturer', 'brand') ?? detectManufacturer(title) ?? detectManufacturer(haystack);
     rawPlayer = stripManufacturerFromPlayer(rawPlayer, manufacturerForStrip);
