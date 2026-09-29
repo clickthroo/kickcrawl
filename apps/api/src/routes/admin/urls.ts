@@ -10,6 +10,7 @@ import { getKickioTeamsForMatching } from '../../lib/kickioTeams.js';
 import { persistItemProfileColumns } from '../../lib/persistItemProfile.js';
 import { detectAndRecordTransition, getPreviousStockAndPrice } from '../../lib/saleDetection.js';
 import { isCrawlItem, passesSellerFilter } from '../../workers/crawlWorker.js';
+import { testListProductOnKickio } from '../../lib/kickioSync.js';
 
 export interface ItemFilters {
   stock_status?: string;
@@ -336,5 +337,61 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return reply.send({ success: result.success, result });
+  });
+
+  // EXPERIMENTAL - see lib/kickioSync.ts's testListProductOnKickio for why
+  // this exists: a one-off way to find out what Kickio's own
+  // match_or_create_product actually does with a still-active item (no
+  // sale attached at all), before any real "list on discovery" pipeline
+  // gets built. Builds the profile from whatever's already cached for
+  // this item (same data the Items page itself already shows) rather
+  // than re-scraping - this is about testing Kickio's own behaviour, not
+  // about getting the freshest possible data.
+  app.post('/api/admin/urls/:id/test-list-on-kickio', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query(
+      `SELECT u.*, m.content->>'title' AS preview_title, m.content->>'image' AS preview_image,
+              m.content->'images' AS preview_images,
+              e.content AS preview_extracted, md.content AS preview_markdown
+       FROM urls u
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'metadata'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) m ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'extracted'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) e ON true
+       LEFT JOIN LATERAL (
+         SELECT content FROM scrape_results sr
+         WHERE sr.url_id = u.id AND sr.format = 'markdown'
+         ORDER BY sr.fetched_at DESC LIMIT 1
+       ) md ON true
+       WHERE u.id = $1`,
+      [id],
+    );
+    const row = rows[0];
+    if (!row) return reply.code(404).send({ success: false, error: 'URL not found' });
+    if (!row.preview_title && !row.preview_extracted && !row.preview_markdown) {
+      return reply
+        .code(400)
+        .send({ success: false, error: 'Nothing scraped for this item yet - use Re-scrape first' });
+    }
+
+    const profile = buildKickioProfile({
+      url: row.url,
+      title: row.preview_title,
+      description: row.preview_markdown?.slice(0, 4000) ?? null,
+      images: row.preview_images ?? [row.preview_image],
+      extracted: row.preview_extracted,
+      scrapedAt: row.last_fetched_at,
+      currencyRates: await getCurrencyRates(),
+      kickioTeams: await getKickioTeamsForMatching(),
+    });
+
+    const outcome = await testListProductOnKickio(id, profile);
+    return reply.send({ success: true, outcome });
   });
 }

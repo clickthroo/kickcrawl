@@ -40,7 +40,7 @@ export interface KickioSyncOutcome {
 
 const KICKIO_RPC_TIMEOUT_MS = 15_000;
 
-async function callKickioRpc<T>(fn: string, payload: Record<string, unknown>): Promise<T> {
+async function callKickioRpc<T>(fn: string, payload: object): Promise<T> {
   if (!isKickioSyncConfigured()) {
     throw new KickioSyncNotConfiguredError();
   }
@@ -78,28 +78,35 @@ interface ImportSaleResult {
   reason?: string;
 }
 
+interface KickioIdentityFields {
+  team: string;
+  season: string | null;
+  shirt_type: string | null;
+  gender: string;
+  issue: string | null;
+  special_edition: string | null;
+  sleeves: string | null;
+  boxed_edition: string | null;
+  signed: string | null;
+  manufacturer: string | null;
+}
+
 /**
- * Builds the payload for both Kickio RPCs from a stored sale row - team
+ * The identity fields every Kickio RPC payload shares - team always
  * comes from identity.team_kickio_match, never the raw identity.team
  * guess, per the already-decided write-integration policy (kickioProfile.ts
  * KickioProfile.identity.team_kickio_match's own doc comment): Kickio's
  * live product catalog should only ever be written to with a verified
  * team match, never a scraped guess, on pain of polluting it with wrong
  * or duplicate teams that are hard to clean up later. Returns null (not
- * an error - a deliberate hold) when the sale isn't safe to send yet.
+ * an error - a deliberate hold) when there's no confident match to send
+ * yet.
  */
-function buildPayloads(
-  sale: SaleForSync,
-): { product: Record<string, unknown>; sale: Record<string, unknown> } | { hold: string } {
-  const profile = sale.profile;
-  if (!profile) return { hold: 'no stored profile snapshot on this sale' };
-
+function deriveIdentity(profile: KickioProfile): KickioIdentityFields | { hold: string } {
   const team = profile.identity.team_kickio_match;
   if (!team) return { hold: 'no confident Kickio team match - held for review, never sent as a guess' };
 
-  if (sale.price == null) return { hold: 'no price recorded for this sale' };
-
-  const identity = {
+  return {
     team,
     season: profile.identity.season,
     shirt_type: profile.identity.shirt_type,
@@ -111,9 +118,32 @@ function buildPayloads(
     signed: profile.identity.signed,
     manufacturer: profile.listing.manufacturer,
   };
+}
 
-  const product = {
-    id: sale.url_id,
+interface KickioProductPayload extends KickioIdentityFields {
+  id: string;
+  player: string | null;
+  number: string | null;
+  colour: string | null;
+  image_url: string | null;
+  extra_seasons: string[];
+  source_url: string;
+}
+
+/**
+ * Builds the import_kickio_product payload - shared by both the real
+ * sale-triggered sync below and testListProductOnKickio's experimental,
+ * no-sale-attached push. A concrete return type (not a bare
+ * Record<string, unknown>) so `'hold' in result` actually narrows -
+ * TypeScript can't exclude an index-signature type from a "has this
+ * property" check, since it could always have it.
+ */
+function buildProductPayload(urlId: string, profile: KickioProfile): KickioProductPayload | { hold: string } {
+  const identity = deriveIdentity(profile);
+  if ('hold' in identity) return identity;
+
+  return {
+    id: urlId,
     ...identity,
     player: profile.identity.player,
     number: profile.identity.number,
@@ -130,6 +160,27 @@ function buildPayloads(
     // comment above.
     source_url: profile.source.url,
   };
+}
+
+/**
+ * Builds the payload for both Kickio RPCs from a stored sale row - see
+ * buildProductPayload/deriveIdentity above for the parts this shares with
+ * the product-only path. Returns null (not an error - a deliberate hold)
+ * when the sale isn't safe to send yet.
+ */
+function buildPayloads(
+  sale: SaleForSync,
+): { product: KickioProductPayload; sale: Record<string, unknown> } | { hold: string } {
+  const profile = sale.profile;
+  if (!profile) return { hold: 'no stored profile snapshot on this sale' };
+
+  const identity = deriveIdentity(profile);
+  if ('hold' in identity) return identity;
+
+  if (sale.price == null) return { hold: 'no price recorded for this sale' };
+
+  const product = buildProductPayload(sale.url_id, profile);
+  if ('hold' in product) return product;
 
   const saleRpc = {
     kickio_shirt_id: sale.url_id,
@@ -169,6 +220,40 @@ export async function syncSaleToKickio(sale: SaleForSync): Promise<KickioSyncOut
     saleId: saleResult.sale_id,
     action: saleResult.action,
   };
+}
+
+export interface ProductOnlyOutcome {
+  success: boolean;
+  error?: string;
+  productId?: string;
+  matchedBy?: string;
+  action?: string;
+}
+
+/**
+ * EXPERIMENTAL - a one-off, admin-triggered test of listing a still-
+ * active (not yet sold) item on Kickio, with no sale attached at all.
+ * The real sync (syncSaleToKickio above) only ever calls
+ * import_kickio_product at the moment a sale is recorded; this exists
+ * purely to find out what Kickio's own match_or_create_product actually
+ * does with a standalone product call - what state it lands in, whether
+ * it shows up in their Review Queue - before any decision is made about
+ * building a real "list on discovery, keep price in sync, delist on
+ * sale" pipeline. Deliberately isolated from syncSaleToKickio/
+ * syncAndPersistOutcome and never touches the `sales` table - nothing
+ * about the real, already-working sale-sync path depends on this.
+ */
+export async function testListProductOnKickio(urlId: string, profile: KickioProfile): Promise<ProductOnlyOutcome> {
+  const built = buildProductPayload(urlId, profile);
+  if ('hold' in built) {
+    return { success: false, error: built.hold };
+  }
+  try {
+    const result = await callKickioRpc<ImportProductResult>('import_kickio_product', built);
+    return { success: true, productId: result.product_id, matchedBy: result.matched_by, action: result.action };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**
