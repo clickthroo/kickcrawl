@@ -8,6 +8,17 @@ export interface StructuredProductData {
   /** Every image found across all Product nodes, in document order - schema.org's Product.image can be a single URL, an ImageObject, or an array of either. */
   images: string[];
   /**
+   * schema.org's Product.description - the retailer's own written listing
+   * copy (condition notes, sizing, "what's included", etc), from the same
+   * winning node as the offer fields above. Confirmed live on both
+   * cultkits.com and casualfootballshirts.co.uk: a full, real write-up
+   * sits right here, not just an SEO snippet - a far richer source than
+   * the generic meta/og:description extractMetadata already reads (kept
+   * as a fallback in lib/scrapeCore.ts for a page with no JSON-LD Product
+   * block at all).
+   */
+  description: string | null;
+  /**
    * schema.org's Product.additionalProperty - a retailer-defined list of
    * {name, value} pairs (PropertyValue nodes) for whatever facts don't fit
    * the fixed Product/Offer fields above. Confirmed live on cultkits.com:
@@ -21,7 +32,7 @@ export interface StructuredProductData {
   additionalProperties: Record<string, string>;
 }
 
-type OfferData = Omit<StructuredProductData, 'images' | 'additionalProperties'>;
+type OfferData = Omit<StructuredProductData, 'images' | 'additionalProperties' | 'description'>;
 
 const EMPTY_OFFER: OfferData = { price: null, currency: null, availability: null, sku: null };
 
@@ -61,6 +72,32 @@ function asString(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return null;
+}
+
+/**
+ * Decodes HTML entities (&amp;, &#39;, &nbsp;, numeric refs, ...) out of a
+ * JSON-LD string value. Confirmed necessary on a real cultkits.com listing:
+ * its own Product.description contains literal "&#39;" instead of an
+ * apostrophe - the retailer's template HTML-escapes the string before
+ * embedding it in the JSON-LD block, so JSON.parse alone doesn't clean it
+ * up (JSON.parse only understands JSON's own escapes, not HTML's).
+ */
+function decodeHtmlEntities(text: string): string {
+  const named: Record<string, string> = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    nbsp: ' ',
+  };
+  return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const code = entity[1]?.toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    return named[entity.toLowerCase()] ?? match;
+  });
 }
 
 /**
@@ -125,8 +162,9 @@ export function extractStructuredProductData($: CheerioAPI): StructuredProductDa
   // From the SAME node that won the offer fields above, not merged across
   // every Product node on the page - a page with more than one Product
   // block (a related-items carousel alongside the real listing) must never
-  // let some OTHER product's "Team" leak into this one's.
+  // let some OTHER product's "Team" (or description) leak into this one's.
   let additionalProperties: Record<string, string> = {};
+  let description: string | null = null;
 
   for (const script of $('script[type="application/ld+json"]').toArray()) {
     const raw = $(script).contents().text();
@@ -148,6 +186,8 @@ export function extractStructuredProductData($: CheerioAPI): StructuredProductDa
         if (data.price) {
           offer = data;
           additionalProperties = readAdditionalProperties(product);
+          const rawDescription = asString(product.description);
+          description = rawDescription ? decodeHtmlEntities(rawDescription) : null;
         }
       }
     }
@@ -170,5 +210,5 @@ export function extractStructuredProductData($: CheerioAPI): StructuredProductDa
     }
   }
 
-  return { ...offer, images, additionalProperties };
+  return { ...offer, images, additionalProperties, description };
 }

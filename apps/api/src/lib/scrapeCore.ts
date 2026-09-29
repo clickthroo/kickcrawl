@@ -160,6 +160,15 @@ export async function scrapePage(
     if (structured.currency && !extracted.currency) extracted.currency = structured.currency;
     if (structured.availability && !extracted.availability) extracted.availability = structured.availability;
     if (structured.sku && !extracted.sku) extracted.sku = structured.sku;
+    // Same "selector always wins, then real structured data" precedence as
+    // the fields above - and when even the JSON-LD Product block has none
+    // (or the page has no JSON-LD Product block at all), fall back to the
+    // page's own meta/og:description (extractMetadata, already computed
+    // above) rather than leaving this listing with no description text at
+    // all. Generally worse (often a generic SEO snippet rather than the
+    // seller's real write-up), but still real page content, not a guess.
+    if (structured.description && !extracted.description) extracted.description = structured.description;
+    if (!extracted.description && metadata.description) extracted.description = metadata.description;
     // Same "selector always wins" precedence as the fixed fields above -
     // a retailer's own Product.additionalProperty (Team, Year, ...) is
     // explicit, structured data, strictly more trustworthy than anything

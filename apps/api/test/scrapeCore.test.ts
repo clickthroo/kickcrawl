@@ -205,6 +205,81 @@ describe('scrapePage - merges structured additionalProperty fields into extracte
   });
 });
 
+describe('scrapePage - pulls a listing description with the same "selector wins, then structured data, then meta" precedence as price/currency', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  function htmlWithJsonLdDescription(description: string): string {
+    return `<html><head>
+      <meta name="description" content="Generic SEO snippet, not the real listing copy" />
+      <script type="application/ld+json">${JSON.stringify({
+        '@type': 'Product',
+        offers: { price: '44.99', priceCurrency: 'GBP' },
+        description,
+      })}</script>
+    </head><body><p>content</p></body></html>`;
+  }
+
+  it('fills extracted.description from schema.org Product.description when no selector provided one', async () => {
+    const fetchPage = vi.fn(async () => ({
+      html: htmlWithJsonLdDescription('A classic 1990s shirt in excellent condition.'),
+      statusCode: 200,
+      usedBrowser: false,
+      finalUrl: 'https://example.com/products/foo',
+      blocked: false,
+    }));
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage('https://example.com/products/foo', { formats: ['markdown'] }, null);
+
+    expect(result.extracted?.description).toBe('A classic 1990s shirt in excellent condition.');
+  });
+
+  it("never overrides a site-configured selector's own description", async () => {
+    const fetchPage = vi.fn(async () => ({
+      html: htmlWithJsonLdDescription('JSON-LD description - should be shadowed'),
+      statusCode: 200,
+      usedBrowser: false,
+      finalUrl: 'https://example.com/products/foo',
+      blocked: false,
+    }));
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+    const extractBySelectors = vi.fn(() => ({ description: 'Selector-picked description' }));
+    vi.doMock('../src/services/extractor.js', () => ({ extractBySelectors }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage(
+      'https://example.com/products/foo',
+      { formats: ['markdown'], selectors: { description: '.description' } },
+      null,
+    );
+
+    expect(result.extracted?.description).toBe('Selector-picked description');
+  });
+
+  it('falls back to the page meta/og:description when there is no JSON-LD Product at all', async () => {
+    const html = `<html><head>
+      <meta property="og:description" content="Whatever the page's own SEO tags say" />
+    </head><body><p>content</p></body></html>`;
+    const fetchPage = vi.fn(async () => ({
+      html,
+      statusCode: 200,
+      usedBrowser: false,
+      finalUrl: 'https://example.com/products/foo',
+      blocked: false,
+    }));
+    vi.doMock('../src/services/fetcher.js', () => ({ fetchPage }));
+
+    const { scrapePage } = await import('../src/lib/scrapeCore.js');
+    const result = await scrapePage('https://example.com/products/foo', { formats: ['markdown'] }, null);
+
+    expect(result.extracted?.description).toBe("Whatever the page's own SEO tags say");
+  });
+});
+
 describe('scrapePage - retries a blocked fetch through a fresh browser session', () => {
   beforeEach(() => {
     vi.resetModules();

@@ -32,6 +32,7 @@ describe('extractStructuredProductData', () => {
       sku: 'MUFC-9091-H',
       images: [],
       additionalProperties: {},
+      description: null,
     });
   });
 
@@ -71,6 +72,7 @@ describe('extractStructuredProductData', () => {
       sku: null,
       images: [],
       additionalProperties: {},
+      description: null,
     });
   });
 
@@ -87,6 +89,7 @@ describe('extractStructuredProductData', () => {
       sku: null,
       images: [],
       additionalProperties: {},
+      description: null,
     });
   });
 
@@ -127,6 +130,7 @@ describe('extractStructuredProductData', () => {
       sku: null,
       images: [],
       additionalProperties: {},
+      description: null,
     });
   });
 
@@ -235,6 +239,43 @@ describe('extractStructuredProductData', () => {
         },
       ]);
       expect(extractStructuredProductData(cheerio.load(html)).additionalProperties).toEqual({ Team: 'Right Team' });
+    });
+  });
+
+  describe('description', () => {
+    it('reads Product.description from the node that won the offer - confirmed live on casualfootballshirts.co.uk', () => {
+      const html = pageWithJsonLd({
+        '@type': 'Product',
+        offers: { price: '44.99', priceCurrency: 'GBP' },
+        description: 'A classic England shirt worn in 2006. Condition: 9/10.',
+      });
+      expect(extractStructuredProductData(cheerio.load(html)).description).toBe(
+        'A classic England shirt worn in 2006. Condition: 9/10.',
+      );
+    });
+
+    it('decodes HTML entities - confirmed live on cultkits.com, whose own JSON-LD embeds &#39; instead of an apostrophe', () => {
+      const html = pageWithJsonLd({
+        '@type': 'Product',
+        offers: { price: '44.99' },
+        description: 'Shop this club&#39;s classic shirt &amp; matching shorts.',
+      });
+      expect(extractStructuredProductData(cheerio.load(html)).description).toBe(
+        "Shop this club's classic shirt & matching shorts.",
+      );
+    });
+
+    it('is null when the winning Product node has no description at all', () => {
+      const html = pageWithJsonLd({ '@type': 'Product', offers: { price: '44.99' } });
+      expect(extractStructuredProductData(cheerio.load(html)).description).toBeNull();
+    });
+
+    it('only reads from the node that actually won the offer, same scoping as additionalProperties', () => {
+      const html = pageWithJsonLd([
+        { '@type': 'Product', description: 'Wrong product - no price, never wins' },
+        { '@type': 'Product', offers: { price: '44.99' }, description: 'Right product' },
+      ]);
+      expect(extractStructuredProductData(cheerio.load(html)).description).toBe('Right product');
     });
   });
 });
