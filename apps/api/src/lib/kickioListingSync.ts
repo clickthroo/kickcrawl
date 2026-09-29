@@ -97,6 +97,17 @@ export async function submitListingToKickio(urlId: string, profile: KickioProfil
   };
 }
 
+interface DelistListingResult {
+  // Kickio's confirmed contract (via Lovable): 'removed' - pulled from the
+  // Review Queue/browse; 'not_found' - nothing there referencing this
+  // source_url (already gone some other way, or never actually synced);
+  // 'skipped' - deliberately left untouched because a buyer is actively
+  // checking out (reserved) or has already bought it there (sold) - "we
+  // leave it untouched rather than pull it out from under them."
+  action: 'removed' | 'not_found' | 'skipped';
+  listing_id?: string;
+}
+
 /**
  * Pulls one item's listing off Kickio - called once an item leaves
  * 'In Stock' (sold, on kickcrawl's own site, per the recorded sale) and
@@ -110,10 +121,23 @@ export async function delistListingFromKickio(sourceUrl: string): Promise<Listin
   if (!isKickioSyncConfigured()) {
     throw new KickioSyncNotConfiguredError();
   }
-  const result = await callKickioRpc<{ action?: string; status?: string }>('delist_kickio_listing', {
+  const result = await callKickioRpc<DelistListingResult>('delist_kickio_listing', {
     source_url: sourceUrl,
   });
-  return { success: true, action: result.action, status: result.status };
+  // 'skipped' means nothing was actually pulled - Kickio's own listing is
+  // still live (a sale is in progress or already completed THERE, not on
+  // the retailer's site). Reporting that as success would wrongly mark
+  // kickio_delisted_at and stop the hourly sweep from ever retrying it -
+  // treated as a (non-error) failure instead, so it's retried on the next
+  // sweep once whatever's blocking it resolves.
+  if (result.action === 'skipped') {
+    return {
+      success: false,
+      action: result.action,
+      error: "Kickio left this listing live - a buyer is checking out or has already bought it there",
+    };
+  }
+  return { success: true, action: result.action };
 }
 
 /**

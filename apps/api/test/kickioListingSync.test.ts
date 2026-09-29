@@ -127,20 +127,40 @@ describe('delistListingFromKickio', () => {
     );
   });
 
-  it('calls delist_kickio_listing keyed by source_url, not a stored listing id', async () => {
+  it("reports success on 'removed' - a genuine pull from the Review Queue/browse", async () => {
     const { delistListingFromKickio } = await loadModule();
     const fetchSpy = vi
       .spyOn(global, 'fetch')
-      .mockResolvedValueOnce(jsonResponse({ action: 'delisted', status: 'sold_elsewhere' }));
+      .mockResolvedValueOnce(jsonResponse({ action: 'removed', listing_id: 'listing-1' }));
 
     const outcome = await delistListingFromKickio('https://www.vintagefootballshirts.com/products/man-utd-2012-13-away');
 
-    expect(outcome).toEqual({ success: true, action: 'delisted', status: 'sold_elsewhere' });
+    expect(outcome).toEqual({ success: true, action: 'removed' });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain('/rest/v1/rpc/delist_kickio_listing');
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.p.source_url).toBe('https://www.vintagefootballshirts.com/products/man-utd-2012-13-away');
+  });
+
+  it("reports success on 'not_found' - nothing there to pull, nothing left to worry about", async () => {
+    const { delistListingFromKickio } = await loadModule();
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(jsonResponse({ action: 'not_found' }));
+
+    const outcome = await delistListingFromKickio('https://example.com/item');
+
+    expect(outcome).toEqual({ success: true, action: 'not_found' });
+  });
+
+  it("reports a (non-throwing) failure on 'skipped' - Kickio deliberately left it live because a buyer is mid-checkout or already bought it there", async () => {
+    const { delistListingFromKickio } = await loadModule();
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(jsonResponse({ action: 'skipped', listing_id: 'listing-1' }));
+
+    const outcome = await delistListingFromKickio('https://example.com/item');
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.action).toBe('skipped');
+    expect(outcome.error).toMatch(/checking out|already bought/i);
   });
 });
 
@@ -227,9 +247,9 @@ describe('delistAndPersistOutcome', () => {
     return { ...mod, query };
   }
 
-  it('sets kickio_delisted_at and clears any prior error on success', async () => {
+  it("sets kickio_delisted_at and clears any prior error on 'removed'", async () => {
     const { delistAndPersistOutcome, query } = await loadWithDb();
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce(jsonResponse({ action: 'delisted', status: 'sold_elsewhere' }));
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(jsonResponse({ action: 'removed', listing_id: 'listing-1' }));
 
     const outcome = await delistAndPersistOutcome('url-1', 'https://example.com/item');
 
@@ -237,6 +257,31 @@ describe('delistAndPersistOutcome', () => {
     const update = query.mock.calls.find(([sql]) => String(sql).includes('kickio_delisted_at = now()'));
     expect(update).toBeDefined();
     expect(update![1]).toEqual(['url-1']);
+  });
+
+  it("sets kickio_delisted_at on 'not_found' too - nothing live there left to track", async () => {
+    const { delistAndPersistOutcome, query } = await loadWithDb();
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(jsonResponse({ action: 'not_found' }));
+
+    const outcome = await delistAndPersistOutcome('url-1', 'https://example.com/item');
+
+    expect(outcome.success).toBe(true);
+    const update = query.mock.calls.find(([sql]) => String(sql).includes('kickio_delisted_at = now()'));
+    expect(update).toBeDefined();
+  });
+
+  it("never sets kickio_delisted_at on 'skipped' - the listing is still live on Kickio (buyer mid-checkout or already bought), so the next hourly sweep must retry", async () => {
+    const { delistAndPersistOutcome, query } = await loadWithDb();
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(jsonResponse({ action: 'skipped', listing_id: 'listing-1' }));
+
+    const outcome = await delistAndPersistOutcome('url-1', 'https://example.com/item');
+
+    expect(outcome.success).toBe(false);
+    const delistedUpdate = query.mock.calls.find(([sql]) => String(sql).includes('kickio_delisted_at = now()'));
+    expect(delistedUpdate).toBeUndefined();
+    const errorUpdate = query.mock.calls.find(([sql]) => String(sql).includes('kickio_listing_sync_error = $2'));
+    expect(errorUpdate).toBeDefined();
+    expect(errorUpdate![1][1]).toMatch(/checking out|already bought/i);
   });
 
   it('records the error (reusing kickio_listing_sync_error) rather than throwing, when the delist call fails', async () => {
