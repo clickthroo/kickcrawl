@@ -132,6 +132,16 @@ export interface KickioProductPayload extends KickioIdentityFields {
   image_url: string | null;
   extra_seasons: string[];
   source_url: string;
+  /**
+   * The retailer's own listing write-up (kickioProfile.ts's
+   * KickioListing.description - schema.org's Product.description, a
+   * site-configured selector, or the page's own meta/og:description, in
+   * that order). Sent on every product/listing push regardless of whether
+   * Kickio's own schema stores/shows it yet - same "send it now so a
+   * future backfill isn't needed once Kickio's side is ready" reasoning
+   * already used for source_url above.
+   */
+  description: string | null;
 }
 
 /**
@@ -156,6 +166,7 @@ export function buildProductPayload(urlId: string, profile: KickioProfile): Kick
     colour: profile.listing.colour,
     image_url: profile.listing.images[0] ?? null,
     extra_seasons: profile.identity.extra_seasons,
+    description: profile.listing.description,
     // The original listing page, exactly as scraped - not re-derived from
     // anything that could drift (the source site's URL can outlive its own
     // page: this is the same snapshot kept in sales.profile.source.url even

@@ -28,6 +28,7 @@ function activeProfile(kickioTeams?: { name: string; slug: string; country?: str
     images: ['https://www.vintagefootballshirts.com/img/shirt.jpg'],
     price: 90,
     currency: 'GBP',
+    extracted: { description: "A classic Man Utd shirt, seller's own write-up." },
     kickioTeams,
   });
 }
@@ -94,6 +95,7 @@ describe('submitListingToKickio', () => {
     expect(body.p.condition).toBe('Brand New (With Tags)');
     expect(body.p.size).toBe('M');
     expect(body.p.quantity).toBe(1);
+    expect(body.p.description).toBe("A classic Man Utd shirt, seller's own write-up.");
   });
 
   it('surfaces a Kickio RPC error rather than swallowing it', async () => {

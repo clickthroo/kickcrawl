@@ -117,7 +117,14 @@ describe('syncSaleToKickio', () => {
       .mockResolvedValueOnce(jsonResponse({ product_id: 'product-123', matched_by: 'new', action: 'insert' }))
       .mockResolvedValueOnce(jsonResponse({ action: 'insert', product_id: 'product-123', sale_id: 'kickio-sale-456' }));
 
-    const outcome = await syncSaleToKickio(saleWithProfile());
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/man-utd-2012-13-away',
+      title: '2012-13 Manchester United Nike Away Shirt *BNIB* M',
+      images: ['https://www.vintagefootballshirts.com/img/shirt.jpg'],
+      extracted: { description: "A classic Man Utd shirt, seller's own write-up." },
+      kickioTeams: [{ name: 'Manchester United', slug: 'manchester-united', country: 'England' }],
+    });
+    const outcome = await syncSaleToKickio(saleWithProfile({ profile }));
 
     expect(outcome).toEqual({
       success: true,
@@ -141,6 +148,10 @@ describe('syncSaleToKickio', () => {
     // KickCrawl-sourced team match (or any other guessed field) against
     // the real source - see source_url's own comment in buildPayloads().
     expect(productBody.p.source_url).toBe('https://www.vintagefootballshirts.com/products/man-utd-2012-13-away');
+    // Sent alongside source_url, same "forward it now even before Kickio's
+    // own schema is confirmed to read it" reasoning - see KickioProductPayload's
+    // own doc comment.
+    expect(productBody.p.description).toBe("A classic Man Utd shirt, seller's own write-up.");
 
     const [saleUrl, saleInit] = fetchSpy.mock.calls[1];
     expect(String(saleUrl)).toContain('/rest/v1/rpc/import_kickio_sale');
