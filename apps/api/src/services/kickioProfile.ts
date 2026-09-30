@@ -902,7 +902,7 @@ export interface KickioTeamRef {
   country?: string | null;
 }
 
-export type KickioTeamMatchType = 'exact' | 'normalized' | 'contained';
+export type KickioTeamMatchType = 'exact' | 'normalized' | 'alias' | 'contained';
 
 export interface KickioTeamMatch {
   name: string;
@@ -926,6 +926,27 @@ export interface KickioTeamMatch {
 // short of that is deliberately left unmatched (null) rather than guessed.
 const CLUB_DESIGNATOR_WORDS =
   /\b(fc|cf|afc|sc|ac|cd|cp|fk|sk|bk|if|sv|tsv|vfl|vfb|club|football|soccer|de|do|the)\b/g;
+
+/**
+ * Small, locally-maintained set of common well-known abbreviations/
+ * alternate names that Kickio's own (inaccessible - see the comment on
+ * CLUB_DESIGNATOR_WORDS above) `team_aliases` table would also resolve,
+ * confirmed against real stuck-sale cases and this file's own
+ * pre-existing "Man Utd" example. Keyed by the SAME normalizeKickioTeamName()
+ * form as the guess is compared with, so e.g. "USA", "U.S.A." and "usa"
+ * all hit the one 'usa' entry. Deliberately small and manually curated -
+ * a wrong entry here would silently mis-map a real team, so only add one
+ * once a real stuck case confirms it's needed, never guessed ahead of time.
+ */
+const TEAM_ALIASES: Record<string, string> = {
+  usa: 'United States',
+  'man utd': 'Manchester United',
+  'man u': 'Manchester United',
+  'man city': 'Manchester City',
+  spurs: 'Tottenham Hotspur',
+  psg: 'Paris Saint-Germain',
+  wolves: 'Wolverhampton Wanderers',
+};
 
 function normalizeKickioTeamName(s: string): string {
   const noDiacritics = s.normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -965,6 +986,20 @@ export function matchKickioTeam(
   if (!normalizedGuess) return null;
   const normalized = teams.find((t) => normalizeKickioTeamName(t.name) === normalizedGuess);
   if (normalized) return { name: normalized.name, slug: normalized.slug, matchType: 'normalized' };
+
+  // A known well-known abbreviation/alternate name (TEAM_ALIASES above) -
+  // tried before containment since it's a specific, curated correction
+  // rather than a heuristic, and should win over an ambiguous containment
+  // guess. Resolved against teams by exact/normalized match on the
+  // alias's canonical name, same as a scraped guess would be.
+  const aliasTarget = TEAM_ALIASES[normalizedGuess];
+  if (aliasTarget) {
+    const aliasExact = teams.find((t) => t.name.toLowerCase() === aliasTarget.toLowerCase());
+    if (aliasExact) return { name: aliasExact.name, slug: aliasExact.slug, matchType: 'alias' };
+    const normalizedAliasTarget = normalizeKickioTeamName(aliasTarget);
+    const aliasNormalized = teams.find((t) => normalizeKickioTeamName(t.name) === normalizedAliasTarget);
+    if (aliasNormalized) return { name: aliasNormalized.name, slug: aliasNormalized.slug, matchType: 'alias' };
+  }
 
   // A short form ("Tottenham", "Leeds", "Blackburn") that's a whole-word
   // match inside (or containing) a canonical name - mirroring the
@@ -1010,6 +1045,13 @@ export interface KickioTeamMatchDebug {
   normalizedGuess: string;
   exactMatch: { name: string; slug: string } | null;
   normalizedMatch: { name: string; slug: string } | null;
+  // The TEAM_ALIASES entry (if any) the normalized guess hit, and what it
+  // resolved to against the live team list - null aliasTarget means the
+  // guess isn't a known alias at all; a non-null aliasTarget with a null
+  // aliasMatch means the alias is known but its canonical name isn't in
+  // this deployment's own live team list (a real data gap, not a code bug).
+  aliasTarget: string | null;
+  aliasMatch: { name: string; slug: string } | null;
   // Every team the containment step considered a candidate BEFORE the
   // gender tiebreaker - a length > 1 here (with genderFiltered still null
   // or itself > 1) is exactly the "genuinely ambiguous, correctly left
@@ -1039,6 +1081,15 @@ export function debugMatchKickioTeam(
   const normalizedGuess = normalizeKickioTeamName(trimmed);
   const normalizedMatch = teams.find((t) => normalizeKickioTeamName(t.name) === normalizedGuess) ?? null;
 
+  const aliasTarget = TEAM_ALIASES[normalizedGuess] ?? null;
+  let aliasMatch: { name: string; slug: string } | null = null;
+  if (aliasTarget) {
+    const aliasExact = teams.find((t) => t.name.toLowerCase() === aliasTarget.toLowerCase());
+    const normalizedAliasTarget = normalizeKickioTeamName(aliasTarget);
+    const found = aliasExact ?? teams.find((t) => normalizeKickioTeamName(t.name) === normalizedAliasTarget);
+    aliasMatch = found ? { name: found.name, slug: found.slug } : null;
+  }
+
   const minLen = 4;
   const containmentCandidates = teams.filter((t) => {
     const n = normalizeKickioTeamName(t.name);
@@ -1059,6 +1110,8 @@ export function debugMatchKickioTeam(
     normalizedGuess,
     exactMatch: exact ? { name: exact.name, slug: exact.slug } : null,
     normalizedMatch: normalizedMatch ? { name: normalizedMatch.name, slug: normalizedMatch.slug } : null,
+    aliasTarget,
+    aliasMatch,
     containmentCandidates: containmentCandidates.map((t) => ({ name: t.name, slug: t.slug, country: t.country ?? null })),
     genderFilteredCandidates:
       genderFilteredCandidates?.map((t) => ({ name: t.name, slug: t.slug, country: t.country ?? null })) ?? null,

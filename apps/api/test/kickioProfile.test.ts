@@ -770,12 +770,49 @@ describe('matchKickioTeam', () => {
   });
 
   it('returns null for a genuinely unmatched guess, rather than guessing at the closest one', () => {
-    // Deliberately no fuzzy/trigram fallback here - "Man Utd" is a real
-    // alias Kickio's own team_aliases table would resolve, but this
-    // function can't see that table (authenticated-only), so it's left
-    // unmatched rather than guessed at.
-    expect(matchKickioTeam('Man Utd', teams)).toBeNull();
+    // Deliberately no fuzzy/trigram fallback, and no local alias entry for
+    // this one - a guess with no exact/normalized/alias/containment match
+    // stays unmatched rather than guessed at.
     expect(matchKickioTeam('Totally Unknown FC', teams)).toBeNull();
+  });
+
+  describe('local alias list (TEAM_ALIASES)', () => {
+    it('resolves a known well-known abbreviation via the local alias list', () => {
+      // "Man Utd" is a real alias Kickio's own (inaccessible) team_aliases
+      // table would also resolve - this file can't see that table, but
+      // curates a small local list of confirmed common cases instead (see
+      // TEAM_ALIASES).
+      expect(matchKickioTeam('Man Utd', teams)).toEqual({
+        name: 'Manchester United',
+        slug: 'manchester-united',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "USA" to "United States" - the real gap found in a live stuck sale', () => {
+      const usaTeams = [{ name: 'United States', slug: 'united-states' }, { name: 'Arsenal', slug: 'arsenal' }];
+      expect(matchKickioTeam('USA', usaTeams)).toEqual({
+        name: 'United States',
+        slug: 'united-states',
+        matchType: 'alias',
+      });
+    });
+
+    it('is case-insensitive and tolerant of punctuation, via the same normalization the rest of matching uses', () => {
+      const usaTeams = [{ name: 'United States', slug: 'united-states' }];
+      expect(matchKickioTeam('usa', usaTeams)).toEqual({
+        name: 'United States',
+        slug: 'united-states',
+        matchType: 'alias',
+      });
+    });
+
+    it('stays unmatched when the alias is known but its canonical team is not in this deployment\'s own live list', () => {
+      // A real, distinct failure mode from "Totally Unknown FC" above -
+      // the alias itself resolved, but the team it points to isn't in the
+      // list this caller was given, so there's nothing to return.
+      expect(matchKickioTeam('USA', teams)).toBeNull();
+    });
   });
 
   it('returns null for a blank guess', () => {
@@ -944,6 +981,23 @@ describe('debugMatchKickioTeam', () => {
       { name: 'Newcastle United', slug: 'newcastle-united', country: 'England' },
       { name: 'Newcastle United Jets', slug: 'newcastle-jets', country: 'Australia' },
     ]);
+  });
+
+  it('reports the local alias step separately - target resolved and unresolved cases', () => {
+    const teams = [{ name: 'Manchester United', slug: 'manchester-united' }];
+    const resolved = debugMatchKickioTeam('Man Utd', teams);
+    expect(resolved.aliasTarget).toBe('Manchester United');
+    expect(resolved.aliasMatch).toEqual({ name: 'Manchester United', slug: 'manchester-united' });
+    expect(resolved.result).toEqual({ name: 'Manchester United', slug: 'manchester-united', matchType: 'alias' });
+
+    const noAliasEntry = debugMatchKickioTeam('Totally Unknown FC', teams);
+    expect(noAliasEntry.aliasTarget).toBeNull();
+    expect(noAliasEntry.aliasMatch).toBeNull();
+
+    const unresolvedTarget = debugMatchKickioTeam('USA', teams);
+    expect(unresolvedTarget.aliasTarget).toBe('United States');
+    expect(unresolvedTarget.aliasMatch).toBeNull();
+    expect(unresolvedTarget.result).toBeNull();
   });
 });
 
