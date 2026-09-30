@@ -90,6 +90,7 @@ describe('processKickioListingSync', () => {
     expect(sql).toContain('s.list_on_kickio = true');
     expect(sql).toContain("u.stock_status = 'In Stock'");
     expect(sql).toContain('u.kickio_listing_dismissed_at IS NULL');
+    expect(sql).toContain('u.kickio_sold_via_kickio_at IS NULL');
     expect(sql).toContain('u.kickio_listing_synced_at IS NOT NULL OR u.kickio_listing_sync_attempts < $1');
     expect(listSelect![1]).toEqual([5]);
   });
@@ -157,6 +158,11 @@ describe('processKickioListingSync', () => {
     );
     expect(String(delistSelect![0])).toContain("u.stock_status = 'Out of Stock'");
     expect(String(delistSelect![0])).not.toContain('list_on_kickio');
+    // Excludes anything Kickio's own webhook already told us sold there -
+    // calling delist_kickio_listing on that would just get 'skipped' back
+    // forever (Kickio never pulls a completed sale), looping every hour
+    // for nothing.
+    expect(String(delistSelect![0])).toContain('u.kickio_sold_via_kickio_at IS NULL');
   });
 });
 

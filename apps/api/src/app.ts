@@ -25,6 +25,7 @@ import { adminCurrencyRateRoutes } from './routes/admin/currencyRates.js';
 import { adminSalesRoutes } from './routes/admin/sales.js';
 import { adminPriceChangeRoutes } from './routes/admin/priceChanges.js';
 import { adminKickioTeamRoutes } from './routes/admin/kickioTeams.js';
+import { kickioWebhookRoutes } from './routes/webhooks/kickioSale.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -34,6 +35,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(cookie, { secret: config.sessionSecret });
 
   app.get('/health', async () => ({ ok: true }));
+
+  // HMAC-signed, not admin-session or API-key authenticated - a genuinely
+  // different caller (Kickio's own backend) with its own auth model, so
+  // registered directly here rather than under either the v1 API-key scope
+  // or the cookie-authenticated admin routes below.
+  await app.register(kickioWebhookRoutes);
 
   // Public v1 API only - API-key authenticated (Authorization: Bearer),
   // never cookie-based, so it's safe for this to allow being called
