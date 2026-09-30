@@ -19,6 +19,7 @@ const EMPTY: Omit<Site, 'id' | 'created_at' | 'updated_at'> = {
   require_pro_seller: false,
   min_seller_feedback: null,
   list_on_kickio: false,
+  blocked_reason: null,
 };
 
 export default function SiteForm() {

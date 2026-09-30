@@ -177,6 +177,13 @@ export default function SiteDetail() {
         }
       />
 
+      {site.blocked_reason && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <p className="font-medium">Known blocked - not crawled</p>
+          <p className="mt-1 text-red-700">{site.blocked_reason}</p>
+        </div>
+      )}
+
       {error && <ErrorBanner message={error} />}
       {message && (
         <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">

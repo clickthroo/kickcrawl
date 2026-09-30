@@ -22,6 +22,7 @@ const siteSchema = z.object({
   min_seller_feedback: z.number().int().positive().nullable().optional().default(null),
   currency_override: z.string().nullable().optional().default(null),
   list_on_kickio: z.boolean().optional().default(false),
+  blocked_reason: z.string().nullable().optional().default(null),
 });
 
 interface SiteRow {
@@ -101,8 +102,8 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
       const { rows } = await pool.query(
         `INSERT INTO sites (name, base_url, rate_limit_rps, max_depth, use_browser_default, skip_browser_for_items,
            use_proxy, default_selectors, allowed_paths, denied_paths, is_active, require_pro_seller, min_seller_feedback,
-           currency_override, list_on_kickio)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+           currency_override, list_on_kickio, blocked_reason)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
         [
           s.name,
           s.base_url,
@@ -119,6 +120,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
           s.min_seller_feedback,
           s.currency_override,
           s.list_on_kickio,
+          s.blocked_reason,
         ],
       );
       return reply.send({ success: true, site: rows[0] });
@@ -150,6 +152,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
          min_seller_feedback = $14,
          currency_override = $15,
          list_on_kickio = COALESCE($16, list_on_kickio),
+         blocked_reason = $17,
          updated_at = now()
        WHERE id = $1 RETURNING *`,
       [
@@ -169,6 +172,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
         s.min_seller_feedback,
         s.currency_override,
         s.list_on_kickio,
+        s.blocked_reason,
       ],
     );
     if (!rows[0]) return reply.code(404).send({ success: false, error: 'Site not found' });
