@@ -5,7 +5,7 @@ import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { runMap } from '../../lib/mapCore.js';
 import { crawlQueue } from '../../queue.js';
 import { createJob } from '../../lib/jobRecords.js';
-import { hasActiveCrawl, crawlPayloadForSite, enqueueCrawlAllActiveSites } from '../../lib/crawlAll.js';
+import { hasActiveCrawl, crawlPayloadForSite, enqueueCrawlAllActiveSites, MAX_CRAWL_PAGES } from '../../lib/crawlAll.js';
 
 const siteSchema = z.object({
   name: z.string().min(1),
@@ -168,7 +168,12 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
     if (!site) return reply.code(404).send({ success: false, error: 'Site not found' });
 
     try {
-      const urls = await runMap(site.base_url, site.id, { limit: 5000 });
+      // Mirrors the crawl pipeline's own ceiling (crawlAll.ts) rather than
+      // a separately-tuned, much lower one of its own - confirmed on a
+      // real site (footballfinery.co.uk) whose sitemap alone exceeds the
+      // old 5000 limit here, silently truncating discovery well short of
+      // its real catalog.
+      const urls = await runMap(site.base_url, site.id, { limit: MAX_CRAWL_PAGES });
       return reply.send({ success: true, total: urls.length });
     } catch (err) {
       return reply

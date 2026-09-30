@@ -33,8 +33,13 @@ export async function hasActiveCrawl(siteId: string): Promise<boolean> {
 // A large site's real catalog can run well past a few thousand pages once
 // category/nav pages are counted alongside actual items - 2000 was cutting
 // a crawl off mid-catalog for a site that size well before it ever ran out
-// of real links to follow.
-const MAX_CRAWL_PAGES = 50_000;
+// of real links to follow. Exported so the admin "Run map" route
+// (routes/admin/sites.ts) can share the same ceiling instead of a
+// separately-tuned, easily-forgotten one of its own - confirmed on a real
+// site (footballfinery.co.uk) whose sitemap alone exceeds the old, much
+// lower map-only limit (5000), silently truncating discovery well short of
+// its real catalog.
+export const MAX_CRAWL_PAGES = 50_000;
 
 export function crawlPayloadForSite(site: CrawlSiteRow) {
   return {
