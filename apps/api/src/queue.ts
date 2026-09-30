@@ -38,3 +38,13 @@ export const kickioSyncQueue = new Queue('kickio_sync', { connection: redisConne
 // delist anything that's since sold. Same "nothing per-job to pass in"
 // shape as kickioSyncQueue above.
 export const kickioListingSyncQueue = new Queue('kickio_listing_sync', { connection: redisConnection });
+
+// A single global sweep (workers/crawlAllWorker.ts) that periodically
+// re-queues a crawl for every active site, the same "Crawl all sites"
+// button already does manually (lib/crawlAll.ts) - discovering NEW items
+// only ever happens via a crawl, never via recheckQueue's own hourly
+// sweep (which only revisits URLs already in the database), so without
+// this, new listings only ever appear when an admin clicks the button
+// themselves. Same "nothing per-job to pass in" shape as the other
+// global sweeps above.
+export const crawlAllScheduleQueue = new Queue('crawl_all_schedule', { connection: redisConnection });

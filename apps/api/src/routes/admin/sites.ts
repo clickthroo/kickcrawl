@@ -5,6 +5,7 @@ import { requireAdminSession } from '../../middleware/adminAuth.js';
 import { runMap } from '../../lib/mapCore.js';
 import { crawlQueue } from '../../queue.js';
 import { createJob } from '../../lib/jobRecords.js';
+import { hasActiveCrawl, crawlPayloadForSite, enqueueCrawlAllActiveSites } from '../../lib/crawlAll.js';
 
 const siteSchema = z.object({
   name: z.string().min(1),
@@ -24,55 +25,6 @@ const siteSchema = z.object({
   list_on_kickio: z.boolean().optional().default(false),
   blocked_reason: z.string().nullable().optional().default(null),
 });
-
-interface SiteRow {
-  id: string;
-  base_url: string;
-  max_depth: number;
-  allowed_paths: string[] | null;
-  denied_paths: string[] | null;
-  use_browser_default: boolean;
-}
-
-// Repeatedly clicking "Run crawl"/"Crawl all sites" before an earlier
-// crawl for the same site finishes used to queue a fresh duplicate every
-// time. The per-domain rate limiter (services/rateLimiter.ts) is shared
-// across all jobs hitting that domain, not per-job, so N concurrent
-// crawls for the same site don't run N times faster - they just take
-// turns sharing the same one-request-per-interval budget, making every
-// one of them look stuck.
-async function hasActiveCrawl(siteId: string): Promise<boolean> {
-  // 'paused' counts as active too - it's still occupying this site's one-
-  // active-crawl slot, just not doing any fetching right now. Letting a
-  // second crawl start while the first sits paused would defeat the whole
-  // point of pausing instead of cancelling.
-  const { rows } = await pool.query(
-    `SELECT 1 FROM jobs WHERE site_id = $1 AND type = 'crawl' AND status IN ('queued', 'running', 'paused') LIMIT 1`,
-    [siteId],
-  );
-  return rows.length > 0;
-}
-
-// A large site's real catalog can run well past a few thousand pages once
-// category/nav pages are counted alongside actual items - 2000 was cutting
-// a crawl off mid-catalog for a site that size well before it ever ran out
-// of real links to follow.
-const MAX_CRAWL_PAGES = 50_000;
-
-function crawlPayloadForSite(site: SiteRow) {
-  return {
-    url: site.base_url,
-    limit: MAX_CRAWL_PAGES,
-    maxDepth: site.max_depth,
-    includePaths: site.allowed_paths ?? [],
-    excludePaths: site.denied_paths ?? [],
-    scrapeOptions: {
-      formats: ['markdown', 'links'] as ('markdown' | 'links')[],
-      onlyMainContent: true,
-      useBrowser: site.use_browser_default,
-    },
-  };
-}
 
 export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
@@ -253,21 +205,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
   // are skipped, matching the scoping already used for scraping elsewhere
   // (lib/siteResolver.ts).
   app.post('/api/admin/sites/crawl-all', async (_req, reply) => {
-    const { rows } = await pool.query('SELECT * FROM sites WHERE is_active = true');
-
-    const jobIds: string[] = [];
-    let skipped = 0;
-    for (const site of rows) {
-      if (await hasActiveCrawl(site.id)) {
-        skipped += 1;
-        continue;
-      }
-      const payload = crawlPayloadForSite(site);
-      const jobId = await createJob('crawl', site.id, payload, 'queued');
-      await crawlQueue.add('crawl', { jobId, siteId: site.id, ...payload }, { jobId });
-      jobIds.push(jobId);
-    }
-
-    return reply.send({ success: true, jobIds, total: jobIds.length, skipped });
+    const result = await enqueueCrawlAllActiveSites();
+    return reply.send({ success: true, ...result });
   });
 }
