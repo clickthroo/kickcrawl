@@ -13,6 +13,7 @@ import {
   gradeConditionText,
   guessTeamFromTitle,
   matchKickioTeam,
+  debugMatchKickioTeam,
   normalizePlayerName,
   retailerHostname,
   RETAILER_CONDITION_OVERRIDES,
@@ -873,6 +874,76 @@ describe('matchKickioTeam', () => {
       const shortNameTeams = [{ name: 'PSV', slug: 'psv' }];
       expect(matchKickioTeam('PSV Eindhoven', shortNameTeams)).toBeNull();
     });
+  });
+});
+
+describe('debugMatchKickioTeam', () => {
+  it('reports the exact match and an empty candidate list, same result as matchKickioTeam itself', () => {
+    const teams = [{ name: 'Arsenal', slug: 'arsenal' }, { name: 'Real Madrid', slug: 'real-madrid' }];
+    const debug = debugMatchKickioTeam('arsenal', teams);
+
+    // Every step runs independently here (unlike matchKickioTeam's own
+    // early-return chain) so a debug caller can see what EACH step found,
+    // not just whichever one happened to win - "Arsenal" trivially
+    // normalizes to itself too, so normalizedMatch finds the same team,
+    // not null.
+    expect(debug.exactMatch).toEqual({ name: 'Arsenal', slug: 'arsenal' });
+    expect(debug.normalizedMatch).toEqual({ name: 'Arsenal', slug: 'arsenal' });
+    expect(debug.containmentCandidates).toEqual([{ name: 'Arsenal', slug: 'arsenal', country: null }]);
+    expect(debug.result).toEqual({ name: 'Arsenal', slug: 'arsenal', matchType: 'exact' });
+  });
+
+  it('lists every containment candidate, even the ones matchKickioTeam itself gives up on for being ambiguous', () => {
+    // Same fixture as matchKickioTeam's own "stays unmatched when
+    // genuinely ambiguous" test - the whole point of this diagnostic is
+    // seeing WHY it's null, not just that it is.
+    const realTeams = [
+      { name: 'Real Madrid', slug: 'real-madrid' },
+      { name: 'Real Sociedad', slug: 'real-sociedad' },
+      { name: 'Real Betis', slug: 'real-betis' },
+    ];
+    const debug = debugMatchKickioTeam('Real', realTeams, 'Mens');
+
+    expect(debug.result).toBeNull();
+    expect(debug.containmentCandidates.map((t) => t.name)).toEqual(['Real Madrid', 'Real Sociedad', 'Real Betis']);
+    // The gender filter still "passes" all 3 - none of them are women's
+    // teams, so none get excluded by a Mens filter - it just doesn't
+    // narrow anything down to a single candidate, same as
+    // containmentCandidates above.
+    expect(debug.genderFilteredCandidates?.map((t) => t.name)).toEqual([
+      'Real Madrid',
+      'Real Sociedad',
+      'Real Betis',
+    ]);
+  });
+
+  it("surfaces the guess's own codepoints - catches an invisible/non-ASCII character a UI would render identically to a normal one", () => {
+    // U+00A0 (non-breaking space) instead of a normal space - visually
+    // indistinguishable from "Real Madrid" in any UI, but a different
+    // string entirely.
+    const teams = [{ name: 'Real Madrid', slug: 'real-madrid' }];
+    const debug = debugMatchKickioTeam('Real Madrid', teams);
+
+    expect(debug.guessCodePoints).toContain(0x00a0);
+    // Still resolves correctly here - normalizeKickioTeamName's own
+    // [^a-z0-9 ] strip already turns U+00A0 into a plain space on both
+    // sides, so this specific character doesn't itself break the match;
+    // the point is that debug surfaces it for inspection regardless.
+    expect(debug.result).toEqual({ name: 'Real Madrid', slug: 'real-madrid', matchType: 'normalized' });
+  });
+
+  it('includes each containment candidate\'s country, for telling apart same-named teams in different leagues', () => {
+    const teams = [
+      { name: 'Newcastle United', slug: 'newcastle-united', country: 'England' },
+      { name: 'Newcastle United Jets', slug: 'newcastle-jets', country: 'Australia' },
+    ];
+    const debug = debugMatchKickioTeam('Newcastle', teams);
+
+    expect(debug.result).toBeNull(); // genuinely ambiguous - both contain "Newcastle" as a whole word
+    expect(debug.containmentCandidates).toEqual([
+      { name: 'Newcastle United', slug: 'newcastle-united', country: 'England' },
+      { name: 'Newcastle United Jets', slug: 'newcastle-jets', country: 'Australia' },
+    ]);
   });
 });
 
