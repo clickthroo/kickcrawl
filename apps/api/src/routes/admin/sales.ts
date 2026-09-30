@@ -5,7 +5,7 @@ import { MAX_SYNC_ATTEMPTS, syncAndPersistOutcome, type SaleForSync } from '../.
 import { getKickioTeams, getKickioTeamsForMatching, KickioTeamsNotConfiguredError } from '../../lib/kickioTeams.js';
 import { enqueueKickioSyncRecoverySweep } from '../../workers/kickioSyncWorker.js';
 import { scrapePage } from '../../lib/scrapeCore.js';
-import { buildKickioProfile } from '../../services/kickioProfile.js';
+import { buildKickioProfile, debugMatchKickioTeam } from '../../services/kickioProfile.js';
 import { getCurrencyRates } from '../../lib/currencyRates.js';
 
 // A sale's Kickio sync status, derived from the same four columns every
@@ -343,5 +343,46 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
     // admin doesn't need a second "retry" click for the common case.
     const outcome = await syncAndPersistOutcome({ ...sale, profile: updatedProfile });
     return reply.send({ success: true, outcome });
+  });
+
+  // EXPERIMENTAL, read-only - re-runs matchKickioTeam's own logic against
+  // a FRESH team list (force refresh - never the cache another request
+  // might have populated minutes ago) and reports exactly why a "no
+  // confident Kickio team match" sale is stuck: genuinely ambiguous
+  // (more than one containment candidate), a real naming mismatch (no
+  // candidate at all), or something else (an invisible/non-ASCII
+  // character in the scraped guess, visible via guessCodePoints, that
+  // wouldn't show up in any UI's rendered text). Never touches the sale
+  // or attempts a sync itself - lib/kickioProfile.ts's own
+  // debugMatchKickioTeam doc comment explains why this is kept
+  // deliberately isolated from the real sync path.
+  app.get('/api/admin/sales/:id/debug-kickio-team-match', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { rows } = await pool.query<{ profile: SaleForSync['profile'] }>(
+      `SELECT profile FROM sales WHERE id = $1`,
+      [id],
+    );
+    const sale = rows[0];
+    if (!sale) return reply.code(404).send({ success: false, error: 'Sale not found' });
+    if (!sale.profile) {
+      return reply.code(400).send({ success: false, error: 'This sale has no stored profile to debug' });
+    }
+
+    try {
+      const { teams } = await getKickioTeams(true);
+      const { team, gender } = sale.profile.identity;
+      if (!team) {
+        return reply.code(400).send({ success: false, error: 'This profile has no resolved team to debug' });
+      }
+      const debug = debugMatchKickioTeam(team, teams, gender);
+      return reply.send({ success: true, debug });
+    } catch (err) {
+      if (err instanceof KickioTeamsNotConfiguredError) {
+        return reply.code(501).send({ success: false, error: err.message });
+      }
+      return reply
+        .code(502)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Failed to fetch Kickio teams' });
+    }
   });
 }

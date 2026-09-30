@@ -10,6 +10,12 @@ const BLOCK_PHRASES = [
   'verify you are a human',
   'unusual traffic',
   'pardon our interruption',
+  // Confirmed live on thekitman.co.uk: a full 202-status page titled
+  // "Robot Challenge Screen" with no real site content or links - not
+  // caught by any phrase above, so it silently got mapped as if it were a
+  // real product listing (its own title read as a "team" name) instead of
+  // being reported as blocked.
+  'robot challenge',
 ];
 
 export function isBlockPage(statusCode: number, html: string): boolean {

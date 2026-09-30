@@ -104,7 +104,17 @@ export default function Sites() {
                       <div className="truncate font-medium text-slate-800">{site.name}</div>
                       <div className="truncate text-xs text-slate-500">{site.base_url}</div>
                     </div>
-                    <StatusBadge active={site.is_active} />
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {site.blocked_reason && (
+                        <span
+                          className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+                          title={site.blocked_reason}
+                        >
+                          Blocked
+                        </span>
+                      )}
+                      <StatusBadge active={site.is_active} />
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
                     <span>{site.rate_limit_rps} rps</span>
@@ -143,7 +153,17 @@ export default function Sites() {
                       <td className="px-4 py-3 text-slate-600">{site.url_count ?? 0}</td>
                       <td className="px-4 py-3 text-slate-600">{site.fetched_count ?? 0}</td>
                       <td className="px-4 py-3">
-                        <StatusBadge active={site.is_active} />
+                        <div className="flex items-center gap-1.5">
+                          {site.blocked_reason && (
+                            <span
+                              className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+                              title={site.blocked_reason}
+                            >
+                              Blocked
+                            </span>
+                          )}
+                          <StatusBadge active={site.is_active} />
+                        </div>
                       </td>
                     </tr>
                   ))}

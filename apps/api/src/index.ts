@@ -8,6 +8,7 @@ import { startCrawlWorker } from './workers/crawlWorker.js';
 import { scheduleRecheck, startRecheckWorker } from './workers/recheckWorker.js';
 import { scheduleKickioSync, startKickioSyncWorker } from './workers/kickioSyncWorker.js';
 import { scheduleKickioListingSync, startKickioListingSyncWorker } from './workers/kickioListingSyncWorker.js';
+import { scheduleCrawlAll, startCrawlAllWorker } from './workers/crawlAllWorker.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -47,6 +48,8 @@ async function main(): Promise<void> {
   await scheduleKickioSync();
   const kickioListingSyncWorker = startKickioListingSyncWorker();
   await scheduleKickioListingSync();
+  const crawlAllWorker = startCrawlAllWorker();
+  await scheduleCrawlAll();
 
   const app = await buildApp();
 
@@ -72,6 +75,7 @@ async function main(): Promise<void> {
     await recheckWorker.close();
     await kickioSyncWorker.close();
     await kickioListingSyncWorker.close();
+    await crawlAllWorker.close();
     await pool.end();
     process.exit(0);
   };

@@ -72,6 +72,8 @@ export default function Sales() {
   const [resyncMessages, setResyncMessages] = useState<Record<string, string>>({});
   const [kickioTeamNames, setKickioTeamNames] = useState<string[]>([]);
   const [retryingAll, setRetryingAll] = useState(false);
+  const [debuggingId, setDebuggingId] = useState<string | null>(null);
+  const [debugResults, setDebugResults] = useState<Record<string, unknown>>({});
   const [retryAllMessage, setRetryAllMessage] = useState<string | null>(null);
   const pageSize = 25;
 
@@ -132,6 +134,23 @@ export default function Sales() {
     } finally {
       setRetryingId(null);
       await loadSales();
+    }
+  }
+
+  async function debugTeamMatch(saleId: string) {
+    setDebuggingId(saleId);
+    try {
+      const res = await api.get<{ success: boolean; debug: unknown }>(
+        `/admin/sales/${saleId}/debug-kickio-team-match`,
+      );
+      setDebugResults((r) => ({ ...r, [saleId]: res.debug }));
+    } catch (err) {
+      setDebugResults((r) => ({
+        ...r,
+        [saleId]: { error: err instanceof ApiError ? err.message : 'Debug request failed' },
+      }));
+    } finally {
+      setDebuggingId(null);
     }
   }
 
@@ -372,6 +391,15 @@ export default function Sales() {
                     </Button>
                     <Button
                       variant="secondary"
+                      className="!min-h-0 !py-1 text-xs"
+                      disabled={debuggingId === s.id}
+                      onClick={() => debugTeamMatch(s.id)}
+                      title="Re-run the Kickio team match against a fresh live team list and show exactly why - never touches this sale"
+                    >
+                      {debuggingId === s.id ? 'Debugging…' : 'Debug team match'}
+                    </Button>
+                    <Button
+                      variant="secondary"
                       className="!min-h-0 !py-1 text-xs text-slate-500"
                       disabled={dismissingId === s.id}
                       onClick={() => dismissSale(s.id)}
@@ -380,6 +408,12 @@ export default function Sales() {
                     </Button>
                   </div>
                 </div>
+              )}
+
+              {debugResults[s.id] !== undefined && (
+                <pre className="overflow-x-auto rounded-md border border-slate-200 bg-slate-900 px-3 py-2 text-[11px] leading-relaxed text-slate-100">
+                  {JSON.stringify(debugResults[s.id], null, 2)}
+                </pre>
               )}
 
               {/* Nothing to show for a routine synced sale beyond the

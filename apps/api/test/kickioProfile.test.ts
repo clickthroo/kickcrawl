@@ -13,6 +13,7 @@ import {
   gradeConditionText,
   guessTeamFromTitle,
   matchKickioTeam,
+  debugMatchKickioTeam,
   normalizePlayerName,
   retailerHostname,
   RETAILER_CONDITION_OVERRIDES,
@@ -769,12 +770,49 @@ describe('matchKickioTeam', () => {
   });
 
   it('returns null for a genuinely unmatched guess, rather than guessing at the closest one', () => {
-    // Deliberately no fuzzy/trigram fallback here - "Man Utd" is a real
-    // alias Kickio's own team_aliases table would resolve, but this
-    // function can't see that table (authenticated-only), so it's left
-    // unmatched rather than guessed at.
-    expect(matchKickioTeam('Man Utd', teams)).toBeNull();
+    // Deliberately no fuzzy/trigram fallback, and no local alias entry for
+    // this one - a guess with no exact/normalized/alias/containment match
+    // stays unmatched rather than guessed at.
     expect(matchKickioTeam('Totally Unknown FC', teams)).toBeNull();
+  });
+
+  describe('local alias list (TEAM_ALIASES)', () => {
+    it('resolves a known well-known abbreviation via the local alias list', () => {
+      // "Man Utd" is a real alias Kickio's own (inaccessible) team_aliases
+      // table would also resolve - this file can't see that table, but
+      // curates a small local list of confirmed common cases instead (see
+      // TEAM_ALIASES).
+      expect(matchKickioTeam('Man Utd', teams)).toEqual({
+        name: 'Manchester United',
+        slug: 'manchester-united',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "USA" to "United States" - the real gap found in a live stuck sale', () => {
+      const usaTeams = [{ name: 'United States', slug: 'united-states' }, { name: 'Arsenal', slug: 'arsenal' }];
+      expect(matchKickioTeam('USA', usaTeams)).toEqual({
+        name: 'United States',
+        slug: 'united-states',
+        matchType: 'alias',
+      });
+    });
+
+    it('is case-insensitive and tolerant of punctuation, via the same normalization the rest of matching uses', () => {
+      const usaTeams = [{ name: 'United States', slug: 'united-states' }];
+      expect(matchKickioTeam('usa', usaTeams)).toEqual({
+        name: 'United States',
+        slug: 'united-states',
+        matchType: 'alias',
+      });
+    });
+
+    it('stays unmatched when the alias is known but its canonical team is not in this deployment\'s own live list', () => {
+      // A real, distinct failure mode from "Totally Unknown FC" above -
+      // the alias itself resolved, but the team it points to isn't in the
+      // list this caller was given, so there's nothing to return.
+      expect(matchKickioTeam('USA', teams)).toBeNull();
+    });
   });
 
   it('returns null for a blank guess', () => {
@@ -873,6 +911,93 @@ describe('matchKickioTeam', () => {
       const shortNameTeams = [{ name: 'PSV', slug: 'psv' }];
       expect(matchKickioTeam('PSV Eindhoven', shortNameTeams)).toBeNull();
     });
+  });
+});
+
+describe('debugMatchKickioTeam', () => {
+  it('reports the exact match and an empty candidate list, same result as matchKickioTeam itself', () => {
+    const teams = [{ name: 'Arsenal', slug: 'arsenal' }, { name: 'Real Madrid', slug: 'real-madrid' }];
+    const debug = debugMatchKickioTeam('arsenal', teams);
+
+    // Every step runs independently here (unlike matchKickioTeam's own
+    // early-return chain) so a debug caller can see what EACH step found,
+    // not just whichever one happened to win - "Arsenal" trivially
+    // normalizes to itself too, so normalizedMatch finds the same team,
+    // not null.
+    expect(debug.exactMatch).toEqual({ name: 'Arsenal', slug: 'arsenal' });
+    expect(debug.normalizedMatch).toEqual({ name: 'Arsenal', slug: 'arsenal' });
+    expect(debug.containmentCandidates).toEqual([{ name: 'Arsenal', slug: 'arsenal', country: null }]);
+    expect(debug.result).toEqual({ name: 'Arsenal', slug: 'arsenal', matchType: 'exact' });
+  });
+
+  it('lists every containment candidate, even the ones matchKickioTeam itself gives up on for being ambiguous', () => {
+    // Same fixture as matchKickioTeam's own "stays unmatched when
+    // genuinely ambiguous" test - the whole point of this diagnostic is
+    // seeing WHY it's null, not just that it is.
+    const realTeams = [
+      { name: 'Real Madrid', slug: 'real-madrid' },
+      { name: 'Real Sociedad', slug: 'real-sociedad' },
+      { name: 'Real Betis', slug: 'real-betis' },
+    ];
+    const debug = debugMatchKickioTeam('Real', realTeams, 'Mens');
+
+    expect(debug.result).toBeNull();
+    expect(debug.containmentCandidates.map((t) => t.name)).toEqual(['Real Madrid', 'Real Sociedad', 'Real Betis']);
+    // The gender filter still "passes" all 3 - none of them are women's
+    // teams, so none get excluded by a Mens filter - it just doesn't
+    // narrow anything down to a single candidate, same as
+    // containmentCandidates above.
+    expect(debug.genderFilteredCandidates?.map((t) => t.name)).toEqual([
+      'Real Madrid',
+      'Real Sociedad',
+      'Real Betis',
+    ]);
+  });
+
+  it("surfaces the guess's own codepoints - catches an invisible/non-ASCII character a UI would render identically to a normal one", () => {
+    // U+00A0 (non-breaking space) instead of a normal space - visually
+    // indistinguishable from "Real Madrid" in any UI, but a different
+    // string entirely.
+    const teams = [{ name: 'Real Madrid', slug: 'real-madrid' }];
+    const debug = debugMatchKickioTeam('Real Madrid', teams);
+
+    expect(debug.guessCodePoints).toContain(0x00a0);
+    // Still resolves correctly here - normalizeKickioTeamName's own
+    // [^a-z0-9 ] strip already turns U+00A0 into a plain space on both
+    // sides, so this specific character doesn't itself break the match;
+    // the point is that debug surfaces it for inspection regardless.
+    expect(debug.result).toEqual({ name: 'Real Madrid', slug: 'real-madrid', matchType: 'normalized' });
+  });
+
+  it('includes each containment candidate\'s country, for telling apart same-named teams in different leagues', () => {
+    const teams = [
+      { name: 'Newcastle United', slug: 'newcastle-united', country: 'England' },
+      { name: 'Newcastle United Jets', slug: 'newcastle-jets', country: 'Australia' },
+    ];
+    const debug = debugMatchKickioTeam('Newcastle', teams);
+
+    expect(debug.result).toBeNull(); // genuinely ambiguous - both contain "Newcastle" as a whole word
+    expect(debug.containmentCandidates).toEqual([
+      { name: 'Newcastle United', slug: 'newcastle-united', country: 'England' },
+      { name: 'Newcastle United Jets', slug: 'newcastle-jets', country: 'Australia' },
+    ]);
+  });
+
+  it('reports the local alias step separately - target resolved and unresolved cases', () => {
+    const teams = [{ name: 'Manchester United', slug: 'manchester-united' }];
+    const resolved = debugMatchKickioTeam('Man Utd', teams);
+    expect(resolved.aliasTarget).toBe('Manchester United');
+    expect(resolved.aliasMatch).toEqual({ name: 'Manchester United', slug: 'manchester-united' });
+    expect(resolved.result).toEqual({ name: 'Manchester United', slug: 'manchester-united', matchType: 'alias' });
+
+    const noAliasEntry = debugMatchKickioTeam('Totally Unknown FC', teams);
+    expect(noAliasEntry.aliasTarget).toBeNull();
+    expect(noAliasEntry.aliasMatch).toBeNull();
+
+    const unresolvedTarget = debugMatchKickioTeam('USA', teams);
+    expect(unresolvedTarget.aliasTarget).toBe('United States');
+    expect(unresolvedTarget.aliasMatch).toBeNull();
+    expect(unresolvedTarget.result).toBeNull();
   });
 });
 

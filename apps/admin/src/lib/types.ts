@@ -17,6 +17,8 @@ export interface Site {
   min_seller_feedback: number | null;
   /** Opt-in gate for the "list on Kickio while still active" pipeline (workers/kickioListingSyncWorker.ts) - off by default for every site. */
   list_on_kickio: boolean;
+  /** Set when this site is known to be protected by anti-bot measures we've deliberately decided not to try to bypass - null for every ordinary site. Set alongside is_active = false. */
+  blocked_reason: string | null;
   created_at: string;
   updated_at: string;
   url_count?: number;
