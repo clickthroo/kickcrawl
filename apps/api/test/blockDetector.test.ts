@@ -13,6 +13,10 @@ describe('isBlockPage', () => {
     expect(isBlockPage(200, 'Checking your browser before accessing')).toBe(true);
   });
 
+  it('flags a "Robot Challenge Screen" page even on a non-error status code - confirmed live on thekitman.co.uk (a real 202 response)', () => {
+    expect(isBlockPage(202, '<title>Robot Challenge Screen</title>')).toBe(true);
+  });
+
   it('does not flag normal content', () => {
     expect(isBlockPage(200, '<h1>Manchester United Home Shirt</h1><p>£49.99</p>')).toBe(false);
   });
