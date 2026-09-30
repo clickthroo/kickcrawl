@@ -43,6 +43,15 @@ interface Progress {
  *    gated on the site's CURRENT list_on_kickio value - a listing
  *    already live on Kickio still needs to come down if sold, even if
  *    the site's opt-in was switched off in the meantime.
+ *
+ * Both passes exclude any row with kickio_sold_via_kickio_at set -
+ * routes/webhooks/kickioSale.ts's own doc comment explains why a
+ * Kickio-side sale (its own webhook, not kickcrawl's own recheck) is
+ * terminal for both passes, not just the list one: calling
+ * delist_kickio_listing on an already-sold-there item would just get
+ * 'skipped' back forever (Kickio never pulls a completed sale), looping
+ * every hour for nothing once the retailer's own page eventually also
+ * shows Out of Stock.
  */
 export async function processKickioListingSync(): Promise<void> {
   const jobId = await createJob('kickio_listing_sync', null, {}, 'running');
@@ -80,6 +89,7 @@ export async function processKickioListingSync(): Promise<void> {
        WHERE s.list_on_kickio = true
          AND u.stock_status = 'In Stock'
          AND u.kickio_listing_dismissed_at IS NULL
+         AND u.kickio_sold_via_kickio_at IS NULL
          AND (u.kickio_listing_synced_at IS NOT NULL OR u.kickio_listing_sync_attempts < $1)`,
       [MAX_LISTING_SYNC_ATTEMPTS],
     );
@@ -88,6 +98,7 @@ export async function processKickioListingSync(): Promise<void> {
       `SELECT u.id, u.url FROM urls u
        WHERE u.kickio_listing_synced_at IS NOT NULL
          AND u.kickio_delisted_at IS NULL
+         AND u.kickio_sold_via_kickio_at IS NULL
          AND u.stock_status = 'Out of Stock'`,
     );
 

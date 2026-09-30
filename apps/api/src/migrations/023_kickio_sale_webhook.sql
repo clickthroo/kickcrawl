@@ -1,0 +1,17 @@
+-- Kickio's own sale-notification webhook (session history) - fired the
+-- moment an item sells ON Kickio itself (a buyer checked out there), not
+-- when kickcrawl's own recheck later notices the retailer's page went Out
+-- of Stock. Distinct in meaning from kickio_delisted_at (which only ever
+-- means "we called delist_kickio_listing and Kickio confirmed removed/
+-- not_found") - a Kickio-side sale never goes through that call at all,
+-- so recording it here rather than reusing that column keeps "why is this
+-- no longer tracked on Kickio" honestly attributable to its real cause.
+--
+-- Once set, this is treated as terminal by workers/kickioListingSyncWorker.ts:
+-- excluded from BOTH the list/refresh pass (nothing left to keep syncing -
+-- it's sold) and the delist pass (calling delist_kickio_listing on an
+-- already-Kickio-sold item would just get 'skipped' back forever, per that
+-- RPC's own confirmed behaviour of never pulling a listing out from under
+-- a completed sale - looping on that hourly would burn a real API call for
+-- nothing, forever).
+ALTER TABLE urls ADD COLUMN IF NOT EXISTS kickio_sold_via_kickio_at timestamptz;

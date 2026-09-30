@@ -72,5 +72,13 @@ export const config = {
   // not a dependency" pattern as kickioSupabaseAnonKey) rather than
   // failing startup.
   kickioSupabaseServiceRoleKey: envSecret('KICKIO_SUPABASE_SERVICE_ROLE_KEY'),
+  // Shared HMAC-SHA256 secret for verifying routes/webhooks/kickioSale.ts -
+  // Kickio's confirmed contract (session history): signs the raw request
+  // body, sent as `X-Kickio-Signature: sha256=<hex-digest>`. Exchanged
+  // directly with Kickio out of band, never over this codebase's own
+  // history/logs. Left blank makes the webhook route reject every request
+  // with 503 rather than silently accepting unsigned ones once Kickio
+  // starts sending real deliveries.
+  kickioWebhookSecret: envSecret('KICKIO_WEBHOOK_SECRET'),
   nodeEnv,
 };
