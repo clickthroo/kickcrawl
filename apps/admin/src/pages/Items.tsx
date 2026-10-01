@@ -102,20 +102,27 @@ export default function Items() {
     setTestListingId(urlId);
     setTestListingResults((r) => ({ ...r, [urlId]: '' }));
     try {
-      // EXPERIMENTAL - see lib/kickioSync.ts's testListProductOnKickio for
-      // why this exists: finding out what Kickio's own database actually
-      // does with a still-active item (no sale attached) before any real
-      // "list on discovery" pipeline gets built. Never touches this
-      // item's own status/sales in kickcrawl - purely a one-off probe.
+      // One-off, manual submission of this one item to Kickio's real
+      // listing pipeline (import_kickio_listing, lib/kickioListingSync.ts) -
+      // the same call the hourly sweep makes for every In Stock item on a
+      // site with "List active items on Kickio" enabled, just triggered
+      // here regardless of that site-level opt-in.
       const res = await api.post<{
         success: boolean;
-        outcome?: { success: boolean; error?: string; productId?: string; matchedBy?: string; action?: string };
+        outcome?: {
+          success: boolean;
+          error?: string;
+          listingId?: string;
+          action?: string;
+          status?: string;
+          priceChanged?: boolean;
+        };
       }>(`/admin/urls/${urlId}/test-list-on-kickio`);
       const o = res.outcome;
       setTestListingResults((r) => ({
         ...r,
         [urlId]: o?.success
-          ? `Sent - product ${o.productId} (${o.matchedBy}, ${o.action}). Check Kickio's Review Queue.`
+          ? `Sent - listing ${o.listingId} (${o.action}, status: ${o.status}). Check Kickio's Review Queue.`
           : `Held: ${o?.error ?? 'unknown reason'}`,
       }));
     } catch (err) {

@@ -10,7 +10,7 @@ import { getKickioTeamsForMatching } from '../../lib/kickioTeams.js';
 import { persistItemProfileColumns } from '../../lib/persistItemProfile.js';
 import { detectAndRecordTransition, getPreviousStockAndPrice } from '../../lib/saleDetection.js';
 import { isCrawlItem, passesSellerFilter } from '../../workers/crawlWorker.js';
-import { testListProductOnKickio } from '../../lib/kickioSync.js';
+import { syncListingAndPersistOutcome } from '../../lib/kickioListingSync.js';
 
 export interface ItemFilters {
   stock_status?: string;
@@ -339,14 +339,19 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ success: result.success, result });
   });
 
-  // EXPERIMENTAL - see lib/kickioSync.ts's testListProductOnKickio for why
-  // this exists: a one-off way to find out what Kickio's own
-  // match_or_create_product actually does with a still-active item (no
-  // sale attached at all), before any real "list on discovery" pipeline
-  // gets built. Builds the profile from whatever's already cached for
+  // One-off, admin-triggered submission of a single still-active item to
+  // Kickio's real "list on discovery" pipeline (import_kickio_listing,
+  // lib/kickioListingSync.ts) - the same call the hourly
+  // kickioListingSyncWorker sweep makes for every In Stock item on a site
+  // with list_on_kickio enabled, just triggered manually for one item
+  // regardless of that site-level opt-in. Used to verify the real
+  // pipeline end-to-end on a specific item - e.g. before deciding whether
+  // to turn list_on_kickio on for a whole site - and persists the same
+  // kickio_listing_id/kickio_listing_synced_at bookkeeping a real sweep
+  // would, so this item is then tracked exactly as if the sweep had
+  // picked it up. Builds the profile from whatever's already cached for
   // this item (same data the Items page itself already shows) rather
-  // than re-scraping - this is about testing Kickio's own behaviour, not
-  // about getting the freshest possible data.
+  // than re-scraping.
   app.post('/api/admin/urls/:id/test-list-on-kickio', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { rows } = await pool.query(
@@ -391,7 +396,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
       kickioTeams: await getKickioTeamsForMatching(),
     });
 
-    const outcome = await testListProductOnKickio(id, profile);
+    const outcome = await syncListingAndPersistOutcome(id, profile);
     return reply.send({ success: true, outcome });
   });
 }
