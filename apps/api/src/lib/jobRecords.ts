@@ -159,7 +159,21 @@ export async function deduplicateQueuedCrawls(): Promise<number> {
 
   for (const { id } of rows) {
     const bullJob = await crawlQueue.getJob(id);
-    await bullJob?.remove();
+    // A duplicate 'queued' row's BullMQ job can already have been picked
+    // up and locked by a worker by the time this runs (both start at
+    // boot, racing each other) - confirmed in production as a real
+    // server-crashing bug, not theoretical: BullMQ's remove() throws
+    // "could not be removed because it is locked by another worker"
+    // instead of resolving, and since this loop runs inside main() before
+    // the server starts listening, that throw was uncaught and crashed
+    // the whole boot, repeatedly, every ~2s on restart. Swallowed the
+    // same way resumeCrawlJob()'s own equivalent remove() already is
+    // (just above in this file) - the Postgres row still gets failed
+    // below either way, which is all this function promises to do; the
+    // BullMQ job itself finishing out its current run under the OLD
+    // worker that already locked it is a harmless, one-time duplicate
+    // fetch, not a correctness problem.
+    await bullJob?.remove().catch(() => undefined);
     await failJob(id, 'Superseded by a newer crawl queued for this site');
   }
   return rows.length;

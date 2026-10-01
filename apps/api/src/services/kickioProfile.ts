@@ -361,6 +361,71 @@ export function extractSeasonSpan(text: string): SeasonResult {
   return extractSeason(text);
 }
 
+// Hostnames confirmed to drop the "/" out of a multi-season range in
+// their own <title> tag / meta description specifically - their OTHER
+// markup (a JS conversion-tracking script's own product-name field, on
+// footballfinery.co.uk) keeps the real "1990/92" form, proving this is a
+// template quirk in that one field, not how the retailer actually writes
+// the range. Scoped narrowly to this one confirmed site/field rather than
+// loosening the season regexes generally, which would risk matching an
+// unrelated adjacent 4-digit/2-digit number pair on every other site.
+const SEASON_SPACING_NEEDS_REPAIR = new Set(['footballfinery.co.uk']);
+
+// An unrelated 2-digit number sitting next to a year (a size, a count,
+// anything with no real connection to it at all) can still satisfy
+// normalizeSeason's own ep<sp century-rollover branch, which assumes the
+// 2-digit number is a LATER year rather than an earlier one re-using the
+// same digits - confirmed this isn't just theoretical: "2021 05" resolves
+// to an 84-season span running all the way to 2105. Capped at the same
+// 12-year bound extractSeasonSpan itself already uses for its own
+// multi-range match, below which every real confirmed case (a 2-season
+// "1990/92" kit) comfortably sits and above which nothing plausible for a
+// real shirt does. Shared by repairSeasonSpacing and stripBareSeasonFragment
+// below - same validity question, just acted on two different ways.
+function isPlausibleBareSeasonPair(year: string, shortEnd: string): boolean {
+  const r = normalizeSeason(`${year}-${shortEnd}`);
+  return !!r.season && r.extraSeasons.length <= 11;
+}
+
+/**
+ * Repairs a "<year> <short-year>" pair back into the slash form
+ * extractSeasonSpan already knows how to read, but ONLY when it
+ * genuinely resolves to a multi-season span (normalizeSeason's own
+ * century/continuity math agrees the second number is a plausible later
+ * year, not just two unrelated numbers sitting next to each other) -
+ * confirmed necessary on a real listing ("1990 92 Glasgow Rangers...")
+ * whose title was otherwise read as just the single season 1990-91, the
+ * second season (1991-92) silently dropped since no separator was there
+ * for extractSeasonSpan's own regexes to match on at all.
+ */
+export function repairSeasonSpacing(text: string): string {
+  return text.replace(/\b((?:19|20)\d{2})\s+(\d{2})\b/g, (match, year: string, shortEnd: string) => {
+    const r = normalizeSeason(`${year}-${shortEnd}`);
+    return isPlausibleBareSeasonPair(year, shortEnd) && r.extraSeasons.length > 0
+      ? `${year}/${shortEnd}`
+      : match;
+  });
+}
+
+/**
+ * Removes a "<year> <short-year>" fragment outright (rather than
+ * reformatting it into slash form, the way repairSeasonSpacing does for
+ * season extraction) when it's a plausible season pair - single-season
+ * included this time, unlike repairSeasonSpacing's multi-only
+ * requirement, since this is only used to clean up the TEAM guess (which
+ * has no use for a season fragment of any kind) rather than to recover a
+ * specific span. Confirmed necessary on a real footballfinery.co.uk
+ * listing ("2015 16 PSG..."): guessTeamFromTitle's own existing season
+ * strip requires an explicit "-"/"/" separator, so once its own
+ * bare-4-digit-year strip removed "2015" alone, the orphaned "16"
+ * survived as team-guess noise ("16 PSG ...").
+ */
+function stripBareSeasonFragment(text: string): string {
+  return text.replace(/\b((?:19|20)\d{2})\s+(\d{2})\b/g, (match, year: string, shortEnd: string) =>
+    isPlausibleBareSeasonPair(year, shortEnd) ? '' : match,
+  );
+}
+
 // =========================================================================
 // Shirt type (Part 2 "Type" - Goalkeeper checked first, then Training/
 // Pre-Match, then Fourth/Third/Away/Home)
@@ -449,17 +514,30 @@ export function detectShirtType(text: string): ShirtTypeResult {
 // had already consumed it.
 const TEAM_GUESS_PLAYER_NOISE = `Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Issue|Match|Player|Retail|Authentic|${MANUFACTURERS.map((m) => escapeRegex(m)).join('|')}`;
 
-export function guessTeamFromTitle(title: string): string {
-  // Strip a trailing " - Site Name" or " | Site Name" suffix - common on
-  // scraped page <title>s - by cutting at whichever delimiter appears
-  // first, not just the dash form. Cutting at the wrong one (e.g. applying
-  // the dash rule when a pipe comes first) would leave the other subtitle's
-  // junk in place.
+/**
+ * Strips a trailing " - Site Name" or " | Site Name" suffix - common on
+ * scraped page <title>s - by cutting at whichever delimiter appears
+ * first, not just the dash form. Cutting at the wrong one (e.g. applying
+ * the dash rule when a pipe comes first) would leave the other subtitle's
+ * junk in place. Factored out of guessTeamFromTitle (its original, only
+ * caller) so extractPlayerNumber/extractPlayerNameFromTitle's own
+ * end-anchored bare patterns can use it too - confirmed necessary on a
+ * real footballfinery.co.uk listing ("... 10 Ibrahimovic – Football
+ * Finery"): without stripping the subtitle first, neither function's
+ * end-anchored unmarked fallback could ever match, since the title
+ * never actually ends in the player's name/number at all once a site
+ * name is appended after it.
+ */
+export function stripTitleSubtitle(title: string): string {
   const dashAt = title.search(/\s[-–—]\s/);
   const pipeAt = title.search(/\s\|\s/);
   const candidates = [dashAt, pipeAt].filter((i) => i >= 0);
   const cutAt = candidates.length ? Math.min(...candidates) : -1;
-  const withoutSubtitle = cutAt >= 0 ? title.slice(0, cutAt) : title;
+  return cutAt >= 0 ? title.slice(0, cutAt) : title;
+}
+
+export function guessTeamFromTitle(title: string, hostname?: string | null): string {
+  const withoutSubtitle = stripTitleSubtitle(title);
 
   // A short bare trailing number OR all-caps letter code, with no adjacent
   // size word to anchor on (unlike the "XL 47"/"77 XL" pairs handled
@@ -507,7 +585,24 @@ export function guessTeamFromTitle(title: string): string {
   const trailingNameNumberIsPlayerTag =
     !!kitWordMatch && !!trailingNameNumberMatch && kitWordMatch.index! < trailingNameNumberMatch.index!;
 
-  let c = withoutSubtitle
+  // Mirrors the check above for the REVERSE order - a bare number THEN
+  // the player's name, with no "#" marker at all ("10 Ibrahimovic") -
+  // confirmed as footballfinery.co.uk's own convention (never the "Name
+  // <number>" order the check above already covers). Scoped to this one
+  // confirmed site rather than applied universally: an unmarked trailing
+  // "<1-2 digit> <Capitalized Word>" pair is more ambiguous in general
+  // text than the name-first order above (a size/count/edition number
+  // followed by an unrelated capitalized word is a far more common shape
+  // than the reverse), so this only fires where it's confirmed to
+  // actually mean a player tag.
+  const footballFinery = hostname === 'footballfinery.co.uk';
+  const trailingNumberNameMatch = footballFinery
+    ? rawNoAsterisks.match(/\b\d{1,2}\s+(\p{Lu}[\p{L}'’.-]*)$/u)
+    : null;
+  const trailingNumberNameIsPlayerTag =
+    !!kitWordMatch && !!trailingNumberNameMatch && kitWordMatch.index! < trailingNumberNameMatch.index!;
+
+  let c = (footballFinery ? stripBareSeasonFragment(withoutSubtitle) : withoutSubtitle)
     .replace(/\*+/g, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
@@ -559,6 +654,9 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/#\d+/g, '');
   if (trailingNameNumberIsPlayerTag) {
     c = c.replace(/\s+\p{Lu}[\p{L}'’.-]*\s+\d{1,2}$/u, '').trim();
+  }
+  if (trailingNumberNameIsPlayerTag) {
+    c = c.replace(/\s+\d{1,2}\s+\p{Lu}[\p{L}'’.-]*$/u, '').trim();
   }
   c = c
     // Bounded to a 4-digit group that isn't itself part of a longer
@@ -1159,6 +1257,19 @@ const NAME_WORDS_HEAD = new RegExp(`^(?:${NAME_WORD}\\s+){0,1}${NAME_WORD}`, 'u'
 // (a team abbreviation, a kit-type word) into a false "name".
 const TRAILING_NAME_NUMBER = new RegExp(`(${NAME_WORD})\\s+#?(\\d{1,2})$`, 'u');
 
+// The mirror of TRAILING_NAME_NUMBER for a bare number THEN the player's
+// name, with no "#" marker at all ("10 Ibrahimovic") - confirmed as
+// footballfinery.co.uk's own convention (never the "Name <number>" order
+// TRAILING_NAME_NUMBER already covers). Kept out of the unconditional
+// path both functions already run (unlike TRAILING_NAME_NUMBER) and only
+// tried when the caller's hostname confirms this site - a bare trailing
+// "<1-2 digit> <Capitalized Word>" pair is more ambiguous in general text
+// than the name-first order (a size/count/edition number followed by an
+// unrelated capitalized word is a far more common shape than the
+// reverse), so this would risk false positives elsewhere without that
+// same site-specific evidence backing it up.
+const TRAILING_NUMBER_NAME = new RegExp(`#?(\\d{1,2})\\s+(${NAME_WORD})$`, 'u');
+
 function stripTrailingSizeCode(text: string): string {
   return text.replace(/\s*\([A-Z0-9]{1,4}\)\s*$/i, '').trimEnd();
 }
@@ -1248,15 +1359,25 @@ function findMarkedNumber(text: string): MarkedNumberMatch | null {
   return null;
 }
 
-export function extractPlayerNumber(text: string): string | null {
+export function extractPlayerNumber(text: string, hostname?: string | null): string | null {
   const marked = findMarkedNumber(text);
   if (marked) return marked.digits;
-  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
-  if (!tail || !cleanPlayerNameCandidate(tail[1])) return null;
-  return tail[2];
+  // Subtitle stripped before trying the end-anchored bare patterns below -
+  // confirmed necessary on a real footballfinery.co.uk listing ("... 10
+  // Ibrahimovic – Football Finery"): without this, the text never
+  // actually ends in the number/name at all once a site name is
+  // appended after it, so neither pattern could ever match.
+  const stripped = stripTrailingSizeCode(stripTitleSubtitle(text));
+  const tail = stripped.match(TRAILING_NAME_NUMBER);
+  if (tail && cleanPlayerNameCandidate(tail[1])) return tail[2];
+  if (hostname === 'footballfinery.co.uk') {
+    const reversed = stripped.match(TRAILING_NUMBER_NAME);
+    if (reversed && cleanPlayerNameCandidate(reversed[2])) return reversed[1];
+  }
+  return null;
 }
 
-export function extractPlayerNameFromTitle(text: string): string | null {
+export function extractPlayerNameFromTitle(text: string, hostname?: string | null): string | null {
   // A name is read off the words immediately BEFORE a marked number first -
   // "Rooney #10" / "Ronaldo No.7", the well-established convention this
   // already handled correctly for "#". A name written AFTER the number
@@ -1282,11 +1403,21 @@ export function extractPlayerNameFromTitle(text: string): string | null {
   }
 
   // No usable name on either side of a marker - fall back to the
-  // conservative, end-anchored bare pattern (see TRAILING_NAME_NUMBER above).
-  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
+  // conservative, end-anchored bare pattern (see TRAILING_NAME_NUMBER
+  // above), subtitle stripped first for the same reason extractPlayerNumber
+  // does (see its own comment).
+  const stripped = stripTrailingSizeCode(stripTitleSubtitle(text));
+  const tail = stripped.match(TRAILING_NAME_NUMBER);
   if (tail) {
     const cleaned = cleanPlayerNameCandidate(tail[1]);
     if (cleaned) return cleaned;
+  }
+  if (hostname === 'footballfinery.co.uk') {
+    const reversed = stripped.match(TRAILING_NUMBER_NAME);
+    if (reversed) {
+      const cleaned = cleanPlayerNameCandidate(reversed[2]);
+      if (cleaned) return cleaned;
+    }
   }
 
   return null;
@@ -1530,9 +1661,54 @@ const VINTAGE_FOOTBALL_SHIRTS_CONDITIONS: [RegExp, ConditionGrade][] = [
   [/\bgood\b/i, 'Good'],
 ];
 
+// ---- footballfinery.co.uk ----
+// Confirmed from real listings' own descriptions, which always open with
+// an explicit "Condition:  <grade>." label: "Condition:  Excellent.",
+// "Condition:  V.Good.", "Condition:  BNWT (Brand New With Tags)." -
+// graded against just that labeled segment (extractLabeledCondition
+// below), not the whole description, so elaboration text later in the
+// same paragraph can never outrank it. Confirmed as a real, not
+// theoretical, risk: one real listing's description read "Condition:
+// Excellent.  ... Near mint." - scanning the whole haystack matched
+// "Near mint" (checked earlier in gradeConditionText's generic ladder)
+// over the retailer's own actual stated grade, landing on Mint instead
+// of the Very Good "Excellent" maps to. "V.Good" needs its own pattern
+// here since the generic ladder's \bvery\s+good\b requires the unabbreviated
+// word "very", which this retailer's own shorthand never spells out.
+const FOOTBALL_FINERY_CONDITIONS: [RegExp, ConditionGrade][] = [
+  [/\bbnwt\b/i, 'Brand New (With Tags)'],
+  [/\bv\.?\s*good\b/i, 'Very Good'],
+  [/\bexcellent\b/i, 'Very Good'],
+];
+
 export const RETAILER_CONDITION_OVERRIDES: Record<string, [RegExp, ConditionGrade][]> = {
   'vintagefootballshirts.com': VINTAGE_FOOTBALL_SHIRTS_CONDITIONS,
+  'footballfinery.co.uk': FOOTBALL_FINERY_CONDITIONS,
 };
+
+// Hostnames whose own description text labels condition explicitly
+// ("Condition:  <grade>.") rather than just mentioning it incidentally -
+// scoped narrowly (not every RETAILER_CONDITION_OVERRIDES entry) since
+// this is a confirmed real description-writing convention on this one
+// site, not something to assume elsewhere without the same evidence.
+const CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION = new Set(['footballfinery.co.uk']);
+
+/**
+ * Pulls out just the text immediately after a retailer's own explicit
+ * "Condition:" label, up to the next period - see
+ * CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION. Grading only this short
+ * segment, rather than the whole title+description haystack, stops
+ * unrelated elaboration text elsewhere in the same description from
+ * silently outranking the retailer's own stated grade.
+ */
+export function extractLabeledCondition(text: string): string | null {
+  // Stops at a period followed by whitespace or end-of-string, not just
+  // any period - "V.Good" (a real confirmed grade) has its own internal
+  // period with no space after it, which an unqualified "up to the first
+  // period" match would wrongly cut at, capturing just "V".
+  const m = text.match(/\bcondition:\s*(.+?)\.(?:\s|$)/i);
+  return m ? m[1].trim() : null;
+}
 
 /** Hostname (no "www.") to key retailer-specific overrides by, or null if `url` isn't parseable. */
 export function retailerHostname(url: string | null | undefined): string | null {
@@ -2069,7 +2245,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   if (team) {
     confidence.team = 'certain';
   } else {
-    const guessed = guessTeamFromTitle(title);
+    const guessed = guessTeamFromTitle(title, hostname);
     if (guessed) {
       team = guessed;
       confidence.team = 'inferred';
@@ -2102,8 +2278,11 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // isolation first keeps the ambiguity guard meaningful instead of
     // firing on unrelated page furniture (nav breadcrumbs, "similar
     // items", legal disclaimers).
-    const fromTitle = extractSeasonSpan(title);
-    const r = fromTitle.season ? fromTitle : extractSeasonSpan(haystack);
+    const needsSpacingRepair = !!hostname && SEASON_SPACING_NEEDS_REPAIR.has(hostname);
+    const titleForSeason = needsSpacingRepair ? repairSeasonSpacing(title) : title;
+    const haystackForSeason = needsSpacingRepair ? repairSeasonSpacing(haystack) : haystack;
+    const fromTitle = extractSeasonSpan(titleForSeason);
+    const r = fromTitle.season ? fromTitle : extractSeasonSpan(haystackForSeason);
     season = r.season || null;
     extraSeasons = r.extraSeasons;
   }
@@ -2190,8 +2369,8 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // 4000 chars of nav breadcrumbs, "similar items", legal boilerplate),
     // not a clean product description - scanning it unconditionally would
     // risk the exact kind of false match season parsing already hit once.
-    const titlePlayer = extractPlayerNameFromTitle(title);
-    let rawPlayer = explicitPlayer ?? titlePlayer ?? extractPlayerNameFromTitle(description);
+    const titlePlayer = extractPlayerNameFromTitle(title, hostname);
+    let rawPlayer = explicitPlayer ?? titlePlayer ?? extractPlayerNameFromTitle(description, hostname);
     const preStripWordCount = rawPlayer ? rawPlayer.trim().split(/\s+/).length : 0;
     rawPlayer = normalizePlayerName(team, rawPlayer);
     const postStripWordCount = rawPlayer ? rawPlayer.trim().split(/\s+/).length : 0;
@@ -2231,7 +2410,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     rawPlayer = stripManufacturerFromPlayer(rawPlayer, manufacturerForStrip);
     player = rawPlayer;
     number = sanitizeShirtNumber(
-      explicitNumber ?? extractPlayerNumber(title) ?? extractPlayerNumber(description),
+      explicitNumber ?? extractPlayerNumber(title, hostname) ?? extractPlayerNumber(description, hostname),
     );
   }
 
@@ -2294,7 +2473,20 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // titles, and a bare word like "good" or "new" is exactly the kind of
     // thing sitewide boilerplate (nav, footer, "New arrivals") would
     // otherwise false-positive on.
-    condition = gradeConditionText(title, hostname) ?? gradeConditionText(haystack, hostname);
+    //
+    // A retailer whose own description explicitly labels condition (see
+    // CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION) gets that labeled segment
+    // graded FIRST, ahead of the title/haystack scan below - confirmed
+    // necessary on a real footballfinery.co.uk listing whose description
+    // read "Condition:  Excellent.  ... Near mint.": scanning the whole
+    // haystack matched "Near mint" (checked earlier in the generic ladder)
+    // over the retailer's own actual stated grade.
+    const labeledCondition =
+      hostname && CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION.has(hostname) ? extractLabeledCondition(haystack) : null;
+    condition =
+      (labeledCondition ? gradeConditionText(labeledCondition, hostname) : null) ??
+      gradeConditionText(title, hostname) ??
+      gradeConditionText(haystack, hostname);
   }
 
   // ---- Description ----
