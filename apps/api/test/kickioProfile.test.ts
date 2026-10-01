@@ -4,6 +4,7 @@ import {
   detectColours,
   detectShirtType,
   detectStockStatus,
+  extractLabeledCondition,
   extractPlayerNameFromTitle,
   extractPlayerNumber,
   extractSeason,
@@ -1352,6 +1353,82 @@ describe('vintagefootballshirts.com condition mapping', () => {
       extracted: { team: 'Aston Villa', condition: 'Excellent' },
     });
     expect(profile.listing.condition).toBe('Very Good');
+  });
+});
+
+describe('extractLabeledCondition', () => {
+  it('pulls out just the text after "Condition:", up to the next period', () => {
+    expect(extractLabeledCondition('Condition:  Excellent.  Near mint. Dimensions: ...')).toBe('Excellent');
+    expect(extractLabeledCondition('Condition:  V.Good.  Shirt material in excellent condition...')).toBe('V.Good');
+    expect(extractLabeledCondition('Condition:  BNWT (Brand New With Tags).  Dimensions: ...')).toBe(
+      'BNWT (Brand New With Tags)',
+    );
+  });
+
+  it('returns null when there is no labeled "Condition:" segment at all', () => {
+    expect(extractLabeledCondition('A fantastic jersey, ideal for a collection of your own.')).toBeNull();
+  });
+});
+
+describe('footballfinery.co.uk condition mapping', () => {
+  const host = 'footballfinery.co.uk';
+
+  it('maps every confirmed footballfinery.co.uk condition label to the right Kickio grade', () => {
+    expect(gradeConditionText('Excellent', host)).toBe('Very Good');
+    expect(gradeConditionText('V.Good', host)).toBe('Very Good');
+    expect(gradeConditionText('BNWT (Brand New With Tags)', host)).toBe('Brand New (With Tags)');
+  });
+
+  it(
+    "grades the retailer's own stated 'Condition:' label, not elaboration text elsewhere in the " +
+      'description that would otherwise outrank it under the generic ladder',
+    () => {
+      // Real listing: stated condition is "Excellent" (-> Very Good), but
+      // the elaboration separately says "Near mint" - scanning the whole
+      // description for condition words would match "Near mint" first
+      // (checked earlier in gradeConditionText's generic ladder) and
+      // silently misgrade this as Mint instead.
+      const profile = buildKickioProfile({
+        url: 'https://www.footballfinery.co.uk/products/2016-17-toulouse-home-football-shirt-m-joma',
+        title: '2016/17 Toulouse Home Football Shirt (M) Joma',
+        description: 'Condition:  Excellent.  Near mint. Dimensions:  Pit-to-Pit= 50cm / Collar-to-Hem= 72cm.',
+      });
+      expect(profile.listing.condition).toBe('Very Good');
+    },
+  );
+
+  it('grades every other confirmed real listing correctly too', () => {
+    const psg = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/1997-98-psg-away-football-shirt-m-nike',
+      title: '1997/98 PSG Away Football Shirt (M) Nike',
+      description: 'Condition:  Excellent.  Sponsor, logo and club crest in excellent condition.',
+    });
+    expect(psg.listing.condition).toBe('Very Good');
+
+    const lyonnais = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/2011-12-olympique-lyonnais-home-football-shirt-m',
+      title: '2011/12 Olympique Lyonnais Home Football Shirt (M) Adidas',
+      description:
+        'Condition:  V.Good.  Shirt material in excellent condition, as are the heat pressed sponsor and ' +
+        'embroidered club crest and manufacturer logo.',
+    });
+    expect(lyonnais.listing.condition).toBe('Very Good');
+
+    const spurs = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/2019-20-tottenham-hotspur-away-shirt-m-nike-18-lo-celso',
+      title: '2019-20 Tottenham Hotspur Away Shirt (M) Nike #18 Lo Celso',
+      description: 'Condition:  BNWT (Brand New With Tags).  Dimensions:  Pit-to-Pit= 48cm / Collar-to-Hem= 69cm.',
+    });
+    expect(spurs.listing.condition).toBe('Brand New (With Tags)');
+  });
+
+  it('falls back to the generic title/haystack scan when the description has no labeled segment', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/example',
+      title: 'Arsenal Home Shirt BNWT',
+      description: 'No labeled condition field here.',
+    });
+    expect(profile.listing.condition).toBe('Brand New (With Tags)');
   });
 });
 

@@ -1530,9 +1530,54 @@ const VINTAGE_FOOTBALL_SHIRTS_CONDITIONS: [RegExp, ConditionGrade][] = [
   [/\bgood\b/i, 'Good'],
 ];
 
+// ---- footballfinery.co.uk ----
+// Confirmed from real listings' own descriptions, which always open with
+// an explicit "Condition:  <grade>." label: "Condition:  Excellent.",
+// "Condition:  V.Good.", "Condition:  BNWT (Brand New With Tags)." -
+// graded against just that labeled segment (extractLabeledCondition
+// below), not the whole description, so elaboration text later in the
+// same paragraph can never outrank it. Confirmed as a real, not
+// theoretical, risk: one real listing's description read "Condition:
+// Excellent.  ... Near mint." - scanning the whole haystack matched
+// "Near mint" (checked earlier in gradeConditionText's generic ladder)
+// over the retailer's own actual stated grade, landing on Mint instead
+// of the Very Good "Excellent" maps to. "V.Good" needs its own pattern
+// here since the generic ladder's \bvery\s+good\b requires the unabbreviated
+// word "very", which this retailer's own shorthand never spells out.
+const FOOTBALL_FINERY_CONDITIONS: [RegExp, ConditionGrade][] = [
+  [/\bbnwt\b/i, 'Brand New (With Tags)'],
+  [/\bv\.?\s*good\b/i, 'Very Good'],
+  [/\bexcellent\b/i, 'Very Good'],
+];
+
 export const RETAILER_CONDITION_OVERRIDES: Record<string, [RegExp, ConditionGrade][]> = {
   'vintagefootballshirts.com': VINTAGE_FOOTBALL_SHIRTS_CONDITIONS,
+  'footballfinery.co.uk': FOOTBALL_FINERY_CONDITIONS,
 };
+
+// Hostnames whose own description text labels condition explicitly
+// ("Condition:  <grade>.") rather than just mentioning it incidentally -
+// scoped narrowly (not every RETAILER_CONDITION_OVERRIDES entry) since
+// this is a confirmed real description-writing convention on this one
+// site, not something to assume elsewhere without the same evidence.
+const CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION = new Set(['footballfinery.co.uk']);
+
+/**
+ * Pulls out just the text immediately after a retailer's own explicit
+ * "Condition:" label, up to the next period - see
+ * CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION. Grading only this short
+ * segment, rather than the whole title+description haystack, stops
+ * unrelated elaboration text elsewhere in the same description from
+ * silently outranking the retailer's own stated grade.
+ */
+export function extractLabeledCondition(text: string): string | null {
+  // Stops at a period followed by whitespace or end-of-string, not just
+  // any period - "V.Good" (a real confirmed grade) has its own internal
+  // period with no space after it, which an unqualified "up to the first
+  // period" match would wrongly cut at, capturing just "V".
+  const m = text.match(/\bcondition:\s*(.+?)\.(?:\s|$)/i);
+  return m ? m[1].trim() : null;
+}
 
 /** Hostname (no "www.") to key retailer-specific overrides by, or null if `url` isn't parseable. */
 export function retailerHostname(url: string | null | undefined): string | null {
@@ -2294,7 +2339,20 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // titles, and a bare word like "good" or "new" is exactly the kind of
     // thing sitewide boilerplate (nav, footer, "New arrivals") would
     // otherwise false-positive on.
-    condition = gradeConditionText(title, hostname) ?? gradeConditionText(haystack, hostname);
+    //
+    // A retailer whose own description explicitly labels condition (see
+    // CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION) gets that labeled segment
+    // graded FIRST, ahead of the title/haystack scan below - confirmed
+    // necessary on a real footballfinery.co.uk listing whose description
+    // read "Condition:  Excellent.  ... Near mint.": scanning the whole
+    // haystack matched "Near mint" (checked earlier in the generic ladder)
+    // over the retailer's own actual stated grade.
+    const labeledCondition =
+      hostname && CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION.has(hostname) ? extractLabeledCondition(haystack) : null;
+    condition =
+      (labeledCondition ? gradeConditionText(labeledCondition, hostname) : null) ??
+      gradeConditionText(title, hostname) ??
+      gradeConditionText(haystack, hostname);
   }
 
   // ---- Description ----
