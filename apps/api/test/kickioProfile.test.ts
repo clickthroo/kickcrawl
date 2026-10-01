@@ -797,6 +797,48 @@ describe('guessTeamFromTitle', () => {
   });
 });
 
+describe('guessTeamFromTitle - footballfinery.co.uk fixes', () => {
+  it('strips a bare "Number Name" player tag and a dangling bare-space season fragment, only for this hostname', () => {
+    // Real listing title: "2015 16 PSG Home Football Shirt M Nike 10
+    // Ibrahimovic – Football Finery" - this site's own <title> tag drops
+    // the separator out of BOTH a multi-season range (see
+    // repairSeasonSpacing) and an unmarked player tag at once, each
+    // leaving its own distinct leftover noise in the team guess:
+    // "2015 16" left a dangling "16" once the existing bare-4-digit-year
+    // strip removed "2015" alone (no "/" for its own "####-##"/"####/##"
+    // season strip to match on), and "10 Ibrahimovic" (number before
+    // name, no "#") isn't the order the existing player-tag strip
+    // handles at all.
+    expect(
+      guessTeamFromTitle(
+        '2015 16 PSG Home Football Shirt M Nike 10 Ibrahimovic – Football Finery',
+        'footballfinery.co.uk',
+      ),
+    ).toBe('PSG');
+  });
+
+  it('leaves both the season fragment and the bare player tag untouched on a different/no hostname', () => {
+    // Same shape, but without the confirming hostname - neither fix
+    // should fire, since both are scoped narrowly to this one site.
+    expect(
+      guessTeamFromTitle('2015 16 PSG Home Football Shirt M Nike 10 Ibrahimovic – Football Finery'),
+    ).toBe('16 PSG M 10 Ibrahimovic');
+  });
+
+  it('leaves the real team name intact even when an unrelated adjacent 4-digit/2-digit pair is not a real season', () => {
+    // Guards against the same "2021 05" false-positive repairSeasonSpacing
+    // itself guards against (see its own test) - normalizeSeason's
+    // century-rollover math alone would otherwise treat this as a
+    // "plausible" (if absurd, 84-season) span. stripBareSeasonFragment
+    // correctly declines to touch "2021 05" here (over its own 12-year
+    // cap), so it survives into the rest of the pipeline as ordinary
+    // noise - "Shirt" and the leftover digits/word are cleared out by
+    // the SAME existing stripping every other title already goes
+    // through, leaving the real team name untouched either way.
+    expect(guessTeamFromTitle('Arsenal Shirt 2021 05 Edition', 'footballfinery.co.uk')).toBe('Arsenal');
+  });
+});
+
 describe('matchKickioTeam', () => {
   const teams = [
     { name: 'Arsenal', slug: 'arsenal' },
@@ -1097,6 +1139,28 @@ describe('extractPlayerNumber', () => {
     expect(extractPlayerNumber('No.1 seller! Man Utd Away Shirt')).toBeNull();
     expect(extractPlayerNumber('Number 1 rated seller - Arsenal Home Shirt')).toBeNull();
   });
+
+  it('reads a bare trailing "Name Number" even with a " - Site Name" subtitle after it', () => {
+    // Real bug: the bare trailing pattern is end-anchored, so a scraped
+    // <title>'s own " - Site Name" suffix (common across many retailers,
+    // not just one) meant the text never actually ended in the number at
+    // all, and this returned null even though the shape was otherwise
+    // identical to the already-working "Man Utd Away Shirt Beckham 7" case.
+    expect(extractPlayerNumber('Man Utd Away Shirt Beckham 7 - Some Retailer')).toBe('7');
+    expect(extractPlayerNumber('Man Utd Away Shirt Beckham 7 | Some Retailer')).toBe('7');
+  });
+
+  it('reads a bare "Number Name" (reverse order) only when the hostname confirms footballfinery.co.uk', () => {
+    // Real listing: "2015 16 PSG Home Football Shirt M Nike 10
+    // Ibrahimovic" - no "#" marker at all, and the number comes BEFORE
+    // the name, the opposite order from every other confirmed site.
+    expect(extractPlayerNumber('PSG Home Shirt Nike 10 Ibrahimovic', 'footballfinery.co.uk')).toBe('10');
+    // Same text, no hostname (or a different one) - stays null, since
+    // this order is more ambiguous in general text and only accepted
+    // where it's been confirmed to actually mean a player tag.
+    expect(extractPlayerNumber('PSG Home Shirt Nike 10 Ibrahimovic')).toBeNull();
+    expect(extractPlayerNumber('PSG Home Shirt Nike 10 Ibrahimovic', 'some-other-site.com')).toBeNull();
+  });
 });
 
 describe('extractPlayerNameFromTitle', () => {
@@ -1213,6 +1277,19 @@ describe('extractPlayerNameFromTitle', () => {
     expect(
       extractPlayerNameFromTitle('Real Madrid Home Shirt Adidas #9 Karim Benzema Teammates Modric'),
     ).toBe('Karim Benzema');
+  });
+
+  it('reads a bare trailing name even with a " - Site Name" subtitle after it', () => {
+    expect(extractPlayerNameFromTitle('Man Utd Away Shirt Beckham 7 - Some Retailer')).toBe('Beckham');
+  });
+
+  it('reads a bare "Number Name" (reverse order) only when the hostname confirms footballfinery.co.uk', () => {
+    // Real listing title (subtitle-stripped): "PSG Home Shirt Nike 10
+    // Ibrahimovic" - no "#" marker, number before the name.
+    expect(extractPlayerNameFromTitle('PSG Home Shirt Nike 10 Ibrahimovic', 'footballfinery.co.uk')).toBe(
+      'Ibrahimovic',
+    );
+    expect(extractPlayerNameFromTitle('PSG Home Shirt Nike 10 Ibrahimovic')).toBeNull();
   });
 });
 
@@ -1486,6 +1563,42 @@ describe('footballfinery.co.uk condition mapping', () => {
       description: 'No labeled condition field here.',
     });
     expect(profile.listing.condition).toBe('Brand New (With Tags)');
+  });
+});
+
+describe('footballfinery.co.uk player name/number fix', () => {
+  it('recovers team/player/number/season from a real listing whose title uses no "#" marker at all', () => {
+    // Real listing: "2015 16 PSG Home Football Shirt M Nike 10
+    // Ibrahimovic – Football Finery" - no "#" anywhere, number BEFORE
+    // the name (not the already-supported "Name Number" order), and a
+    // " – Football Finery" subtitle after it that previously defeated
+    // every end-anchored bare pattern entirely. Before this fix: team
+    // guessed as "16 PSG M 10 Ibrahimovic", player/number both null.
+    const profile = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/2015-16-psg-home-football-shirt-m-nike-10-ibrahimovic',
+      title: '2015 16 PSG Home Football Shirt M Nike 10 Ibrahimovic – Football Finery',
+      description:
+        "Information:  Official Nike PSG home football shirt from the 2015/16 season. A fantastic vintage " +
+        "jersey, with Zlatan's name and number proudly displayed on the back. Condition:  Excellent.",
+    });
+    expect(profile.identity.team).toBe('PSG');
+    expect(profile.identity.player).toBe('Ibrahimovic');
+    expect(profile.identity.number).toBe('10');
+    expect(profile.identity.season).toBe('2015-16');
+  });
+
+  it('recovers a second real listing the same way', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/2017-18-psg-home-football-shirt-m-nike-9-cavani',
+      title: '2017 18 PSG Home Football Shirt M Nike 9 Cavani – Football Finery',
+      description:
+        'Information: Official Nike PSG Home Football Shirt from 2017/18. The reverse of the shirt boasts ' +
+        'the nameset of Edinson Cavani. Condition: Excellent.',
+    });
+    expect(profile.identity.team).toBe('PSG');
+    expect(profile.identity.player).toBe('Cavani');
+    expect(profile.identity.number).toBe('9');
+    expect(profile.identity.season).toBe('2017-18');
   });
 });
 

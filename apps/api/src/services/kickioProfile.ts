@@ -371,6 +371,22 @@ export function extractSeasonSpan(text: string): SeasonResult {
 // unrelated adjacent 4-digit/2-digit number pair on every other site.
 const SEASON_SPACING_NEEDS_REPAIR = new Set(['footballfinery.co.uk']);
 
+// An unrelated 2-digit number sitting next to a year (a size, a count,
+// anything with no real connection to it at all) can still satisfy
+// normalizeSeason's own ep<sp century-rollover branch, which assumes the
+// 2-digit number is a LATER year rather than an earlier one re-using the
+// same digits - confirmed this isn't just theoretical: "2021 05" resolves
+// to an 84-season span running all the way to 2105. Capped at the same
+// 12-year bound extractSeasonSpan itself already uses for its own
+// multi-range match, below which every real confirmed case (a 2-season
+// "1990/92" kit) comfortably sits and above which nothing plausible for a
+// real shirt does. Shared by repairSeasonSpacing and stripBareSeasonFragment
+// below - same validity question, just acted on two different ways.
+function isPlausibleBareSeasonPair(year: string, shortEnd: string): boolean {
+  const r = normalizeSeason(`${year}-${shortEnd}`);
+  return !!r.season && r.extraSeasons.length <= 11;
+}
+
 /**
  * Repairs a "<year> <short-year>" pair back into the slash form
  * extractSeasonSpan already knows how to read, but ONLY when it
@@ -385,20 +401,29 @@ const SEASON_SPACING_NEEDS_REPAIR = new Set(['footballfinery.co.uk']);
 export function repairSeasonSpacing(text: string): string {
   return text.replace(/\b((?:19|20)\d{2})\s+(\d{2})\b/g, (match, year: string, shortEnd: string) => {
     const r = normalizeSeason(`${year}-${shortEnd}`);
-    // An unrelated 2-digit number sitting next to a year (a size, a
-    // count, anything with no real connection to it at all) can still
-    // satisfy normalizeSeason's own ep<sp century-rollover branch, which
-    // assumes the 2-digit number is a LATER year rather than an earlier
-    // one re-using the same digits - confirmed this isn't just
-    // theoretical: "2021 05" resolves to an 84-season span running all
-    // the way to 2105. Capped at the same 12-year bound extractSeasonSpan
-    // itself already uses for its own multi-range match, below which
-    // every real confirmed case (a 2-season "1990/92" kit) comfortably
-    // sits and above which nothing plausible for a real shirt does.
-    return r.season && r.extraSeasons.length > 0 && r.extraSeasons.length <= 11
+    return isPlausibleBareSeasonPair(year, shortEnd) && r.extraSeasons.length > 0
       ? `${year}/${shortEnd}`
       : match;
   });
+}
+
+/**
+ * Removes a "<year> <short-year>" fragment outright (rather than
+ * reformatting it into slash form, the way repairSeasonSpacing does for
+ * season extraction) when it's a plausible season pair - single-season
+ * included this time, unlike repairSeasonSpacing's multi-only
+ * requirement, since this is only used to clean up the TEAM guess (which
+ * has no use for a season fragment of any kind) rather than to recover a
+ * specific span. Confirmed necessary on a real footballfinery.co.uk
+ * listing ("2015 16 PSG..."): guessTeamFromTitle's own existing season
+ * strip requires an explicit "-"/"/" separator, so once its own
+ * bare-4-digit-year strip removed "2015" alone, the orphaned "16"
+ * survived as team-guess noise ("16 PSG ...").
+ */
+function stripBareSeasonFragment(text: string): string {
+  return text.replace(/\b((?:19|20)\d{2})\s+(\d{2})\b/g, (match, year: string, shortEnd: string) =>
+    isPlausibleBareSeasonPair(year, shortEnd) ? '' : match,
+  );
 }
 
 // =========================================================================
@@ -489,17 +514,30 @@ export function detectShirtType(text: string): ShirtTypeResult {
 // had already consumed it.
 const TEAM_GUESS_PLAYER_NOISE = `Shirt|Jersey|Kit|Top|Home|Away|Third|Fourth|Issue|Match|Player|Retail|Authentic|${MANUFACTURERS.map((m) => escapeRegex(m)).join('|')}`;
 
-export function guessTeamFromTitle(title: string): string {
-  // Strip a trailing " - Site Name" or " | Site Name" suffix - common on
-  // scraped page <title>s - by cutting at whichever delimiter appears
-  // first, not just the dash form. Cutting at the wrong one (e.g. applying
-  // the dash rule when a pipe comes first) would leave the other subtitle's
-  // junk in place.
+/**
+ * Strips a trailing " - Site Name" or " | Site Name" suffix - common on
+ * scraped page <title>s - by cutting at whichever delimiter appears
+ * first, not just the dash form. Cutting at the wrong one (e.g. applying
+ * the dash rule when a pipe comes first) would leave the other subtitle's
+ * junk in place. Factored out of guessTeamFromTitle (its original, only
+ * caller) so extractPlayerNumber/extractPlayerNameFromTitle's own
+ * end-anchored bare patterns can use it too - confirmed necessary on a
+ * real footballfinery.co.uk listing ("... 10 Ibrahimovic – Football
+ * Finery"): without stripping the subtitle first, neither function's
+ * end-anchored unmarked fallback could ever match, since the title
+ * never actually ends in the player's name/number at all once a site
+ * name is appended after it.
+ */
+export function stripTitleSubtitle(title: string): string {
   const dashAt = title.search(/\s[-–—]\s/);
   const pipeAt = title.search(/\s\|\s/);
   const candidates = [dashAt, pipeAt].filter((i) => i >= 0);
   const cutAt = candidates.length ? Math.min(...candidates) : -1;
-  const withoutSubtitle = cutAt >= 0 ? title.slice(0, cutAt) : title;
+  return cutAt >= 0 ? title.slice(0, cutAt) : title;
+}
+
+export function guessTeamFromTitle(title: string, hostname?: string | null): string {
+  const withoutSubtitle = stripTitleSubtitle(title);
 
   // A short bare trailing number OR all-caps letter code, with no adjacent
   // size word to anchor on (unlike the "XL 47"/"77 XL" pairs handled
@@ -547,7 +585,24 @@ export function guessTeamFromTitle(title: string): string {
   const trailingNameNumberIsPlayerTag =
     !!kitWordMatch && !!trailingNameNumberMatch && kitWordMatch.index! < trailingNameNumberMatch.index!;
 
-  let c = withoutSubtitle
+  // Mirrors the check above for the REVERSE order - a bare number THEN
+  // the player's name, with no "#" marker at all ("10 Ibrahimovic") -
+  // confirmed as footballfinery.co.uk's own convention (never the "Name
+  // <number>" order the check above already covers). Scoped to this one
+  // confirmed site rather than applied universally: an unmarked trailing
+  // "<1-2 digit> <Capitalized Word>" pair is more ambiguous in general
+  // text than the name-first order above (a size/count/edition number
+  // followed by an unrelated capitalized word is a far more common shape
+  // than the reverse), so this only fires where it's confirmed to
+  // actually mean a player tag.
+  const footballFinery = hostname === 'footballfinery.co.uk';
+  const trailingNumberNameMatch = footballFinery
+    ? rawNoAsterisks.match(/\b\d{1,2}\s+(\p{Lu}[\p{L}'’.-]*)$/u)
+    : null;
+  const trailingNumberNameIsPlayerTag =
+    !!kitWordMatch && !!trailingNumberNameMatch && kitWordMatch.index! < trailingNumberNameMatch.index!;
+
+  let c = (footballFinery ? stripBareSeasonFragment(withoutSubtitle) : withoutSubtitle)
     .replace(/\*+/g, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
@@ -599,6 +654,9 @@ export function guessTeamFromTitle(title: string): string {
     .replace(/#\d+/g, '');
   if (trailingNameNumberIsPlayerTag) {
     c = c.replace(/\s+\p{Lu}[\p{L}'’.-]*\s+\d{1,2}$/u, '').trim();
+  }
+  if (trailingNumberNameIsPlayerTag) {
+    c = c.replace(/\s+\d{1,2}\s+\p{Lu}[\p{L}'’.-]*$/u, '').trim();
   }
   c = c
     // Bounded to a 4-digit group that isn't itself part of a longer
@@ -1199,6 +1257,19 @@ const NAME_WORDS_HEAD = new RegExp(`^(?:${NAME_WORD}\\s+){0,1}${NAME_WORD}`, 'u'
 // (a team abbreviation, a kit-type word) into a false "name".
 const TRAILING_NAME_NUMBER = new RegExp(`(${NAME_WORD})\\s+#?(\\d{1,2})$`, 'u');
 
+// The mirror of TRAILING_NAME_NUMBER for a bare number THEN the player's
+// name, with no "#" marker at all ("10 Ibrahimovic") - confirmed as
+// footballfinery.co.uk's own convention (never the "Name <number>" order
+// TRAILING_NAME_NUMBER already covers). Kept out of the unconditional
+// path both functions already run (unlike TRAILING_NAME_NUMBER) and only
+// tried when the caller's hostname confirms this site - a bare trailing
+// "<1-2 digit> <Capitalized Word>" pair is more ambiguous in general text
+// than the name-first order (a size/count/edition number followed by an
+// unrelated capitalized word is a far more common shape than the
+// reverse), so this would risk false positives elsewhere without that
+// same site-specific evidence backing it up.
+const TRAILING_NUMBER_NAME = new RegExp(`#?(\\d{1,2})\\s+(${NAME_WORD})$`, 'u');
+
 function stripTrailingSizeCode(text: string): string {
   return text.replace(/\s*\([A-Z0-9]{1,4}\)\s*$/i, '').trimEnd();
 }
@@ -1288,15 +1359,25 @@ function findMarkedNumber(text: string): MarkedNumberMatch | null {
   return null;
 }
 
-export function extractPlayerNumber(text: string): string | null {
+export function extractPlayerNumber(text: string, hostname?: string | null): string | null {
   const marked = findMarkedNumber(text);
   if (marked) return marked.digits;
-  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
-  if (!tail || !cleanPlayerNameCandidate(tail[1])) return null;
-  return tail[2];
+  // Subtitle stripped before trying the end-anchored bare patterns below -
+  // confirmed necessary on a real footballfinery.co.uk listing ("... 10
+  // Ibrahimovic – Football Finery"): without this, the text never
+  // actually ends in the number/name at all once a site name is
+  // appended after it, so neither pattern could ever match.
+  const stripped = stripTrailingSizeCode(stripTitleSubtitle(text));
+  const tail = stripped.match(TRAILING_NAME_NUMBER);
+  if (tail && cleanPlayerNameCandidate(tail[1])) return tail[2];
+  if (hostname === 'footballfinery.co.uk') {
+    const reversed = stripped.match(TRAILING_NUMBER_NAME);
+    if (reversed && cleanPlayerNameCandidate(reversed[2])) return reversed[1];
+  }
+  return null;
 }
 
-export function extractPlayerNameFromTitle(text: string): string | null {
+export function extractPlayerNameFromTitle(text: string, hostname?: string | null): string | null {
   // A name is read off the words immediately BEFORE a marked number first -
   // "Rooney #10" / "Ronaldo No.7", the well-established convention this
   // already handled correctly for "#". A name written AFTER the number
@@ -1322,11 +1403,21 @@ export function extractPlayerNameFromTitle(text: string): string | null {
   }
 
   // No usable name on either side of a marker - fall back to the
-  // conservative, end-anchored bare pattern (see TRAILING_NAME_NUMBER above).
-  const tail = stripTrailingSizeCode(text).match(TRAILING_NAME_NUMBER);
+  // conservative, end-anchored bare pattern (see TRAILING_NAME_NUMBER
+  // above), subtitle stripped first for the same reason extractPlayerNumber
+  // does (see its own comment).
+  const stripped = stripTrailingSizeCode(stripTitleSubtitle(text));
+  const tail = stripped.match(TRAILING_NAME_NUMBER);
   if (tail) {
     const cleaned = cleanPlayerNameCandidate(tail[1]);
     if (cleaned) return cleaned;
+  }
+  if (hostname === 'footballfinery.co.uk') {
+    const reversed = stripped.match(TRAILING_NUMBER_NAME);
+    if (reversed) {
+      const cleaned = cleanPlayerNameCandidate(reversed[2]);
+      if (cleaned) return cleaned;
+    }
   }
 
   return null;
@@ -2154,7 +2245,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   if (team) {
     confidence.team = 'certain';
   } else {
-    const guessed = guessTeamFromTitle(title);
+    const guessed = guessTeamFromTitle(title, hostname);
     if (guessed) {
       team = guessed;
       confidence.team = 'inferred';
@@ -2278,8 +2369,8 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // 4000 chars of nav breadcrumbs, "similar items", legal boilerplate),
     // not a clean product description - scanning it unconditionally would
     // risk the exact kind of false match season parsing already hit once.
-    const titlePlayer = extractPlayerNameFromTitle(title);
-    let rawPlayer = explicitPlayer ?? titlePlayer ?? extractPlayerNameFromTitle(description);
+    const titlePlayer = extractPlayerNameFromTitle(title, hostname);
+    let rawPlayer = explicitPlayer ?? titlePlayer ?? extractPlayerNameFromTitle(description, hostname);
     const preStripWordCount = rawPlayer ? rawPlayer.trim().split(/\s+/).length : 0;
     rawPlayer = normalizePlayerName(team, rawPlayer);
     const postStripWordCount = rawPlayer ? rawPlayer.trim().split(/\s+/).length : 0;
@@ -2319,7 +2410,7 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     rawPlayer = stripManufacturerFromPlayer(rawPlayer, manufacturerForStrip);
     player = rawPlayer;
     number = sanitizeShirtNumber(
-      explicitNumber ?? extractPlayerNumber(title) ?? extractPlayerNumber(description),
+      explicitNumber ?? extractPlayerNumber(title, hostname) ?? extractPlayerNumber(description, hostname),
     );
   }
 
