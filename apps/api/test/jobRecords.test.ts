@@ -161,6 +161,30 @@ describe('deduplicateQueuedCrawls', () => {
     expect(remove).toHaveBeenCalledTimes(2);
   });
 
+  it('still fails the Postgres row when its BullMQ job is locked by an active worker, not just crashing the whole boot', async () => {
+    // Confirmed in production: a duplicate 'queued' row's BullMQ job can
+    // already have been picked up and locked by a worker by the time this
+    // runs (both start at boot, racing each other) - remove() throws
+    // "could not be removed because it is locked by another worker"
+    // instead of resolving, and since this runs inside main() before the
+    // server starts listening, an uncaught throw here crashed the whole
+    // boot, repeatedly, every restart.
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id FROM')) return { rows: [{ id: 'locked-job' }] };
+      return { rowCount: 1 };
+    });
+    const remove = vi.fn(async () => {
+      throw new Error('Job locked-job could not be removed because it is locked by another worker');
+    });
+    const getJob = vi.fn(async () => ({ remove }));
+
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { getJob } }));
+
+    const { deduplicateQueuedCrawls } = await import('../src/lib/jobRecords.js');
+    await expect(deduplicateQueuedCrawls()).resolves.toBe(1);
+  });
+
   it('still fails the Postgres row when its BullMQ job is already gone', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('SELECT id FROM')) return { rows: [{ id: 'ghost-job' }] };
