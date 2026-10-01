@@ -361,6 +361,46 @@ export function extractSeasonSpan(text: string): SeasonResult {
   return extractSeason(text);
 }
 
+// Hostnames confirmed to drop the "/" out of a multi-season range in
+// their own <title> tag / meta description specifically - their OTHER
+// markup (a JS conversion-tracking script's own product-name field, on
+// footballfinery.co.uk) keeps the real "1990/92" form, proving this is a
+// template quirk in that one field, not how the retailer actually writes
+// the range. Scoped narrowly to this one confirmed site/field rather than
+// loosening the season regexes generally, which would risk matching an
+// unrelated adjacent 4-digit/2-digit number pair on every other site.
+const SEASON_SPACING_NEEDS_REPAIR = new Set(['footballfinery.co.uk']);
+
+/**
+ * Repairs a "<year> <short-year>" pair back into the slash form
+ * extractSeasonSpan already knows how to read, but ONLY when it
+ * genuinely resolves to a multi-season span (normalizeSeason's own
+ * century/continuity math agrees the second number is a plausible later
+ * year, not just two unrelated numbers sitting next to each other) -
+ * confirmed necessary on a real listing ("1990 92 Glasgow Rangers...")
+ * whose title was otherwise read as just the single season 1990-91, the
+ * second season (1991-92) silently dropped since no separator was there
+ * for extractSeasonSpan's own regexes to match on at all.
+ */
+export function repairSeasonSpacing(text: string): string {
+  return text.replace(/\b((?:19|20)\d{2})\s+(\d{2})\b/g, (match, year: string, shortEnd: string) => {
+    const r = normalizeSeason(`${year}-${shortEnd}`);
+    // An unrelated 2-digit number sitting next to a year (a size, a
+    // count, anything with no real connection to it at all) can still
+    // satisfy normalizeSeason's own ep<sp century-rollover branch, which
+    // assumes the 2-digit number is a LATER year rather than an earlier
+    // one re-using the same digits - confirmed this isn't just
+    // theoretical: "2021 05" resolves to an 84-season span running all
+    // the way to 2105. Capped at the same 12-year bound extractSeasonSpan
+    // itself already uses for its own multi-range match, below which
+    // every real confirmed case (a 2-season "1990/92" kit) comfortably
+    // sits and above which nothing plausible for a real shirt does.
+    return r.season && r.extraSeasons.length > 0 && r.extraSeasons.length <= 11
+      ? `${year}/${shortEnd}`
+      : match;
+  });
+}
+
 // =========================================================================
 // Shirt type (Part 2 "Type" - Goalkeeper checked first, then Training/
 // Pre-Match, then Fourth/Third/Away/Home)
@@ -2147,8 +2187,11 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // isolation first keeps the ambiguity guard meaningful instead of
     // firing on unrelated page furniture (nav breadcrumbs, "similar
     // items", legal disclaimers).
-    const fromTitle = extractSeasonSpan(title);
-    const r = fromTitle.season ? fromTitle : extractSeasonSpan(haystack);
+    const needsSpacingRepair = !!hostname && SEASON_SPACING_NEEDS_REPAIR.has(hostname);
+    const titleForSeason = needsSpacingRepair ? repairSeasonSpacing(title) : title;
+    const haystackForSeason = needsSpacingRepair ? repairSeasonSpacing(haystack) : haystack;
+    const fromTitle = extractSeasonSpan(titleForSeason);
+    const r = fromTitle.season ? fromTitle : extractSeasonSpan(haystackForSeason);
     season = r.season || null;
     extraSeasons = r.extraSeasons;
   }

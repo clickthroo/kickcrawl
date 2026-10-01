@@ -16,6 +16,7 @@ import {
   matchKickioTeam,
   debugMatchKickioTeam,
   normalizePlayerName,
+  repairSeasonSpacing,
   retailerHostname,
   RETAILER_CONDITION_OVERRIDES,
 } from '../src/services/kickioProfile.js';
@@ -134,6 +135,62 @@ describe('extractSeason', () => {
 
   it('leaves multiple distinct season ranges blank', () => {
     expect(extractSeason('Chelsea 2010-11 and 2015-16 Home Shirt').season).toBe('');
+  });
+});
+
+describe('repairSeasonSpacing', () => {
+  it('rewrites a year + bare short-year pair back into slash form when it resolves to a real multi-season span', () => {
+    // Real confirmed case: footballfinery.co.uk's own <title> tag strips
+    // the "/" out of "1990/92" (a genuine 2-season kit), leaving "1990
+    // 92" with no separator at all for extractSeasonSpan's own regexes to
+    // match on.
+    expect(repairSeasonSpacing('1990 92 Glasgow Rangers Home Football Shirt XL Admiral')).toBe(
+      '1990/92 Glasgow Rangers Home Football Shirt XL Admiral',
+    );
+  });
+
+  it('leaves an unrelated year + short-number pair untouched when it does not form a plausible multi-season span', () => {
+    // "1997 98" is just a single season (1997-98) - normalizeSeason
+    // produces zero extra seasons for it, so there's nothing to repair;
+    // leaving it as-is is still correct since extractSeasonSpan's own
+    // existing "two bare years"/single-year rules already read this
+    // right without any slash at all.
+    expect(repairSeasonSpacing('1997 98 PSG Away Football Shirt')).toBe('1997 98 PSG Away Football Shirt');
+  });
+
+  it('never rewrites into an implausible multi-decade span, even though the chronology math alone would allow it', () => {
+    // Confirmed a real risk, not theoretical: normalizeSeason('2021-05')
+    // resolves to an 84-season span running all the way to 2105, since
+    // its own century-rollover math has no way to tell a genuinely later
+    // year apart from an unrelated 2-digit number that just happens to be
+    // smaller. Capped at the same 12-year bound extractSeasonSpan itself
+    // already uses elsewhere.
+    expect(repairSeasonSpacing('Shirt 2021 05 Edition')).toBe('Shirt 2021 05 Edition');
+  });
+});
+
+describe('footballfinery.co.uk season-spacing fix', () => {
+  it('recovers the second season of a real multi-season listing whose title lost its separator', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/1990-92-glasgow-rangers-home-football-shirt-xl-admiral',
+      title: '1990 92 Glasgow Rangers Home Football Shirt XL Admiral – Football Finery',
+      description: 'Condition:  Excellent.',
+    });
+    expect(profile.identity.season).toBe('1990-91');
+    expect(profile.identity.extra_seasons).toEqual(['1991-92']);
+  });
+
+  it('does not apply this repair on a different site, where the same bare-space shape has no confirmed cause', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.casualfootballshirts.co.uk/products/example',
+      title: '1990 92 Some Unrelated Listing',
+      description: 'No condition info.',
+    });
+    // Unrepaired, this reads as the single season 1990-91 (no "/" for
+    // extractSeasonSpan's regexes to match a span on) - correct, since
+    // this site has no confirmed title-spacing quirk to justify repairing it.
+    expect(profile.identity.season).toBe('1990-91');
+    expect(profile.identity.extra_seasons).toEqual([]);
   });
 });
 
