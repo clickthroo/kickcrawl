@@ -63,7 +63,7 @@ describe('POST /api/admin/urls/:id/test-list-on-kickio', () => {
   afterEach(() => {
     vi.doUnmock('../src/db.js');
     vi.doUnmock('../src/middleware/adminAuth.js');
-    vi.doUnmock('../src/lib/kickioSync.js');
+    vi.doUnmock('../src/lib/kickioListingSync.js');
     vi.doUnmock('../src/services/kickioProfile.js');
     vi.doUnmock('../src/lib/currencyRates.js');
     vi.doUnmock('../src/lib/kickioTeams.js');
@@ -111,7 +111,7 @@ describe('POST /api/admin/urls/:id/test-list-on-kickio', () => {
     await app.close();
   });
 
-  it('builds a profile from cached scrape data (no re-scrape) and passes it to testListProductOnKickio', async () => {
+  it('builds a profile from cached scrape data (no re-scrape) and passes it to syncListingAndPersistOutcome', async () => {
     const query = vi.fn(async () => ({ rows: [SCRAPED_ROW] }));
     vi.doMock('../src/db.js', () => ({ pool: { query } }));
     vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
@@ -121,15 +121,16 @@ describe('POST /api/admin/urls/:id/test-list-on-kickio', () => {
       return { ...actual, getKickioTeamsForMatching: vi.fn(async () => null) };
     });
 
-    const testListProductOnKickio = vi.fn(async () => ({
+    const syncListingAndPersistOutcome = vi.fn(async () => ({
       success: true,
-      productId: 'p1',
-      matchedBy: 'new',
+      listingId: 'listing-1',
       action: 'insert',
+      status: 'pending_review',
+      priceChanged: false,
     }));
-    vi.doMock('../src/lib/kickioSync.js', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../src/lib/kickioSync.js')>();
-      return { ...actual, testListProductOnKickio };
+    vi.doMock('../src/lib/kickioListingSync.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/lib/kickioListingSync.js')>();
+      return { ...actual, syncListingAndPersistOutcome };
     });
 
     const { adminUrlRoutes } = await import('../src/routes/admin/urls.js');
@@ -140,10 +141,16 @@ describe('POST /api/admin/urls/:id/test-list-on-kickio', () => {
     const body = JSON.parse(res.body);
 
     expect(res.statusCode).toBe(200);
-    expect(body.outcome).toEqual({ success: true, productId: 'p1', matchedBy: 'new', action: 'insert' });
+    expect(body.outcome).toEqual({
+      success: true,
+      listingId: 'listing-1',
+      action: 'insert',
+      status: 'pending_review',
+      priceChanged: false,
+    });
 
-    expect(testListProductOnKickio).toHaveBeenCalledTimes(1);
-    const [urlIdArg, profileArg] = testListProductOnKickio.mock.calls[0];
+    expect(syncListingAndPersistOutcome).toHaveBeenCalledTimes(1);
+    const [urlIdArg, profileArg] = syncListingAndPersistOutcome.mock.calls[0];
     expect(urlIdArg).toBe('url-1');
     expect(profileArg.source.url).toBe(SCRAPED_ROW.url);
     expect(profileArg.identity.team).toBe('Manchester United');

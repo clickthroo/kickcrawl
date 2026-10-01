@@ -1166,7 +1166,8 @@ export interface KickioTeamMatchDebug {
  * just the final null/match. Built to debug a real batch of stuck sales
  * (session history) where the failure reason wasn't obvious from the
  * outcome alone - never used by the real sync path, deliberately isolated
- * the same way testListProductOnKickio (lib/kickioSync.ts) is.
+ * the same way submitListingToKickio (lib/kickioListingSync.ts) is from
+ * the DB writes that wrap it.
  */
 export function debugMatchKickioTeam(
   guess: string,

@@ -146,8 +146,7 @@ export interface KickioProductPayload extends KickioIdentityFields {
 
 /**
  * Builds the import_kickio_product payload - shared by the real
- * sale-triggered sync below, testListProductOnKickio's experimental
- * no-sale-attached push, and lib/kickioListingSync.ts's real listing
+ * sale-triggered sync below and lib/kickioListingSync.ts's real listing
  * payload (a listing is this same shape plus price/condition/size/
  * quantity). A concrete return type (not a bare Record<string, unknown>)
  * so `'hold' in result` actually narrows - TypeScript can't exclude an
@@ -237,40 +236,6 @@ export async function syncSaleToKickio(sale: SaleForSync): Promise<KickioSyncOut
     saleId: saleResult.sale_id,
     action: saleResult.action,
   };
-}
-
-export interface ProductOnlyOutcome {
-  success: boolean;
-  error?: string;
-  productId?: string;
-  matchedBy?: string;
-  action?: string;
-}
-
-/**
- * EXPERIMENTAL - a one-off, admin-triggered test of listing a still-
- * active (not yet sold) item on Kickio, with no sale attached at all.
- * The real sync (syncSaleToKickio above) only ever calls
- * import_kickio_product at the moment a sale is recorded; this exists
- * purely to find out what Kickio's own match_or_create_product actually
- * does with a standalone product call - what state it lands in, whether
- * it shows up in their Review Queue - before any decision is made about
- * building a real "list on discovery, keep price in sync, delist on
- * sale" pipeline. Deliberately isolated from syncSaleToKickio/
- * syncAndPersistOutcome and never touches the `sales` table - nothing
- * about the real, already-working sale-sync path depends on this.
- */
-export async function testListProductOnKickio(urlId: string, profile: KickioProfile): Promise<ProductOnlyOutcome> {
-  const built = buildProductPayload(urlId, profile);
-  if ('hold' in built) {
-    return { success: false, error: built.hold };
-  }
-  try {
-    const result = await callKickioRpc<ImportProductResult>('import_kickio_product', built);
-    return { success: true, productId: result.product_id, matchedBy: result.matched_by, action: result.action };
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
-  }
 }
 
 /**
