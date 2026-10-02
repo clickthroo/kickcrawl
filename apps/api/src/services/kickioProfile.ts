@@ -629,9 +629,20 @@ export function guessTeamFromTitle(title: string, hostname?: string | null): str
     // right before "#5" and stripped along with it, taking "Issue" with
     // it before the later Match-Issue phrase strip ever got a chance to
     // see it as a whole phrase.
+    //
+    // Each word-slot's `[\p{Ll}']*\.?` (rather than the stricter `[\p{Ll}']+`
+    // this used to be) also accepts a bare first-initial ("P.", just a
+    // capital letter plus a period, zero lowercase letters) as a real
+    // word - confirmed on a real listing ("...Nike #11 P. Coutinho") that
+    // was surviving as "Brazil P. Coutinho": "P." has no lowercase letter
+    // for the old `+` to require, so it was never recognised as part of
+    // the player name here, leaving it (and, as a knock-on,
+    // normalizePlayerName's own team-token stripping treating the still-
+    // present "P."/"Coutinho" in the TEAM guess as if they belonged there)
+    // to wipe the player name down to null entirely.
     .replace(
       new RegExp(
-        `\\b(?:(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']+\\s+){0,2}(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']+\\s*#\\d+`,
+        `\\b(?:(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']*\\.?\\s+){0,2}(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']*\\.?\\s*#\\d+`,
         'gu',
       ),
       '',
@@ -648,7 +659,7 @@ export function guessTeamFromTitle(title: string, hostname?: string | null): str
     // same kit/noise words for the same reason (an unmarked "#1 Goalkeeper
     // Shirt" must not read "Goalkeeper" as if it were a name).
     .replace(
-      new RegExp(`#\\d+\\s+(?:(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']+\\s*){1,2}`, 'gu'),
+      new RegExp(`#\\d+\\s+(?:(?!(?:${TEAM_GUESS_PLAYER_NOISE})\\b)\\p{Lu}[\\p{Ll}']*\\.?\\s*){1,2}`, 'gu'),
       '',
     )
     .replace(/#\d+/g, '');
