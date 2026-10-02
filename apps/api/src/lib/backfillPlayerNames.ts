@@ -35,7 +35,9 @@ import { persistItemProfileColumns } from './persistItemProfile.js';
  */
 const BATCH_SIZE = 500;
 
-export async function backfillBareInitialPlayerNames(): Promise<number> {
+export async function backfillBareInitialPlayerNames(
+  onProgress?: (done: number, total: number) => Promise<void> | void,
+): Promise<number> {
   const { rows: targets } = await pool.query<{ id: string }>(
     `SELECT id FROM urls WHERE status = 'fetched' AND player_number IS NOT NULL AND player IS NULL`,
   );
@@ -93,8 +95,9 @@ export async function backfillBareInitialPlayerNames(): Promise<number> {
         kickioTeams,
       });
       await persistItemProfileColumns(row.id, profile);
+      totalUpdated += 1;
+      if (onProgress) await onProgress(totalUpdated, targets.length);
     }
-    totalUpdated += rows.length;
     console.log(`[backfillBareInitialPlayerNames] updated ${totalUpdated}/${targets.length} rows so far`);
   }
 

@@ -167,14 +167,14 @@ describe('POST /api/admin/urls/backfill-player-names', () => {
   afterEach(() => {
     vi.doUnmock('../src/db.js');
     vi.doUnmock('../src/middleware/adminAuth.js');
-    vi.doUnmock('../src/lib/backfillPlayerNames.js');
+    vi.doUnmock('../src/workers/playerNameBackfillWorker.js');
   });
 
-  it('runs the backfill and reports how many rows were updated', async () => {
+  it('enqueues the backfill job and returns immediately, without waiting for it to finish', async () => {
     vi.doMock('../src/db.js', () => ({ pool: { query: vi.fn() } }));
     vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
-    const backfillBareInitialPlayerNames = vi.fn(async () => 3);
-    vi.doMock('../src/lib/backfillPlayerNames.js', () => ({ backfillBareInitialPlayerNames }));
+    const enqueuePlayerNameBackfill = vi.fn(async () => undefined);
+    vi.doMock('../src/workers/playerNameBackfillWorker.js', () => ({ enqueuePlayerNameBackfill }));
 
     const { adminUrlRoutes } = await import('../src/routes/admin/urls.js');
     const app = Fastify();
@@ -184,8 +184,8 @@ describe('POST /api/admin/urls/backfill-player-names', () => {
     const body = JSON.parse(res.body);
 
     expect(res.statusCode).toBe(200);
-    expect(body).toEqual({ success: true, updated: 3 });
-    expect(backfillBareInitialPlayerNames).toHaveBeenCalledTimes(1);
+    expect(body).toEqual({ success: true });
+    expect(enqueuePlayerNameBackfill).toHaveBeenCalledTimes(1);
     await app.close();
   });
 });

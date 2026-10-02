@@ -48,3 +48,9 @@ export const kickioListingSyncQueue = new Queue('kickio_listing_sync', { connect
 // themselves. Same "nothing per-job to pass in" shape as the other
 // global sweeps above.
 export const crawlAllScheduleQueue = new Queue('crawl_all_schedule', { connection: redisConnection });
+
+// A single one-off, admin-triggered job (workers/playerNameBackfillWorker.ts) -
+// never scheduled/repeatable, unlike the queues above. Run as a real BullMQ
+// job (not inline in the HTTP request) so a large matching set can't make
+// the triggering request hang past the admin UI's own fetch timeout.
+export const playerNameBackfillQueue = new Queue('player_name_backfill', { connection: redisConnection });

@@ -144,12 +144,14 @@ export default function Items() {
     try {
       // One-off re-derive of team/player/number for existing rows caught by
       // the fixed bare-initial player-tag bug (e.g. "#11 P. Coutinho") -
-      // tracked items only, doesn't touch sales history or Kickio.
-      const res = await api.post<{ success: boolean; updated: number }>('/admin/urls/backfill-player-names');
-      setMessage(`Re-checked and updated ${res.updated} item(s).`);
-      loadItems();
+      // tracked items only, doesn't touch sales history or Kickio. Runs as
+      // a background job (can take a while on a large catalog), so this
+      // only confirms it was queued - progress and the final count show up
+      // on the Jobs page like any other crawl/sync job.
+      await api.post('/admin/urls/backfill-player-names');
+      setMessage('Backfill queued - see the Jobs page for progress and the final count.');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Backfill failed');
+      setError(err instanceof ApiError ? err.message : 'Failed to queue backfill');
     } finally {
       setBackfilling(false);
     }
@@ -181,7 +183,7 @@ export default function Items() {
             className="flex-1 sm:flex-initial"
             title="Re-derive team/player/number for existing items affected by the fixed bare-initial player-tag bug (e.g. &quot;#11 P. Coutinho&quot;)"
           >
-            {backfilling ? 'Updating…' : 'Backfill player names'}
+            {backfilling ? 'Queuing…' : 'Backfill player names'}
           </Button>
         }
       />
@@ -189,7 +191,7 @@ export default function Items() {
       {error && <ErrorBanner message={error} />}
       {message && (
         <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-          {message}
+          {message} <Link to="/jobs" className="underline hover:text-green-800">Go to Jobs</Link>
         </div>
       )}
 
