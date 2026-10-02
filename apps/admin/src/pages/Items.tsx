@@ -43,6 +43,8 @@ export default function Items() {
   const [rescraping, setRescraping] = useState<string | null>(null);
   const [testListingId, setTestListingId] = useState<string | null>(null);
   const [testListingResults, setTestListingResults] = useState<Record<string, string>>({});
+  const [backfilling, setBackfilling] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pageSize = 25;
 
@@ -135,6 +137,24 @@ export default function Items() {
     }
   }
 
+  async function backfillPlayerNames() {
+    setBackfilling(true);
+    setError(null);
+    setMessage(null);
+    try {
+      // One-off re-derive of team/player/number for existing rows caught by
+      // the fixed bare-initial player-tag bug (e.g. "#11 P. Coutinho") -
+      // tracked items only, doesn't touch sales history or Kickio.
+      const res = await api.post<{ success: boolean; updated: number }>('/admin/urls/backfill-player-names');
+      setMessage(`Re-checked and updated ${res.updated} item(s).`);
+      loadItems();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Backfill failed');
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const moreFilterCount = [
     filters.team,
@@ -150,9 +170,28 @@ export default function Items() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Items" subtitle="Every scraped item across all sites" />
+      <PageHeader
+        title="Items"
+        subtitle="Every scraped item across all sites"
+        actions={
+          <Button
+            variant="secondary"
+            onClick={backfillPlayerNames}
+            disabled={backfilling}
+            className="flex-1 sm:flex-initial"
+            title="Re-derive team/player/number for existing items affected by the fixed bare-initial player-tag bug (e.g. &quot;#11 P. Coutinho&quot;)"
+          >
+            {backfilling ? 'Updating…' : 'Backfill player names'}
+          </Button>
+        }
+      />
 
       {error && <ErrorBanner message={error} />}
+      {message && (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+          {message}
+        </div>
+      )}
 
       <Card className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
@@ -344,7 +383,7 @@ export default function Items() {
                         onClick={() => testListOnKickio(u.id)}
                         disabled={testListingId === u.id}
                         className="px-3 py-1.5 text-xs"
-                        title="EXPERIMENTAL - pushes this item to Kickio as a product with no sale attached, to see what Kickio does with it"
+                        title="Manually submits this item to Kickio's real listing pipeline (import_kickio_listing) - creates a Review Queue listing, same as the hourly sweep would for an opted-in site"
                       >
                         {testListingId === u.id ? 'Sending…' : 'Test: list on Kickio'}
                       </Button>
