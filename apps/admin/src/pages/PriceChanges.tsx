@@ -92,7 +92,7 @@ export default function PriceChanges() {
                   <div className="flex min-w-0 flex-1 items-start gap-3">
                     <Thumbnail src={pc.profile?.listing.images[0] ?? null} alt={pc.title ?? pc.url} size={44} />
                     <div className="min-w-0">
-                      <div className="truncate font-medium text-slate-800" title={pc.title ?? undefined}>
+                      <div className="break-words font-medium text-slate-800" title={pc.title ?? undefined}>
                         {pc.title ?? pc.url}
                       </div>
                       <a

@@ -285,7 +285,7 @@ export default function Items() {
                 <div className="flex min-w-0 flex-1 items-start gap-3">
                   <Thumbnail src={u.preview_image} alt={u.preview_title ?? u.path} size={44} />
                   <div className="min-w-0">
-                    <div className="truncate font-medium text-slate-800" title={u.preview_title ?? undefined}>
+                    <div className="break-words font-medium text-slate-800" title={u.preview_title ?? undefined}>
                       {u.preview_title ?? u.path}
                     </div>
                     <a

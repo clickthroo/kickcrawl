@@ -334,7 +334,7 @@ export default function Sales() {
                 <div className="flex min-w-0 flex-1 items-start gap-3">
                   <Thumbnail src={s.profile?.listing.images[0] ?? null} alt={s.title ?? s.url} size={44} />
                   <div className="min-w-0">
-                    <div className="truncate font-medium text-slate-800" title={s.title ?? undefined}>
+                    <div className="break-words font-medium text-slate-800" title={s.title ?? undefined}>
                       {s.title ?? s.url}
                     </div>
                     <a
