@@ -6,6 +6,7 @@ import { createJob } from '../../lib/jobRecords.js';
 import { buildKickioProfile } from '../../services/kickioProfile.js';
 import { getCurrencyRates } from '../../lib/currencyRates.js';
 import { getKickioTeamsForMatching } from '../../lib/kickioTeams.js';
+import { enqueueScrapeResultsPruneNow } from '../../workers/scrapeResultsPruneWorker.js';
 
 export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
@@ -195,6 +196,17 @@ export async function adminJobRoutes(app: FastifyInstance): Promise<void> {
     if (!rows[0]) {
       return reply.code(400).send({ success: false, error: 'Job cannot be cancelled from its current state' });
     }
+    return reply.send({ success: true });
+  });
+
+  // One-off, immediate run of the scrape_results retention prune
+  // (workers/scrapeResultsPruneWorker.ts, which also runs this
+  // automatically once a day) - for reclaiming disk right away rather
+  // than waiting for the next scheduled tick, e.g. right after a
+  // disk-full incident. Enqueues and returns immediately; the actual
+  // delete runs as a background job, tracked on this same Jobs page.
+  app.post('/api/admin/jobs/prune-scrape-results', async (_req, reply) => {
+    await enqueueScrapeResultsPruneNow();
     return reply.send({ success: true });
   });
 }

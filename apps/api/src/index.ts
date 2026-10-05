@@ -10,6 +10,7 @@ import { scheduleKickioSync, startKickioSyncWorker } from './workers/kickioSyncW
 import { scheduleKickioListingSync, startKickioListingSyncWorker } from './workers/kickioListingSyncWorker.js';
 import { scheduleCrawlAll, startCrawlAllWorker } from './workers/crawlAllWorker.js';
 import { startPlayerNameBackfillWorker } from './workers/playerNameBackfillWorker.js';
+import { scheduleScrapeResultsPrune, startScrapeResultsPruneWorker } from './workers/scrapeResultsPruneWorker.js';
 
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
@@ -52,6 +53,8 @@ async function main(): Promise<void> {
   const crawlAllWorker = startCrawlAllWorker();
   await scheduleCrawlAll();
   const playerNameBackfillWorker = startPlayerNameBackfillWorker();
+  const scrapeResultsPruneWorker = startScrapeResultsPruneWorker();
+  await scheduleScrapeResultsPrune();
 
   const app = await buildApp();
 
@@ -79,6 +82,7 @@ async function main(): Promise<void> {
     await kickioListingSyncWorker.close();
     await crawlAllWorker.close();
     await playerNameBackfillWorker.close();
+    await scrapeResultsPruneWorker.close();
     await pool.end();
     process.exit(0);
   };

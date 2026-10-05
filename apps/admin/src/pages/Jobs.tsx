@@ -11,6 +11,8 @@ export default function Jobs() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState(() => searchParams.get('type') ?? '');
   const [page, setPage] = useState(1);
+  const [pruning, setPruning] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pageSize = 25;
 
@@ -45,11 +47,42 @@ export default function Jobs() {
     return () => clearInterval(t);
   }, [statusFilter, typeFilter, page]);
 
+  async function pruneScrapeResults() {
+    setPruning(true);
+    setError(null);
+    setMessage(null);
+    try {
+      // Immediate, one-off run of the daily scrape_results retention
+      // prune - reclaims disk now instead of waiting for the next
+      // scheduled tick. Runs as a background job (can take a while on a
+      // large table), so this only confirms it was queued.
+      await api.post('/admin/jobs/prune-scrape-results');
+      setMessage('Prune queued - progress and the row count it deleted will show up as a job below.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to queue prune');
+    } finally {
+      setPruning(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Jobs" />
+      <PageHeader
+        title="Jobs"
+        actions={
+          <Button
+            variant="secondary"
+            onClick={pruneScrapeResults}
+            disabled={pruning}
+            className="flex-1 sm:flex-initial"
+            title="Delete old scraped page snapshots nothing reads any more (anything superseded and older than 14 days) - runs automatically once a day too"
+          >
+            {pruning ? 'Queuing…' : 'Prune old scrape history'}
+          </Button>
+        }
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:flex sm:gap-3">
         <div className="sm:w-44">
@@ -60,6 +93,10 @@ export default function Jobs() {
             <option value="crawl">Crawl</option>
             <option value="extract">Extract</option>
             <option value="recheck">Recheck</option>
+            <option value="kickio_sync">Kickio sync</option>
+            <option value="kickio_listing_sync">Kickio listing sync</option>
+            <option value="player_name_backfill">Player name backfill</option>
+            <option value="scrape_results_prune">Scrape history prune</option>
           </Select>
         </div>
         <div className="sm:w-44">
@@ -76,6 +113,11 @@ export default function Jobs() {
       </div>
 
       {error && <ErrorBanner message={error} />}
+      {message && (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+          {message}
+        </div>
+      )}
 
       {!jobs && !error && <Spinner />}
 

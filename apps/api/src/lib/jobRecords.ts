@@ -9,7 +9,8 @@ export type JobType =
   | 'recheck'
   | 'kickio_sync'
   | 'kickio_listing_sync'
-  | 'player_name_backfill';
+  | 'player_name_backfill'
+  | 'scrape_results_prune';
 export type JobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export async function createJob(

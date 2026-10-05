@@ -54,3 +54,15 @@ export const crawlAllScheduleQueue = new Queue('crawl_all_schedule', { connectio
 // job (not inline in the HTTP request) so a large matching set can't make
 // the triggering request hang past the admin UI's own fetch timeout.
 export const playerNameBackfillQueue = new Queue('player_name_backfill', { connection: redisConnection });
+
+// A daily sweep (workers/scrapeResultsPruneWorker.ts) that deletes
+// scrape_results rows nothing in the app reads any more - every query
+// against this table only ever wants the latest row per (url_id, format),
+// or a specific job's own rows while that job is still recent/visible on
+// the Jobs page. Built after scrape_results' unbounded, insert-only
+// growth (one new row every hourly recheck, for every eligible item,
+// forever) filled the production Postgres volume entirely. Also exposes
+// a one-off admin-triggered run (routes/admin/jobs.ts), same "button
+// enqueues, a Worker does the work, progress on the Jobs page" shape as
+// the Kickio sync recovery sweep and the player-name backfill.
+export const scrapeResultsPruneQueue = new Queue('scrape_results_prune', { connection: redisConnection });
