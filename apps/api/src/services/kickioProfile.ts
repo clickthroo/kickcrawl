@@ -604,6 +604,21 @@ export function guessTeamFromTitle(title: string, hostname?: string | null): str
 
   let c = (footballFinery ? stripBareSeasonFragment(withoutSubtitle) : withoutSubtitle)
     .replace(/\*+/g, '')
+    // Sleeve-length markers ("L/S", "S/S") have to go before the "#"-tag
+    // strips just below, not alongside the rest of the garment-word list
+    // further down this chain where they used to live - confirmed on a
+    // real listing ("...Home Shirt L/S #12 S") surviving as "Barcelona
+    // L/": \b is a word-CHARACTER-class boundary, not a real token
+    // boundary, so it's satisfied just as well right after the "/" in
+    // "L/S" as it is after a space - the trailing "#<number> <word>"
+    // strip below was matching the lone "S" after that slash as if it
+    // were its own standalone single-letter "player name" (the same
+    // zero-lowercase-letters allowance added for bare initials like
+    // "P."), stripping "S #12" and leaving the "L/" stub behind with no
+    // "S" left for the dedicated L/S strip further down to ever
+    // recognise as a whole token again. Removing it here, first, means
+    // there's no lone "S" left for that later regex to misread.
+    .replace(/\b(L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
     // Strip a trailing "<player name> #<number>" span first, while a season
     // digit-group or kit-type word still separates it from the team name at
     // the front of the title. Bounded to at most 3 capitalized words before
@@ -701,10 +716,6 @@ export function guessTeamFromTitle(title: string, hostname?: string | null): str
     // detectColours matches against elsewhere in this file) rather than a
     // separate list that could drift out of sync with it.
     .replace(new RegExp(`\\b(${COLOUR_WORDS.map((w) => escapeRegex(w)).join('|')})\\b`, 'gi'), '')
-    // "LS" (no slash) is the same long-sleeve marker as "L/S" below, just
-    // this retailer's own shorthand for it on some listings - confirmed on
-    // a real long-sleeved listing surviving as "Manchester United x
-    // George Best LS".
     // "Sweatshirt"/"Hoodie", "Tee", "Jacket" and "Coat" cover this
     // retailer's non-shirt listings (training tops, half-zips,
     // casualwear, jackets, coats), not just match shirts - confirmed on
@@ -718,7 +729,7 @@ export function guessTeamFromTitle(title: string, hostname?: string | null): str
     // being stripped here - confirmed on real listings surviving as
     // "Italy Walk-Out Pants" and "Hull City Tracksuit Bottoms" once every
     // other noise word around them had already gone.
-    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Coats?|Sweatshirts?|Hoodies?|Shorts?|Socks?|Scarf|Scarves|Boots?|Pants|Trousers|Bottoms|Tracksuit|Football|L\/S|LS|S\/S|Long Sleeves?|Short Sleeves?)\b/gi, '')
+    .replace(/\b(Shirts?|Jerseys?|Kits?|Tops?|Tees?|Jackets?|Coats?|Sweatshirts?|Hoodies?|Shorts?|Socks?|Scarf|Scarves|Boots?|Pants|Trousers|Bottoms|Tracksuit|Football)\b/gi, '')
     // "Graphic" and "Presentation" describe the garment style, not the
     // team, on the same casualwear listings above - "Arsenal Graphic Tee"
     // and "Liverpool Presentation Jacket" were otherwise surviving whole.
@@ -771,6 +782,13 @@ export function guessTeamFromTitle(title: string, hostname?: string | null): str
     // "CL" in front.
     .replace(/\b(?:CL\s+)?\d\/\d\s*Zip\b/gi, '')
     .replace(/\bQuarter[- ]?Zip\b/gi, '')
+    // A bare, unqualified "Zip" (a full-zip top, as opposed to the
+    // half/quarter-zip shapes above) is the same garment-style word, not
+    // part of the team - confirmed on a real listing surviving as "West
+    // Ham Zip" from "West Ham Umbro Training Zip Jacket" once
+    // "Training"/"Jacket" were already stripped, leaving only "Zip"
+    // behind with nothing to anchor the more specific patterns above on.
+    .replace(/\bZip\b/gi, '')
     // "Match Issue" (no trailing "d") is a distinct phrase from "Match
     // Issued" already covered here, and the correct source for this
     // profile's own Issue field too (canonicalIssue() below already
@@ -1055,6 +1073,9 @@ const TEAM_ALIASES: Record<string, string> = {
   spurs: 'Tottenham Hotspur',
   psg: 'Paris Saint-Germain',
   wolves: 'Wolverhampton Wanderers',
+  dortmund: 'Borussia Dortmund',
+  benfica: 'SL Benfica',
+  'west ham': 'West Ham United',
 };
 
 function normalizeKickioTeamName(s: string): string {

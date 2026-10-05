@@ -221,6 +221,29 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('1998 France World Cup Shirt Size M')).toBe('France');
   });
 
+  it('strips an "L/S" sleeve-length marker even when a "#<number>" player tag follows it directly', () => {
+    // Real listing, surviving as "Barcelona L/": \b is a word-CHARACTER
+    // boundary, not a real token boundary, so it's satisfied right after
+    // the "/" in "L/S" too - the "#<number> <word>" strip was reading the
+    // lone "S" after that slash as a one-letter "player name" (the same
+    // allowance added for a bare initial like "P."), stripping "S #12"
+    // and leaving the "L/" stub behind with no "S" left for a later,
+    // dedicated L/S strip to ever recognise as a whole token again.
+    expect(guessTeamFromTitle('1997-98 Barcelona Kappa Match Issue Home Shirt L/S #12 S')).toBe(
+      'Barcelona',
+    );
+  });
+
+  it('strips a bare "Zip" (full-zip top) the same way the half/quarter-zip shapes are already stripped', () => {
+    // Real listing, surviving as "West Ham Zip" once "Training"/"Jacket"
+    // were already stripped, leaving only "Zip" behind with nothing for
+    // the more specific "<digit>/<digit> Zip"/"Quarter-Zip" patterns to
+    // match against.
+    expect(guessTeamFromTitle('2025-26 West Ham Umbro Training Zip Jacket *w/tags* S TM12552NS-030')).toBe(
+      'West Ham',
+    );
+  });
+
   it('returns empty rather than a bare size code when nothing real is left', () => {
     expect(guessTeamFromTitle('2020-21 Home Shirt Size L')).toBe('');
   });
@@ -918,6 +941,33 @@ describe('matchKickioTeam', () => {
       expect(matchKickioTeam('usa', usaTeams)).toEqual({
         name: 'United States',
         slug: 'united-states',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "Dortmund" to "Borussia Dortmund" - a real stuck sale', () => {
+      const dortmundTeams = [{ name: 'Borussia Dortmund', slug: 'borussia-dortmund' }];
+      expect(matchKickioTeam('Dortmund', dortmundTeams)).toEqual({
+        name: 'Borussia Dortmund',
+        slug: 'borussia-dortmund',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "Benfica" to "SL Benfica" - a real stuck sale', () => {
+      const benficaTeams = [{ name: 'SL Benfica', slug: 'sl-benfica' }];
+      expect(matchKickioTeam('Benfica', benficaTeams)).toEqual({
+        name: 'SL Benfica',
+        slug: 'sl-benfica',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "West Ham" to "West Ham United" - a real stuck sale', () => {
+      const westHamTeams = [{ name: 'West Ham United', slug: 'west-ham-united' }];
+      expect(matchKickioTeam('West Ham', westHamTeams)).toEqual({
+        name: 'West Ham United',
+        slug: 'west-ham-united',
         matchType: 'alias',
       });
     });
