@@ -11,6 +11,7 @@ import { persistItemProfileColumns } from '../../lib/persistItemProfile.js';
 import { detectAndRecordTransition, getPreviousStockAndPrice } from '../../lib/saleDetection.js';
 import { isCrawlItem, passesSellerFilter } from '../../workers/crawlWorker.js';
 import { syncListingAndPersistOutcome } from '../../lib/kickioListingSync.js';
+import { enqueuePlayerNameBackfill } from '../../workers/playerNameBackfillWorker.js';
 
 export interface ItemFilters {
   stock_status?: string;
@@ -398,5 +399,19 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
 
     const outcome = await syncListingAndPersistOutcome(id, profile);
     return reply.send({ success: true, outcome });
+  });
+
+  // One-off backfill for urls rows affected by the bare-initial player-name
+  // bug in guessTeamFromTitle (services/kickioProfile.ts, fixed alongside
+  // this route) - re-derives the profile for every row that still shows the
+  // bug's symptom (a shirt number was found but player came back null) and
+  // persists the corrected columns. Tracked items only: does not touch the
+  // sales table's permanent snapshots or trigger a Kickio re-sync. Runs as
+  // a background job (workers/playerNameBackfillWorker.ts), not inline -
+  // confirmed in production that running it synchronously here could
+  // outlast the admin UI's own request timeout on a large matching set.
+  app.post('/api/admin/urls/backfill-player-names', async (_req, reply) => {
+    await enqueuePlayerNameBackfill();
+    return reply.send({ success: true });
   });
 }

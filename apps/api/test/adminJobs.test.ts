@@ -62,3 +62,37 @@ describe('GET /api/admin/jobs', () => {
     await app.close();
   });
 });
+
+describe('POST /api/admin/jobs/prune-scrape-results', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/db.js');
+    vi.doUnmock('../src/middleware/adminAuth.js');
+    vi.doUnmock('../src/queue.js');
+    vi.doUnmock('../src/workers/scrapeResultsPruneWorker.js');
+  });
+
+  it('enqueues the prune job and returns immediately, without waiting for it to finish', async () => {
+    vi.doMock('../src/db.js', () => ({ pool: { query: vi.fn() } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    vi.doMock('../src/queue.js', () => ({ crawlQueue: { add: vi.fn() } }));
+    const enqueueScrapeResultsPruneNow = vi.fn(async () => undefined);
+    vi.doMock('../src/workers/scrapeResultsPruneWorker.js', () => ({ enqueueScrapeResultsPruneNow }));
+
+    const { adminJobRoutes } = await import('../src/routes/admin/jobs.js');
+    const app = Fastify();
+    await app.register(adminJobRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/jobs/prune-scrape-results' });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body).toEqual({ success: true });
+    expect(enqueueScrapeResultsPruneNow).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+});

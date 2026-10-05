@@ -174,7 +174,7 @@ export default function JobDetail() {
                 <div className="flex items-start gap-3">
                   <Thumbnail src={p.image} alt={p.title ?? p.url} size={56} />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-slate-800" title={p.title ?? p.url}>
+                    <div className="break-words text-sm font-medium text-slate-800" title={p.title ?? p.url}>
                       {p.title ?? p.url}
                     </div>
                     <a

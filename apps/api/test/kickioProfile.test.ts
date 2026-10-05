@@ -221,6 +221,29 @@ describe('guessTeamFromTitle', () => {
     expect(guessTeamFromTitle('1998 France World Cup Shirt Size M')).toBe('France');
   });
 
+  it('strips an "L/S" sleeve-length marker even when a "#<number>" player tag follows it directly', () => {
+    // Real listing, surviving as "Barcelona L/": \b is a word-CHARACTER
+    // boundary, not a real token boundary, so it's satisfied right after
+    // the "/" in "L/S" too - the "#<number> <word>" strip was reading the
+    // lone "S" after that slash as a one-letter "player name" (the same
+    // allowance added for a bare initial like "P."), stripping "S #12"
+    // and leaving the "L/" stub behind with no "S" left for a later,
+    // dedicated L/S strip to ever recognise as a whole token again.
+    expect(guessTeamFromTitle('1997-98 Barcelona Kappa Match Issue Home Shirt L/S #12 S')).toBe(
+      'Barcelona',
+    );
+  });
+
+  it('strips a bare "Zip" (full-zip top) the same way the half/quarter-zip shapes are already stripped', () => {
+    // Real listing, surviving as "West Ham Zip" once "Training"/"Jacket"
+    // were already stripped, leaving only "Zip" behind with nothing for
+    // the more specific "<digit>/<digit> Zip"/"Quarter-Zip" patterns to
+    // match against.
+    expect(guessTeamFromTitle('2025-26 West Ham Umbro Training Zip Jacket *w/tags* S TM12552NS-030')).toBe(
+      'West Ham',
+    );
+  });
+
   it('returns empty rather than a bare size code when nothing real is left', () => {
     expect(guessTeamFromTitle('2020-21 Home Shirt Size L')).toBe('');
   });
@@ -442,6 +465,21 @@ describe('guessTeamFromTitle', () => {
     // function's separate leading-manufacturer handling, unrelated to
     // this fix - included here as a real title shape, not to test that.)
     expect(guessTeamFromTitle('Nike Real Madrid Home Shirt Adidas #9 Benzema')).toBe('Real Madrid');
+  });
+
+  it('strips a "#<number> <Initial>. <Surname>" player tag, not just a bare surname', () => {
+    // Real footballfinery.co.uk listing: "...Nike #11 P. Coutinho" was
+    // surviving as "Brazil P. Coutinho" - "P." (a bare capital letter plus
+    // a period, no lowercase letters at all) didn't match either #-marked
+    // strip's own per-word pattern (`\p{Lu}[\p{Ll}']+` required at least
+    // one lowercase letter), so neither word of the name got stripped. The
+    // real, worse knock-on effect (see buildKickioProfile's own test
+    // below): normalizePlayerName then saw "P."/"Coutinho" still sitting
+    // in the TEAM guess and wrongly treated them as team-name tokens,
+    // wiping the separately-extracted player name down to null too.
+    expect(
+      guessTeamFromTitle('2016/17 Brazil Home Football Shirt (M) Nike #11 P. Coutinho'),
+    ).toBe('Brazil');
   });
 
   it("strips a manufacturer's casualwear product line and garment-type words, not just shirt-specific ones", () => {
@@ -903,6 +941,33 @@ describe('matchKickioTeam', () => {
       expect(matchKickioTeam('usa', usaTeams)).toEqual({
         name: 'United States',
         slug: 'united-states',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "Dortmund" to "Borussia Dortmund" - a real stuck sale', () => {
+      const dortmundTeams = [{ name: 'Borussia Dortmund', slug: 'borussia-dortmund' }];
+      expect(matchKickioTeam('Dortmund', dortmundTeams)).toEqual({
+        name: 'Borussia Dortmund',
+        slug: 'borussia-dortmund',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "Benfica" to "SL Benfica" - a real stuck sale', () => {
+      const benficaTeams = [{ name: 'SL Benfica', slug: 'sl-benfica' }];
+      expect(matchKickioTeam('Benfica', benficaTeams)).toEqual({
+        name: 'SL Benfica',
+        slug: 'sl-benfica',
+        matchType: 'alias',
+      });
+    });
+
+    it('resolves "West Ham" to "West Ham United" - a real stuck sale', () => {
+      const westHamTeams = [{ name: 'West Ham United', slug: 'west-ham-united' }];
+      expect(matchKickioTeam('West Ham', westHamTeams)).toEqual({
+        name: 'West Ham United',
+        slug: 'west-ham-united',
         matchType: 'alias',
       });
     });
@@ -1599,6 +1664,29 @@ describe('footballfinery.co.uk player name/number fix', () => {
     expect(profile.identity.player).toBe('Cavani');
     expect(profile.identity.number).toBe('9');
     expect(profile.identity.season).toBe('2017-18');
+  });
+
+  it('recovers team/player/number from a real listing whose player tag uses a "#"-marked bare initial', () => {
+    // Real listing: "...Nike #11 P. Coutinho" - unlike the two listings
+    // above, this one DOES use a "#" marker, but "P." (a bare initial,
+    // no lowercase letters) wasn't recognised as part of the player name
+    // by guessTeamFromTitle's own #-marked stripping, leaving the team
+    // guess as "Brazil P. Coutinho" - which then, via
+    // normalizePlayerName's own team-token stripping, wiped the
+    // separately (correctly) extracted player name "P. Coutinho" down to
+    // null too, even though extractPlayerNameFromTitle itself got it
+    // right all along.
+    const profile = buildKickioProfile({
+      url: 'https://www.footballfinery.co.uk/products/2016-17-brazil-home-football-shirt-m-nike-11-p-coutinho',
+      title: '2016/17 Brazil Home Football Shirt (M) Nike #11 P. Coutinho – Football Finery',
+      description: 'Condition: Needs Attention. Some wear to the badge.',
+      kickioTeams: [{ name: 'Brazil', slug: 'brazil', country: 'Brazil' }],
+    });
+    expect(profile.identity.team).toBe('Brazil');
+    expect(profile.identity.team_kickio_match).toBe('Brazil');
+    expect(profile.identity.player).toBe('P. Coutinho');
+    expect(profile.identity.number).toBe('11');
+    expect(profile.identity.season).toBe('2016-17');
   });
 });
 

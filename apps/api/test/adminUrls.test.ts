@@ -157,3 +157,35 @@ describe('POST /api/admin/urls/:id/test-list-on-kickio', () => {
     await app.close();
   });
 });
+
+describe('POST /api/admin/urls/backfill-player-names', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/db.js');
+    vi.doUnmock('../src/middleware/adminAuth.js');
+    vi.doUnmock('../src/workers/playerNameBackfillWorker.js');
+  });
+
+  it('enqueues the backfill job and returns immediately, without waiting for it to finish', async () => {
+    vi.doMock('../src/db.js', () => ({ pool: { query: vi.fn() } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    const enqueuePlayerNameBackfill = vi.fn(async () => undefined);
+    vi.doMock('../src/workers/playerNameBackfillWorker.js', () => ({ enqueuePlayerNameBackfill }));
+
+    const { adminUrlRoutes } = await import('../src/routes/admin/urls.js');
+    const app = Fastify();
+    await app.register(adminUrlRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/urls/backfill-player-names' });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body).toEqual({ success: true });
+    expect(enqueuePlayerNameBackfill).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+});
