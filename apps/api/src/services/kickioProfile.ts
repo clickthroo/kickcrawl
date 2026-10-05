@@ -1076,6 +1076,7 @@ const TEAM_ALIASES: Record<string, string> = {
   dortmund: 'Borussia Dortmund',
   benfica: 'SL Benfica',
   'west ham': 'West Ham United',
+  anderlecht: 'RSC Anderlecht',
 };
 
 function normalizeKickioTeamName(s: string): string {

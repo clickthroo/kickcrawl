@@ -972,6 +972,15 @@ describe('matchKickioTeam', () => {
       });
     });
 
+    it('resolves "Anderlecht" to "RSC Anderlecht" - a real stuck sale', () => {
+      const andTeams = [{ name: 'RSC Anderlecht', slug: 'rsc-anderlecht' }];
+      expect(matchKickioTeam('Anderlecht', andTeams)).toEqual({
+        name: 'RSC Anderlecht',
+        slug: 'rsc-anderlecht',
+        matchType: 'alias',
+      });
+    });
+
     it('stays unmatched when the alias is known but its canonical team is not in this deployment\'s own live list', () => {
       // A real, distinct failure mode from "Totally Unknown FC" above -
       // the alias itself resolved, but the team it points to isn't in the
