@@ -2333,6 +2333,38 @@ describe('buildKickioProfile', () => {
     expect(bottoms.identity.shirt_type).toBeNull();
   });
 
+  it('infers the "Polo Shirts & T-shirts" category from the title, with shirt_type left null too', () => {
+    // Same gap as every other non-shirt category above, for the newest
+    // addition to Kickio's live category list (added after this file's
+    // categories were first built) - without this branch these were
+    // silently sent to Kickio as real football shirts, bogus Home/Away
+    // shirt_type and all. Real listing: "Arsenal Graphic Tee" (already a
+    // trusted title elsewhere in this file, for the team-guess strip).
+    const tee = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: 'Arsenal Graphic Tee',
+    });
+    expect(tee.category).toBe('Polo Shirts & T-shirts');
+    expect(tee.identity.shirt_type).toBeNull();
+
+    const polo = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: 'England Nike Polo Shirt',
+    });
+    expect(polo.category).toBe('Polo Shirts & T-shirts');
+    expect(polo.identity.shirt_type).toBeNull();
+
+    // A real match shirt is never mistaken for a tee - "T[- ]?Shirts?"
+    // requires a standalone "T" fused/hyphenated/spaced directly in front
+    // of "Shirt", which an ordinary "... Home Shirt" title never has.
+    const realShirt = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2022-23 Manchester United adidas Home Shirt',
+    });
+    expect(realShirt.category).toBe('Football Shirts');
+    expect(realShirt.identity.shirt_type).toBe('Home');
+  });
+
   it('maps a shirt spanning two seasons (real example: "1998-00 Nigeria Home Shirt L")', () => {
     const profile = buildKickioProfile({
       url: 'https://www.vintagefootballshirts.com/products/1998-00-nigeria-home-shirt-l',
