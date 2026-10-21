@@ -149,6 +149,11 @@ const LIVE_CATEGORIES = [
   'Hoodies/Sweat Tops',
   'Boots',
   'Scarves',
+  // Added to Kickio's own live category list after this file's categories
+  // were first built - re-confirmed directly against Kickio's own
+  // categories table (name/slug/sort), same source as every other entry
+  // here.
+  'Polo Shirts & T-shirts',
   'Memorabilia',
   'Other',
 ];
@@ -1076,6 +1081,7 @@ const TEAM_ALIASES: Record<string, string> = {
   dortmund: 'Borussia Dortmund',
   benfica: 'SL Benfica',
   'west ham': 'West Ham United',
+  anderlecht: 'RSC Anderlecht',
 };
 
 function normalizeKickioTeamName(s: string): string {
@@ -2209,6 +2215,20 @@ function resolveCategory(raw: string | null): string {
 function detectCategoryFromTitle(title: string): string | null {
   if (/\b(jackets?|coats?)\b/i.test(title)) return 'Jackets/Coats';
   if (/\b(hoodies?|sweatshirts?|sweat\s*tops?)\b/i.test(title)) return 'Hoodies/Sweat Tops';
+  // "Polo Shirts & T-shirts" is a newer addition to Kickio's own live
+  // category list (added after this file's category handling was first
+  // built) - the same "silently falls back to Football Shirts and picks
+  // up a bogus shirt_type" gap already fixed below for Shorts/Socks/
+  // Scarves/Boots/Pants, just not yet extended to this one since it
+  // didn't exist yet. Confirmed on a real listing surviving as "Arsenal
+  // Graphic Tee" (already a trusted title in this file - see the "Graphic
+  // Tee" team-guess strip above) that it was being sent to Kickio as a
+  // real football shirt, Home/Away/etc shirt_type and all. "T[- ]?Shirts?"
+  // requires the "T" immediately in front of "Shirt" (fused, hyphenated,
+  // or a single space) so this never fires on an ordinary "... Home
+  // Shirt" listing, which has no standalone "t" sitting directly in front
+  // of "Shirt".
+  if (/\b(polo(?:\s*shirts?)?|tees?|t[- ]?shirts?)\b/i.test(title)) return 'Polo Shirts & T-shirts';
   // Confirmed the same gap exists for Shorts: "Arsenal Adidas Home
   // Shorts" was defaulting to Football Shirts AND picking up a
   // shirt_type ("Home") as if it were an actual shirt. Word-boundary

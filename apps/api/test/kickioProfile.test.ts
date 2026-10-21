@@ -972,6 +972,15 @@ describe('matchKickioTeam', () => {
       });
     });
 
+    it('resolves "Anderlecht" to "RSC Anderlecht" - a real stuck sale', () => {
+      const andTeams = [{ name: 'RSC Anderlecht', slug: 'rsc-anderlecht' }];
+      expect(matchKickioTeam('Anderlecht', andTeams)).toEqual({
+        name: 'RSC Anderlecht',
+        slug: 'rsc-anderlecht',
+        matchType: 'alias',
+      });
+    });
+
     it('stays unmatched when the alias is known but its canonical team is not in this deployment\'s own live list', () => {
       // A real, distinct failure mode from "Totally Unknown FC" above -
       // the alias itself resolved, but the team it points to isn't in the
@@ -2322,6 +2331,38 @@ describe('buildKickioProfile', () => {
     });
     expect(bottoms.category).toBe('Other');
     expect(bottoms.identity.shirt_type).toBeNull();
+  });
+
+  it('infers the "Polo Shirts & T-shirts" category from the title, with shirt_type left null too', () => {
+    // Same gap as every other non-shirt category above, for the newest
+    // addition to Kickio's live category list (added after this file's
+    // categories were first built) - without this branch these were
+    // silently sent to Kickio as real football shirts, bogus Home/Away
+    // shirt_type and all. Real listing: "Arsenal Graphic Tee" (already a
+    // trusted title elsewhere in this file, for the team-guess strip).
+    const tee = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: 'Arsenal Graphic Tee',
+    });
+    expect(tee.category).toBe('Polo Shirts & T-shirts');
+    expect(tee.identity.shirt_type).toBeNull();
+
+    const polo = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: 'England Nike Polo Shirt',
+    });
+    expect(polo.category).toBe('Polo Shirts & T-shirts');
+    expect(polo.identity.shirt_type).toBeNull();
+
+    // A real match shirt is never mistaken for a tee - "T[- ]?Shirts?"
+    // requires a standalone "T" fused/hyphenated/spaced directly in front
+    // of "Shirt", which an ordinary "... Home Shirt" title never has.
+    const realShirt = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2022-23 Manchester United adidas Home Shirt',
+    });
+    expect(realShirt.category).toBe('Football Shirts');
+    expect(realShirt.identity.shirt_type).toBe('Home');
   });
 
   it('maps a shirt spanning two seasons (real example: "1998-00 Nigeria Home Shirt L")', () => {
