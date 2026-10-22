@@ -12,6 +12,7 @@ import type { KickioProfile } from '../services/kickioProfile.js';
  */
 export interface ItemProfileColumns {
   stock_status: string | null;
+  category: string | null;
   team: string | null;
   season: string | null;
   shirt_type: string | null;
@@ -29,6 +30,7 @@ export interface ItemProfileColumns {
 export function profileToColumns(profile: KickioProfile): ItemProfileColumns {
   return {
     stock_status: profile.listing.stock_status,
+    category: profile.category,
     team: profile.identity.team,
     season: profile.identity.season,
     shirt_type: profile.identity.shirt_type,
@@ -48,13 +50,14 @@ export async function persistItemProfileColumns(urlId: string, profile: KickioPr
   const c = profileToColumns(profile);
   await pool.query(
     `UPDATE urls SET
-       stock_status = $2, team = $3, season = $4, shirt_type = $5,
-       player = $6, player_number = $7, colour = $8, colour_secondary = $9,
-       size = $10, manufacturer = $11, condition = $12, price = $13, currency = $14
+       stock_status = $2, category = $3, team = $4, season = $5, shirt_type = $6,
+       player = $7, player_number = $8, colour = $9, colour_secondary = $10,
+       size = $11, manufacturer = $12, condition = $13, price = $14, currency = $15
      WHERE id = $1`,
     [
       urlId,
       c.stock_status,
+      c.category,
       c.team,
       c.season,
       c.shirt_type,

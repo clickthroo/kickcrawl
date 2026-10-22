@@ -111,6 +111,37 @@ describe('GET /api/admin/sales', () => {
     expect(listCall?.[0]).not.toContain('DROP TABLE');
     await app.close();
   });
+
+  it('filters by category against the JSONB profile snapshot, and applies the same filter to the counts breakdown', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('count(*) FILTER')) {
+        return { rows: [{ synced: '1', held: '0', stuck: '0', dismissed: '0', total: '1' }] };
+      }
+      if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '1' }] };
+      return { rows: [{ id: 'sale-1', kickio_status: 'synced' }] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'GET', url: '/api/admin/sales?category=Polo+Shirts' });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.kickioCounts.total).toBe(1);
+
+    const listCall = query.mock.calls.find(([sql]) => (sql as string).includes('FROM sales sa\n'));
+    expect(listCall?.[0]).toContain(`sa.profile->>'category' ILIKE $1`);
+    expect(listCall?.[1]).toEqual(['%Polo Shirts%']);
+
+    const countsCall = query.mock.calls.find(([sql]) => (sql as string).includes('count(*) FILTER'));
+    expect(countsCall?.[0]).toContain(`sa.profile->>'category' ILIKE $1`);
+    expect(countsCall?.[1]).toEqual(['%Polo Shirts%']);
+    await app.close();
+  });
 });
 
 describe('POST /api/admin/sales/:id/retry-kickio-sync', () => {

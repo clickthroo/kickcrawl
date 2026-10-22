@@ -143,6 +143,7 @@ describe('syncSaleToKickio', () => {
     const productBody = JSON.parse((productInit as RequestInit).body as string);
     expect(productBody.p.id).toBe('url-1');
     expect(productBody.p.team).toBe('Manchester United'); // team_kickio_match, not a raw guess
+    expect(productBody.p.category).toBe('Football Shirts');
     expect(productBody.p.image_url).toBe('https://www.vintagefootballshirts.com/img/shirt.jpg');
     // The original listing page, so a Kickio reviewer can check a
     // KickCrawl-sourced team match (or any other guessed field) against
@@ -160,6 +161,7 @@ describe('syncSaleToKickio', () => {
     expect(saleBody.p.price_cents).toBe(9000);
     expect(saleBody.p.currency).toBe('GBP');
     expect(saleBody.p.team).toBe('Manchester United');
+    expect(saleBody.p.category).toBe('Football Shirts');
     expect(saleBody.p.player_name).toBeDefined();
   });
 

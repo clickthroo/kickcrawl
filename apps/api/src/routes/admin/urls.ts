@@ -12,9 +12,11 @@ import { detectAndRecordTransition, getPreviousStockAndPrice } from '../../lib/s
 import { isCrawlItem, passesSellerFilter } from '../../workers/crawlWorker.js';
 import { syncListingAndPersistOutcome } from '../../lib/kickioListingSync.js';
 import { enqueuePlayerNameBackfill } from '../../workers/playerNameBackfillWorker.js';
+import { enqueueCategoryBackfill } from '../../workers/categoryBackfillWorker.js';
 
 export interface ItemFilters {
   stock_status?: string;
+  category?: string;
   team?: string;
   season?: string;
   shirt_type?: string;
@@ -52,6 +54,7 @@ export function profileFilterConditions(f: ItemFilters, params: unknown[]): stri
     params.push(f.stock_status);
     conditions.push(`u.stock_status = $${params.length}`);
   }
+  if (f.category) conditions.push(`u.category ILIKE ${ilikeParam(f.category)}`);
   if (f.team) conditions.push(`u.team ILIKE ${ilikeParam(f.team)}`);
   if (f.season) conditions.push(`u.season ILIKE ${ilikeParam(f.season)}`);
   if (f.shirt_type) conditions.push(`u.shirt_type ILIKE ${ilikeParam(f.shirt_type)}`);
@@ -81,6 +84,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
       status?: string;
       path?: string;
       stock_status?: string;
+      category?: string;
       team?: string;
       season?: string;
       shirt_type?: string;
@@ -115,6 +119,7 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
       ...profileFilterConditions(
         {
           stock_status: query.stock_status,
+          category: query.category,
           team: query.team,
           season: query.season,
           shirt_type: query.shirt_type,
@@ -412,6 +417,18 @@ export async function adminUrlRoutes(app: FastifyInstance): Promise<void> {
   // outlast the admin UI's own request timeout on a large matching set.
   app.post('/api/admin/urls/backfill-player-names', async (_req, reply) => {
     await enqueuePlayerNameBackfill();
+    return reply.send({ success: true });
+  });
+
+  // One-off backfill for urls rows that predate migration 030's `category`
+  // column (lib/backfillCategories.ts) - every row fetched before that
+  // migration has category = null regardless of how complete its other
+  // profile columns already are, so it can't rely on the automatic
+  // startup sweep (backfillItemProfiles.ts), which only ever picks up a
+  // row where every profile column is still null. Runs as a background
+  // job, same reasoning as backfill-player-names above.
+  app.post('/api/admin/urls/backfill-categories', async (_req, reply) => {
+    await enqueueCategoryBackfill();
     return reply.send({ success: true });
   });
 }

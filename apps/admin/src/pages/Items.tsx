@@ -20,6 +20,7 @@ const EMPTY_FILTERS = {
   status: '',
   path: '',
   stockStatus: '',
+  category: '',
   team: '',
   season: '',
   shirtType: '',
@@ -44,6 +45,7 @@ export default function Items() {
   const [testListingId, setTestListingId] = useState<string | null>(null);
   const [testListingResults, setTestListingResults] = useState<Record<string, string>>({});
   const [backfilling, setBackfilling] = useState(false);
+  const [backfillingCategories, setBackfillingCategories] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pageSize = 25;
@@ -61,6 +63,7 @@ export default function Items() {
     if (filters.status) params.set('status', filters.status);
     if (filters.path) params.set('path', filters.path);
     if (filters.stockStatus) params.set('stock_status', filters.stockStatus);
+    if (filters.category) params.set('category', filters.category);
     if (filters.team) params.set('team', filters.team);
     if (filters.season) params.set('season', filters.season);
     if (filters.shirtType) params.set('shirt_type', filters.shirtType);
@@ -157,8 +160,26 @@ export default function Items() {
     }
   }
 
+  async function backfillCategories() {
+    setBackfillingCategories(true);
+    setError(null);
+    setMessage(null);
+    try {
+      // One-off backfill of the category column for every existing row
+      // that predates it (null until this runs) - runs as a background
+      // job for the same reason backfillPlayerNames above does.
+      await api.post('/admin/urls/backfill-categories');
+      setMessage('Category backfill queued - see the Jobs page for progress and the final count.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to queue category backfill');
+    } finally {
+      setBackfillingCategories(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const moreFilterCount = [
+    filters.category,
     filters.team,
     filters.season,
     filters.shirtType,
@@ -176,15 +197,26 @@ export default function Items() {
         title="Items"
         subtitle="Every scraped item across all sites"
         actions={
-          <Button
-            variant="secondary"
-            onClick={backfillPlayerNames}
-            disabled={backfilling}
-            className="flex-1 sm:flex-initial"
-            title="Re-derive team/player/number for existing items affected by the fixed bare-initial player-tag bug (e.g. &quot;#11 P. Coutinho&quot;)"
-          >
-            {backfilling ? 'Queuing…' : 'Backfill player names'}
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              onClick={backfillCategories}
+              disabled={backfillingCategories}
+              className="flex-1 sm:flex-initial"
+              title="Derive and persist the category column for existing items that predate it"
+            >
+              {backfillingCategories ? 'Queuing…' : 'Backfill categories'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={backfillPlayerNames}
+              disabled={backfilling}
+              className="flex-1 sm:flex-initial"
+              title="Re-derive team/player/number for existing items affected by the fixed bare-initial player-tag bug (e.g. &quot;#11 P. Coutinho&quot;)"
+            >
+              {backfilling ? 'Queuing…' : 'Backfill player names'}
+            </Button>
+          </>
         }
       />
 
@@ -262,6 +294,12 @@ export default function Items() {
 
         {moreOpen && (
           <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 sm:grid-cols-3 lg:grid-cols-5">
+            <Input
+              label="Category"
+              value={filters.category}
+              onChange={(e) => updateFilter('category', e.target.value)}
+              placeholder="Football Shirts…"
+            />
             <Input label="Team" value={filters.team} onChange={(e) => updateFilter('team', e.target.value)} />
             <Input
               label="Season"

@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { KickioSyncCounts, Sale, Site } from '../lib/types';
-import { Badge, Button, Card, ErrorBanner, KickioProfilePanel, PageHeader, Select, Spinner, Thumbnail } from '../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorBanner,
+  Input,
+  KickioProfilePanel,
+  PageHeader,
+  Select,
+  Spinner,
+  Thumbnail,
+} from '../components/ui';
 
 type KickioStatus = '' | 'synced' | 'held' | 'stuck' | 'dismissed';
 
@@ -64,6 +75,7 @@ export default function Sales() {
   const [counts, setCounts] = useState<KickioSyncCounts | null>(null);
   const [siteId, setSiteId] = useState('');
   const [kickioStatusFilter, setKickioStatusFilter] = useState<KickioStatus>('');
+  const [category, setCategory] = useState('');
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
@@ -104,6 +116,7 @@ export default function Sales() {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (siteId) params.set('site_id', siteId);
     if (kickioStatusFilter) params.set('kickio_status', kickioStatusFilter);
+    if (category) params.set('category', category);
     return api
       .get<{ success: boolean; sales: Sale[]; total: number; kickioCounts: KickioSyncCounts }>(
         `/admin/sales?${params.toString()}`,
@@ -114,7 +127,7 @@ export default function Sales() {
         setCounts(res.kickioCounts);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load sales'));
-  }, [siteId, kickioStatusFilter, page]);
+  }, [siteId, kickioStatusFilter, category, page]);
 
   useEffect(() => {
     loadSales();
@@ -284,6 +297,17 @@ export default function Sales() {
               <option value="stuck">Stuck{counts ? ` (${counts.stuck})` : ''}</option>
               <option value="dismissed">Dismissed{counts ? ` (${counts.dismissed})` : ''}</option>
             </Select>
+          </div>
+          <div className="sm:w-56">
+            <Input
+              label="Category"
+              value={category}
+              onChange={(e) => {
+                setCategory(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Football Shirts…"
+            />
           </div>
         </div>
         <div className="text-sm text-slate-400">{total} sale{total === 1 ? '' : 's'}</div>
