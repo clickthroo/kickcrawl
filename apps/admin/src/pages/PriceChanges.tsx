@@ -12,6 +12,7 @@ export default function PriceChanges() {
   const [priceChanges, setPriceChanges] = useState<PriceChange[] | null>(null);
   const [total, setTotal] = useState(0);
   const [siteId, setSiteId] = useState('');
+  const [sort, setSort] = useState('recent');
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const pageSize = 25;
@@ -24,7 +25,7 @@ export default function PriceChanges() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort });
     if (siteId) params.set('site_id', siteId);
     api
       .get<{ success: boolean; priceChanges: PriceChange[]; total: number }>(`/admin/price-changes?${params.toString()}`)
@@ -33,7 +34,7 @@ export default function PriceChanges() {
         setTotal(res.total);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load price changes'));
-  }, [siteId, page]);
+  }, [siteId, sort, page]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -45,22 +46,38 @@ export default function PriceChanges() {
       />
 
       <Card className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="sm:w-56">
-          <Select
-            label="Site"
-            value={siteId}
-            onChange={(e) => {
-              setSiteId(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">All sites</option>
-            {(sites ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </Select>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="sm:w-56">
+            <Select
+              label="Site"
+              value={siteId}
+              onChange={(e) => {
+                setSiteId(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All sites</option>
+              {(sites ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="sm:w-56">
+            <Select
+              label="Sort by"
+              value={sort}
+              onChange={(e) => {
+                setSort(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="recent">Most recent</option>
+              <option value="drop_pct">Biggest drops (%)</option>
+              <option value="drop_abs">Biggest drops (£)</option>
+            </Select>
+          </div>
         </div>
         <div className="text-sm text-slate-400">
           {total} price change{total === 1 ? '' : 's'}
