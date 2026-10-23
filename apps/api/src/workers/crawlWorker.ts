@@ -32,11 +32,32 @@ import { getAllSitemapUrls } from '../services/sitemap.js';
  * Which of a site's sitemap URLs are worth seeding a fresh crawl's frontier
  * with: same-site (a sitemap is the site's own, but never trust a fetched
  * document further than that), not already queued/visited, past
- * denied_paths, and - same rule the in-page link discovery already applies -
- * scoped to the seed's own catalog id when the seed itself is catalog-scoped
- * (a Vinted `catalog[]=3267` crawl shouldn't have its frontier flooded with
- * every other category's products just because they're in one shared
- * sitemap).
+ * denied_paths, scoped to the seed's own catalog id when the seed itself is
+ * catalog-scoped (a Vinted `catalog[]=3267` crawl shouldn't have its
+ * frontier flooded with every other category's products just because
+ * they're in one shared sitemap) - and, when the site has an allowed_paths
+ * item pattern configured, scoped to URLs that actually match it.
+ *
+ * That last filter is the fix for a real production case
+ * (thesoccerarchive.com, a Shopify Plus store): every reason sitemap
+ * seeding exists at all (see the pagination-gap case covered by this
+ * function's own tests) is about catching ITEM pages pure BFS would miss -
+ * a sitemap is never needed to discover a catalog/collection/blog/policy
+ * page, since the crawl's own in-page link traversal already finds and
+ * follows those unconditionally as stepping stones (see the "not
+ * matchesAllowedPaths" branch below), with none of the pagination gaps a
+ * sitemap exists to patch. Without this, a Shopify sitemap index's OTHER
+ * sitemaps (collections, pages, blog posts - everything alongside the real
+ * products one) got seeded into the frontier just the same as every real
+ * product, each one then ALSO getting its own on-page links queued as
+ * depth-1 stepping stones - on one real site this inflated a single job's
+ * frontier to ~14,000 pending pages, the overwhelming majority of them
+ * never going to be a real item, each still paying the full per-page
+ * fetch cost (rate limit, and - until a site's settings are proven safe to
+ * loosen - a full browser render) before the crawl could ever reach the
+ * products actually worth having. A site with no allowed_paths configured
+ * (includePaths empty) keeps today's exact behaviour: there's no item
+ * pattern to scope against, so every same-site sitemap URL is still kept.
  */
 export function filterSitemapSeeds(
   sitemapUrls: string[],
@@ -44,11 +65,14 @@ export function filterSitemapSeeds(
   visited: Set<string>,
   excludePaths: string[],
   seedCatalogId: string | null,
+  includePaths: string[] = [],
 ): string[] {
   const sameSite = sitemapUrls.filter((l) => isSameSite(l, origin, false));
-  return filterTraversableLinks(sameSite, visited, excludePaths).filter(
+  const candidates = filterTraversableLinks(sameSite, visited, excludePaths).filter(
     (l) => !seedCatalogId || catalogIdFromUrl(l) === null || catalogIdFromUrl(l) === seedCatalogId,
   );
+  if (includePaths.length === 0) return candidates;
+  return candidates.filter((l) => isCrawlItem(new URL(l).pathname, includePaths));
 }
 
 /**
@@ -432,7 +456,7 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     // may omit, and a site with no sitemap (getAllSitemapUrls returns
     // empty) falls back to exactly the old pure-BFS behaviour.
     const sitemapUrls = await getAllSitemapUrls(origin);
-    const candidateUrls = filterSitemapSeeds(sitemapUrls, origin, visited, excludePaths, seedCatalogId);
+    const candidateUrls = filterSitemapSeeds(sitemapUrls, origin, visited, excludePaths, seedCatalogId, includePaths);
 
     // Excludes anything already a known item, fetched recently enough that
     // re-touching it here is redundant with recheckWorker.ts's own hourly
