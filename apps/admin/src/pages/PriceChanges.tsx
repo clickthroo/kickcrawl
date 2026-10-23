@@ -1,17 +1,32 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { PriceChange, Site } from '../lib/types';
-import { Button, Card, ErrorBanner, KickioProfilePanel, PageHeader, Select, Spinner, Thumbnail } from '../components/ui';
+import {
+  Button,
+  Card,
+  ErrorBanner,
+  Input,
+  KickioProfilePanel,
+  PageHeader,
+  Select,
+  Spinner,
+  Thumbnail,
+} from '../components/ui';
 
 function formatPrice(value: number, currency: string | null): string {
   return `${currency ?? ''} ${value}`.trim();
 }
+
+const EMPTY_FILTERS = { category: '', team: '', type: '', keyword: '' };
+type Filters = typeof EMPTY_FILTERS;
 
 export default function PriceChanges() {
   const [sites, setSites] = useState<Site[] | null>(null);
   const [priceChanges, setPriceChanges] = useState<PriceChange[] | null>(null);
   const [total, setTotal] = useState(0);
   const [siteId, setSiteId] = useState('');
+  const [sort, setSort] = useState('recent');
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const pageSize = 25;
@@ -24,8 +39,12 @@ export default function PriceChanges() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort });
     if (siteId) params.set('site_id', siteId);
+    if (filters.category) params.set('category', filters.category);
+    if (filters.team) params.set('team', filters.team);
+    if (filters.type) params.set('type', filters.type);
+    if (filters.keyword) params.set('keyword', filters.keyword);
     api
       .get<{ success: boolean; priceChanges: PriceChange[]; total: number }>(`/admin/price-changes?${params.toString()}`)
       .then((res) => {
@@ -33,7 +52,12 @@ export default function PriceChanges() {
         setTotal(res.total);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load price changes'));
-  }, [siteId, page]);
+  }, [siteId, sort, filters, page]);
+
+  function updateFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
+    setFilters((f) => ({ ...f, [key]: value }));
+    setPage(1);
+  }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -44,26 +68,58 @@ export default function PriceChanges() {
         subtitle="Items whose price moved by more than £2 or 2% (whichever is larger) on a scheduled recheck"
       />
 
-      <Card className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="sm:w-56">
-          <Select
-            label="Site"
-            value={siteId}
-            onChange={(e) => {
-              setSiteId(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">All sites</option>
-            {(sites ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </Select>
+      <Card className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="sm:w-56">
+              <Select
+                label="Site"
+                value={siteId}
+                onChange={(e) => {
+                  setSiteId(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">All sites</option>
+                {(sites ?? []).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="sm:w-56">
+              <Select
+                label="Sort by"
+                value={sort}
+                onChange={(e) => {
+                  setSort(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="recent">Most recent</option>
+                <option value="drop_pct">Biggest drops (%)</option>
+                <option value="drop_abs">Biggest drops (£)</option>
+              </Select>
+            </div>
+          </div>
+          <div className="text-sm text-slate-400">
+            {total} price change{total === 1 ? '' : 's'}
+          </div>
         </div>
-        <div className="text-sm text-slate-400">
-          {total} price change{total === 1 ? '' : 's'}
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="sm:w-48">
+            <Input label="Category" value={filters.category} onChange={(e) => updateFilter('category', e.target.value)} />
+          </div>
+          <div className="sm:w-48">
+            <Input label="Team" value={filters.team} onChange={(e) => updateFilter('team', e.target.value)} />
+          </div>
+          <div className="sm:w-48">
+            <Input label="Type" value={filters.type} onChange={(e) => updateFilter('type', e.target.value)} />
+          </div>
+          <div className="flex-1">
+            <Input label="Keyword" value={filters.keyword} onChange={(e) => updateFilter('keyword', e.target.value)} />
+          </div>
         </div>
       </Card>
 

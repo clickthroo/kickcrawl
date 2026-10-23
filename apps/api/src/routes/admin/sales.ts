@@ -26,7 +26,13 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
 
   app.get('/api/admin/sales', async (req, reply) => {
-    const query = req.query as { site_id?: string; kickio_status?: string; page?: string; pageSize?: string };
+    const query = req.query as {
+      site_id?: string;
+      kickio_status?: string;
+      category?: string;
+      page?: string;
+      pageSize?: string;
+    };
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(Math.max(1, Number(query.pageSize) || 25), 200);
     const offset = (page - 1) * pageSize;
@@ -36,6 +42,14 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
     if (query.site_id) {
       params.push(query.site_id);
       conditions.push(`sa.site_id = $${params.length}`);
+    }
+    // sa.profile is a JSONB snapshot (migration 008), not a flattened
+    // column the way urls.category (migration 030) is - a sale's category
+    // is only ever read back out of that snapshot, same approach already
+    // used for price_changes.profile (routes/admin/priceChanges.ts).
+    if (query.category) {
+      params.push(`%${query.category}%`);
+      conditions.push(`sa.profile->>'category' ILIKE $${params.length}`);
     }
     // Validated against the fixed lookup table above rather than
     // interpolated as-is - it's never user-facing free text, but this
@@ -47,12 +61,22 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
     if (statusSql) conditions.push(statusSql);
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Counts use only the site filter, never the status filter - so
-    // switching the status tab doesn't also change the numbers on every
-    // other tab. A single conditional-aggregation query rather than three
-    // separate ones, since they all scan the same filtered row set.
-    const countsWhere = query.site_id ? `WHERE sa.site_id = $1` : '';
-    const countsParams = query.site_id ? [query.site_id] : [];
+    // Counts use only the site and category filters, never the status
+    // filter - so switching the status tab doesn't also change the
+    // numbers on every other tab. A single conditional-aggregation query
+    // rather than three separate ones, since they all scan the same
+    // filtered row set.
+    const countsConditions: string[] = [];
+    const countsParams: unknown[] = [];
+    if (query.site_id) {
+      countsParams.push(query.site_id);
+      countsConditions.push(`sa.site_id = $${countsParams.length}`);
+    }
+    if (query.category) {
+      countsParams.push(`%${query.category}%`);
+      countsConditions.push(`sa.profile->>'category' ILIKE $${countsParams.length}`);
+    }
+    const countsWhere = countsConditions.length > 0 ? `WHERE ${countsConditions.join(' AND ')}` : '';
 
     const [{ rows }, { rows: countRows }, { rows: statusCountRows }] = await Promise.all([
       pool.query(

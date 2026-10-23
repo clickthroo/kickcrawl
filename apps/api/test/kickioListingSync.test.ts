@@ -89,6 +89,7 @@ describe('submitListingToKickio', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.p.id).toBe('url-1');
     expect(body.p.team).toBe('Manchester United'); // team_kickio_match, not a raw guess
+    expect(body.p.category).toBe('Football Shirts');
     expect(body.p.source_url).toBe('https://www.vintagefootballshirts.com/products/man-utd-2012-13-away');
     expect(body.p.price_cents).toBe(9000);
     expect(body.p.currency).toBe('GBP');

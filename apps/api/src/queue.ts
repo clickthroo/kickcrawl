@@ -66,3 +66,9 @@ export const playerNameBackfillQueue = new Queue('player_name_backfill', { conne
 // enqueues, a Worker does the work, progress on the Jobs page" shape as
 // the Kickio sync recovery sweep and the player-name backfill.
 export const scrapeResultsPruneQueue = new Queue('scrape_results_prune', { connection: redisConnection });
+
+// A single one-off, admin-triggered job (workers/categoryBackfillWorker.ts) -
+// never scheduled/repeatable, same shape as playerNameBackfillQueue above.
+// Backfills migration 030's new `category` column for every already-
+// fetched row that predates it.
+export const categoryBackfillQueue = new Queue('category_backfill', { connection: redisConnection });

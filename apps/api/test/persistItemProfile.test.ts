@@ -49,6 +49,7 @@ describe('profileToColumns', () => {
     const profile = baseProfile();
     expect(profileToColumns(profile)).toEqual({
       stock_status: 'Out of Stock',
+      category: 'Football Shirts',
       team: 'Arsenal',
       season: '2019-20',
       shirt_type: 'Away',

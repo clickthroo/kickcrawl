@@ -23,6 +23,13 @@ describe('profileFilterConditions', () => {
     expect(params).toEqual(['%Arsenal%']);
   });
 
+  it('matches category as a case-insensitive substring against the persisted column', () => {
+    const params: unknown[] = [];
+    const conditions = profileFilterConditions({ category: 'Polo' }, params);
+    expect(conditions).toEqual(['u.category ILIKE $1']);
+    expect(params).toEqual(['%Polo%']);
+  });
+
   it('maps the "number" filter to the player_number column, not a bare "number" one', () => {
     const params: unknown[] = [];
     const conditions = profileFilterConditions({ number: '10' }, params);
@@ -186,6 +193,38 @@ describe('POST /api/admin/urls/backfill-player-names', () => {
     expect(res.statusCode).toBe(200);
     expect(body).toEqual({ success: true });
     expect(enqueuePlayerNameBackfill).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+});
+
+describe('POST /api/admin/urls/backfill-categories', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('../src/db.js');
+    vi.doUnmock('../src/middleware/adminAuth.js');
+    vi.doUnmock('../src/workers/categoryBackfillWorker.js');
+  });
+
+  it('enqueues the backfill job and returns immediately, without waiting for it to finish', async () => {
+    vi.doMock('../src/db.js', () => ({ pool: { query: vi.fn() } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+    const enqueueCategoryBackfill = vi.fn(async () => undefined);
+    vi.doMock('../src/workers/categoryBackfillWorker.js', () => ({ enqueueCategoryBackfill }));
+
+    const { adminUrlRoutes } = await import('../src/routes/admin/urls.js');
+    const app = Fastify();
+    await app.register(adminUrlRoutes);
+
+    const res = await app.inject({ method: 'POST', url: '/api/admin/urls/backfill-categories' });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body).toEqual({ success: true });
+    expect(enqueueCategoryBackfill).toHaveBeenCalledTimes(1);
     await app.close();
   });
 });

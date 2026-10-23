@@ -97,6 +97,7 @@ export default function Jobs() {
             <option value="kickio_listing_sync">Kickio listing sync</option>
             <option value="player_name_backfill">Player name backfill</option>
             <option value="scrape_results_prune">Scrape history prune</option>
+            <option value="category_backfill">Category backfill</option>
           </Select>
         </div>
         <div className="sm:w-44">

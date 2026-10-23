@@ -84,6 +84,7 @@ interface ImportSaleResult {
 
 interface KickioIdentityFields {
   team: string;
+  category: string;
   season: string | null;
   shirt_type: string | null;
   gender: string;
@@ -112,6 +113,14 @@ function deriveIdentity(profile: KickioProfile): KickioIdentityFields | { hold: 
 
   return {
     team,
+    // Kickio's own category for this listing (Football Shirts, Polo
+    // Shirts & T-shirts, Jackets/Coats, ...) - services/kickioProfile.ts's
+    // KickioProfile.category, already one of Kickio's own live category
+    // names (LIVE_CATEGORIES), never a raw guess the way identity.team is
+    // before it's matched. Piggybacks on the same team-match hold as
+    // every other identity field above: never sent until there's a
+    // confident team to send alongside it.
+    category: profile.category,
     season: profile.identity.season,
     shirt_type: profile.identity.shirt_type,
     gender: profile.identity.gender,
