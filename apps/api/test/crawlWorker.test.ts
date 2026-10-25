@@ -118,6 +118,54 @@ describe('filterSitemapSeeds', () => {
     );
     expect(result).toEqual(['https://www.vinted.co.uk/catalog/3267-team-shirts?catalog[]=3267']);
   });
+
+  it('keeps every same-site sitemap URL when the site has no allowed_paths item pattern configured, same as before this parameter existed', () => {
+    const urls = [
+      'https://cultkits.com/products/a-shirt',
+      'https://cultkits.com/collections/mens-shirts',
+      'https://cultkits.com/blogs/news/some-post',
+    ];
+    const result = filterSitemapSeeds(urls, origin, new Set(), [], null, []);
+    expect(result).toEqual(urls);
+  });
+
+  it('this is the actual production fix: a Shopify sitemap index\'s collection/page/blog sitemaps no longer flood the frontier - only URLs matching allowed_paths are seeded', () => {
+    // Confirmed as the real prior behaviour: thesoccerarchive.com (a
+    // Shopify Plus store, allowed_paths = ['/products/*']) had every one
+    // of its sitemap's non-product entries (collections, pages, blog
+    // posts) seeded into the frontier just the same as real products,
+    // inflating one job's pending count to ~14,000 pages - a sitemap was
+    // never needed to discover those pages at all, since the crawl's own
+    // in-page link traversal already follows them unconditionally as
+    // stepping stones, with none of the pagination gaps a sitemap exists
+    // to patch for actual item pages.
+    const urls = [
+      'https://thesoccerarchive.com/products/arsenal-2010-11-home-shirt',
+      'https://thesoccerarchive.com/collections/all',
+      'https://thesoccerarchive.com/collections/heroes',
+      'https://thesoccerarchive.com/pages/about-us',
+      'https://thesoccerarchive.com/blogs/news/world-cup-shirts',
+    ];
+    const result = filterSitemapSeeds(urls, 'https://thesoccerarchive.com', new Set(), [], null, ['/products/*']);
+    expect(result).toEqual(['https://thesoccerarchive.com/products/arsenal-2010-11-home-shirt']);
+  });
+
+  it('still applies denied_paths and already-visited filtering before the allowed_paths scoping, not instead of it', () => {
+    const visited = new Set(['https://cultkits.com/products/already-seen']);
+    const result = filterSitemapSeeds(
+      [
+        'https://cultkits.com/products/already-seen',
+        'https://cultkits.com/products/new-shirt',
+        'https://cultkits.com/collections/mens-shirts',
+      ],
+      origin,
+      visited,
+      [],
+      null,
+      ['/products/*'],
+    );
+    expect(result).toEqual(['https://cultkits.com/products/new-shirt']);
+  });
 });
 
 describe('excludeFreshlyKnownUrls', () => {

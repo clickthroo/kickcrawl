@@ -13,6 +13,37 @@ import { startPlayerNameBackfillWorker } from './workers/playerNameBackfillWorke
 import { scheduleScrapeResultsPrune, startScrapeResultsPruneWorker } from './workers/scrapeResultsPruneWorker.js';
 import { startCategoryBackfillWorker } from './workers/categoryBackfillWorker.js';
 
+// Last-resort safety net, installed before anything else runs. Confirmed
+// in production as the second of two distinct crash classes behind a
+// real outage (the first, an idle Postgres client's unhandled 'error'
+// event, is fixed at its real source in db.ts): a Playwright/Chromium
+// internal CDP event handler (FrameSession.dispose, reached from
+// CRBrowser's own _onDetachedFromTarget when a browser/context is torn
+// down mid-operation) threw from deep inside playwright-core's own event
+// dispatch - entirely outside any promise chain this app's own code
+// awaits, so no try/catch anywhere in fetcher.ts/browser.ts could ever
+// have caught it, and Node treated it as an uncaught exception and
+// killed the whole process: every in-flight request, every worker, not
+// just the one crawl. This app already treats a Playwright/Chromium
+// crash as a routine, recoverable event everywhere else (see
+// BROWSER_FATAL_PATTERN's whole recycling/backoff design in
+// services/browser.ts and services/fetcher.ts) - this is the same
+// philosophy applied to the one class of crash that happens where no
+// in-process catch is structurally possible. Deliberately scoped to
+// logging and continuing, not exiting: Node's own docs caution that
+// resuming after an uncaughtException is generally unsafe because the
+// process's state may be corrupted, but the one confirmed real-world
+// case behind this was a single Playwright page's internal teardown with
+// no relation whatsoever to Fastify's request handling, the DB pool, or
+// any other worker's state - crashing the entire app over it is a far
+// worse outcome than logging it and carrying on.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal-safety-net] uncaughtException (process kept alive):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal-safety-net] unhandledRejection (process kept alive):', reason);
+});
+
 async function bootstrapAdminUser(): Promise<void> {
   if (!config.adminEmail || !config.adminPasswordHash) return;
   const { rows } = await pool.query('SELECT id FROM admin_users LIMIT 1');
