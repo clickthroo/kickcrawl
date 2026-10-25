@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
-import type { KickioSyncCounts, Sale, Site } from '../lib/types';
+import type { KickioSyncCounts, ProductMatchCounts, Sale, Site } from '../lib/types';
 import {
   Badge,
   Button,
@@ -15,6 +15,7 @@ import {
 } from '../components/ui';
 
 type KickioStatus = '' | 'synced' | 'held' | 'stuck' | 'dismissed';
+type ProductMatch = '' | 'matched' | 'new';
 
 const KICKIO_TEAMS_DATALIST_ID = 'kickio-teams-datalist';
 
@@ -73,8 +74,10 @@ export default function Sales() {
   const [sales, setSales] = useState<Sale[] | null>(null);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState<KickioSyncCounts | null>(null);
+  const [productMatchCounts, setProductMatchCounts] = useState<ProductMatchCounts | null>(null);
   const [siteId, setSiteId] = useState('');
   const [kickioStatusFilter, setKickioStatusFilter] = useState<KickioStatus>('');
+  const [productMatchFilter, setProductMatchFilter] = useState<ProductMatch>('');
   const [category, setCategory] = useState('');
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -116,18 +119,24 @@ export default function Sales() {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (siteId) params.set('site_id', siteId);
     if (kickioStatusFilter) params.set('kickio_status', kickioStatusFilter);
+    if (productMatchFilter) params.set('product_match', productMatchFilter);
     if (category) params.set('category', category);
     return api
-      .get<{ success: boolean; sales: Sale[]; total: number; kickioCounts: KickioSyncCounts }>(
-        `/admin/sales?${params.toString()}`,
-      )
+      .get<{
+        success: boolean;
+        sales: Sale[];
+        total: number;
+        kickioCounts: KickioSyncCounts;
+        productMatchCounts: ProductMatchCounts;
+      }>(`/admin/sales?${params.toString()}`)
       .then((res) => {
         setSales(res.sales);
         setTotal(res.total);
         setCounts(res.kickioCounts);
+        setProductMatchCounts(res.productMatchCounts);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load sales'));
-  }, [siteId, kickioStatusFilter, category, page]);
+  }, [siteId, kickioStatusFilter, productMatchFilter, category, page]);
 
   useEffect(() => {
     loadSales();
@@ -299,6 +308,24 @@ export default function Sales() {
             </Select>
           </div>
           <div className="sm:w-56">
+            <Select
+              label="Product match"
+              value={productMatchFilter}
+              onChange={(e) => {
+                setProductMatchFilter(e.target.value as ProductMatch);
+                setPage(1);
+              }}
+            >
+              <option value="">All</option>
+              <option value="matched">
+                Matched existing{productMatchCounts ? ` (${productMatchCounts.matched})` : ''}
+              </option>
+              <option value="new">
+                Created new{productMatchCounts ? ` (${productMatchCounts.new})` : ''}
+              </option>
+            </Select>
+          </div>
+          <div className="sm:w-56">
             <Input
               label="Category"
               value={category}
@@ -451,6 +478,18 @@ export default function Sales() {
                   <div className="min-w-0">
                     <span className="font-medium text-slate-700">Synced to Kickio</span>
                     <span className="text-slate-400"> (since {new Date(s.kickio_synced_at).toLocaleString()})</span>
+                    {s.kickio_product_matched_by && (
+                      <span
+                        className="ml-1.5 rounded-full bg-slate-200 px-2 py-0.5 text-slate-600"
+                        title={
+                          s.kickio_product_matched_by === 'new'
+                            ? 'This push created a brand new product on Kickio'
+                            : `Matched an existing Kickio product (matched_by: ${s.kickio_product_matched_by})`
+                        }
+                      >
+                        {s.kickio_product_matched_by === 'new' ? 'New product' : 'Matched existing product'}
+                      </span>
+                    )}
                     {resyncMessages[s.id] && <div className="mt-0.5 text-slate-500">{resyncMessages[s.id]}</div>}
                   </div>
                   <Button

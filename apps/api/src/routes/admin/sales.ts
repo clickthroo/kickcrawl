@@ -22,6 +22,19 @@ const KICKIO_STATUS_SQL: Record<'synced' | 'dismissed' | 'held' | 'stuck', strin
   stuck: `sa.kickio_synced_at IS NULL AND sa.kickio_sync_dismissed_at IS NULL AND sa.kickio_sync_attempts >= ${MAX_SYNC_ATTEMPTS}`,
 };
 
+// Whether a synced sale's own product push (import_kickio_product, lib/
+// kickioSync.ts) matched an EXISTING product on Kickio's side - appended
+// this sale to it - or created a brand new one. 'new' is Kickio's own
+// sentinel for "created"; any other value (unenumerated here - this app
+// only ever needs the new/not-new distinction) means matched. NULL for
+// any sale synced before migration 033 added these columns, or never
+// synced at all - neither counts as either bucket, same as `held`/`stuck`
+// not counting toward `synced` above.
+const PRODUCT_MATCH_SQL: Record<'matched' | 'new', string> = {
+  matched: `sa.kickio_product_matched_by IS NOT NULL AND sa.kickio_product_matched_by <> 'new'`,
+  new: `sa.kickio_product_matched_by = 'new'`,
+};
+
 export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdminSession);
 
@@ -30,6 +43,7 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
       site_id?: string;
       kickio_status?: string;
       category?: string;
+      product_match?: string;
       page?: string;
       pageSize?: string;
     };
@@ -59,6 +73,11 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
         ? KICKIO_STATUS_SQL[query.kickio_status as keyof typeof KICKIO_STATUS_SQL]
         : null;
     if (statusSql) conditions.push(statusSql);
+    const matchSql =
+      query.product_match && query.product_match in PRODUCT_MATCH_SQL
+        ? PRODUCT_MATCH_SQL[query.product_match as keyof typeof PRODUCT_MATCH_SQL]
+        : null;
+    if (matchSql) conditions.push(matchSql);
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // Counts use only the site and category filters, never the status
@@ -101,6 +120,8 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
            count(*) FILTER (WHERE ${KICKIO_STATUS_SQL.held}) AS held,
            count(*) FILTER (WHERE ${KICKIO_STATUS_SQL.stuck}) AS stuck,
            count(*) FILTER (WHERE ${KICKIO_STATUS_SQL.dismissed}) AS dismissed,
+           count(*) FILTER (WHERE ${PRODUCT_MATCH_SQL.matched}) AS matched,
+           count(*) FILTER (WHERE ${PRODUCT_MATCH_SQL.new}) AS new_product,
            count(*) AS total
          FROM sales sa ${countsWhere}`,
         countsParams,
@@ -120,6 +141,10 @@ export async function adminSalesRoutes(app: FastifyInstance): Promise<void> {
         stuck: Number(counts.stuck),
         dismissed: Number(counts.dismissed),
         total: Number(counts.total),
+      },
+      productMatchCounts: {
+        matched: Number(counts.matched),
+        new: Number(counts.new_product),
       },
     });
   });
