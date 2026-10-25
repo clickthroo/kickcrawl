@@ -1,0 +1,13 @@
+-- Raises thesoccerarchive.com's rate limit from the cautious 1 req/s it
+-- was onboarded with (031_add_thesoccerarchive_site.sql) to the sitewide-
+-- proven default of 2 (015_raise_default_rate_limit.sql), already safe on
+-- every other Shopify site this app crawls. A real crawl run against the
+-- old limit has gone well past 150 pages with 0 errors - no sign this
+-- site is more block-sensitive than that. Only the rate limit is touched
+-- here, not use_browser_default - whether this site's item pages render
+-- fine over plain HTTP (the bigger speed lever, since it would also take
+-- this site out of the app-wide shared 2-slot browser-fetch bottleneck)
+-- still hasn't been confirmed via a live view-source check the way
+-- Football Finery's was (027_footballfinery_proven_settings.sql), so
+-- that stays as-is until it is.
+UPDATE sites SET rate_limit_rps = 2 WHERE base_url = 'https://thesoccerarchive.com';

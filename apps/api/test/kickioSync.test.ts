@@ -131,6 +131,8 @@ describe('syncSaleToKickio', () => {
       productId: 'product-123',
       saleId: 'kickio-sale-456',
       action: 'insert',
+      productMatchedBy: 'new',
+      productAction: 'insert',
     });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
 
@@ -163,6 +165,19 @@ describe('syncSaleToKickio', () => {
     expect(saleBody.p.team).toBe('Manchester United');
     expect(saleBody.p.category).toBe('Football Shirts');
     expect(saleBody.p.player_name).toBeDefined();
+  });
+
+  it('reports when the product push matched an existing Kickio product rather than creating a new one', async () => {
+    const { syncSaleToKickio } = await loadModule();
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ product_id: 'product-123', matched_by: 'external_ref', action: 'merge' }))
+      .mockResolvedValueOnce(jsonResponse({ action: 'insert', product_id: 'product-123', sale_id: 'kickio-sale-456' }));
+
+    const outcome = await syncSaleToKickio(saleWithProfile());
+
+    expect(outcome.success).toBe(true);
+    expect(outcome.productMatchedBy).toBe('external_ref');
+    expect(outcome.productAction).toBe('merge');
   });
 
   it('surfaces a Kickio RPC error rather than swallowing it', async () => {
@@ -202,7 +217,7 @@ describe('syncAndPersistOutcome', () => {
     expect(outcome.success).toBe(true);
     const update = query.mock.calls.find(([sql]) => String(sql).includes('kickio_synced_at = now()'));
     expect(update).toBeDefined();
-    expect(update![1]).toEqual(['sale-1', 'product-1', 'sale-1', 'insert']);
+    expect(update![1]).toEqual(['sale-1', 'product-1', 'sale-1', 'insert', 'new', 'insert']);
   });
 
   it('bumps attempts and records the reason on a deliberate hold, without touching kickio_synced_at', async () => {

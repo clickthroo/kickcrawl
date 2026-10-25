@@ -36,6 +36,17 @@ export interface KickioSyncOutcome {
   productId?: string;
   saleId?: string;
   action?: string;
+  /**
+   * Kickio's own import_kickio_product response - whether this push
+   * matched an EXISTING product on Kickio's side (appended this sale to
+   * it) or created a brand new one. 'new' means created; anything else
+   * names how it matched (Kickio's own vocabulary - not enumerated here,
+   * since this app only ever needs to distinguish "new" from "not new").
+   * Distinct from `action` above, which is import_kickio_sale's own
+   * outcome, not the product's.
+   */
+  productMatchedBy?: string;
+  productAction?: string;
 }
 
 const KICKIO_RPC_TIMEOUT_MS = 15_000;
@@ -244,6 +255,8 @@ export async function syncSaleToKickio(sale: SaleForSync): Promise<KickioSyncOut
     productId: productResult.product_id,
     saleId: saleResult.sale_id,
     action: saleResult.action,
+    productMatchedBy: productResult.matched_by,
+    productAction: productResult.action,
   };
 }
 
@@ -263,8 +276,16 @@ export async function syncAndPersistOutcome(sale: SaleForSync): Promise<KickioSy
     if (outcome.success) {
       await pool.query(
         `UPDATE sales SET kickio_synced_at = now(), kickio_product_id = $2, kickio_sale_id = $3,
-           kickio_sync_action = $4, kickio_sync_error = NULL WHERE id = $1`,
-        [sale.id, outcome.productId ?? null, outcome.saleId ?? null, outcome.action ?? null],
+           kickio_sync_action = $4, kickio_sync_error = NULL,
+           kickio_product_matched_by = $5, kickio_product_action = $6 WHERE id = $1`,
+        [
+          sale.id,
+          outcome.productId ?? null,
+          outcome.saleId ?? null,
+          outcome.action ?? null,
+          outcome.productMatchedBy ?? null,
+          outcome.productAction ?? null,
+        ],
       );
     } else {
       await pool.query(

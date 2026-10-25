@@ -16,7 +16,7 @@ describe('GET /api/admin/sales', () => {
   it('includes each sale\'s computed kickio_status and a sync-status breakdown', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('count(*) FILTER')) {
-        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', total: '7' }] };
+        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', matched: '2', new_product: '1', total: '7' }] };
       }
       if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '7' }] };
       return { rows: [{ id: 'sale-1', kickio_status: 'held' }] };
@@ -40,7 +40,7 @@ describe('GET /api/admin/sales', () => {
   it('filters by kickio_status without changing the counts breakdown', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('count(*) FILTER')) {
-        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', total: '7' }] };
+        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', matched: '2', new_product: '1', total: '7' }] };
       }
       if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '1' }] };
       return { rows: [] };
@@ -68,7 +68,7 @@ describe('GET /api/admin/sales', () => {
   it('filters by dismissed status, distinct from stuck/held', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('count(*) FILTER')) {
-        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', total: '7' }] };
+        return { rows: [{ synced: '3', held: '2', stuck: '1', dismissed: '1', matched: '2', new_product: '1', total: '7' }] };
       }
       if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '1' }] };
       return { rows: [{ id: 'sale-2', kickio_status: 'dismissed' }] };
@@ -93,7 +93,7 @@ describe('GET /api/admin/sales', () => {
   it('rejects an invalid kickio_status rather than building bad SQL from it', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('count(*) FILTER')) {
-        return { rows: [{ synced: '0', held: '0', stuck: '0', dismissed: '0', total: '0' }] };
+        return { rows: [{ synced: '0', held: '0', stuck: '0', dismissed: '0', matched: '0', new_product: '0', total: '0' }] };
       }
       if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '0' }] };
       return { rows: [] };
@@ -115,7 +115,7 @@ describe('GET /api/admin/sales', () => {
   it('filters by category against the JSONB profile snapshot, and applies the same filter to the counts breakdown', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('count(*) FILTER')) {
-        return { rows: [{ synced: '1', held: '0', stuck: '0', dismissed: '0', total: '1' }] };
+        return { rows: [{ synced: '1', held: '0', stuck: '0', dismissed: '0', matched: '1', new_product: '0', total: '1' }] };
       }
       if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '1' }] };
       return { rows: [{ id: 'sale-1', kickio_status: 'synced' }] };
@@ -140,6 +140,79 @@ describe('GET /api/admin/sales', () => {
     const countsCall = query.mock.calls.find(([sql]) => (sql as string).includes('count(*) FILTER'));
     expect(countsCall?.[0]).toContain(`sa.profile->>'category' ILIKE $1`);
     expect(countsCall?.[1]).toEqual(['%Polo Shirts%']);
+    await app.close();
+  });
+
+  it('reports the matched/new product-match breakdown, independent of which product_match tab is selected', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('count(*) FILTER')) {
+        return { rows: [{ synced: '10', held: '0', stuck: '0', dismissed: '0', matched: '7', new_product: '3', total: '10' }] };
+      }
+      if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '7' }] };
+      return { rows: [{ id: 'sale-1', kickio_status: 'synced' }] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'GET', url: '/api/admin/sales?product_match=matched' });
+    const body = JSON.parse(res.body);
+
+    expect(res.statusCode).toBe(200);
+    expect(body.productMatchCounts).toEqual({ matched: 7, new: 3 });
+
+    const listCall = query.mock.calls.find(([sql]) => (sql as string).includes('FROM sales sa\n'));
+    expect(listCall?.[0]).toContain(
+      `sa.kickio_product_matched_by IS NOT NULL AND sa.kickio_product_matched_by <> 'new'`,
+    );
+    await app.close();
+  });
+
+  it('filters by product_match=new to find sales whose push created a brand new Kickio product', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('count(*) FILTER')) {
+        return { rows: [{ synced: '10', held: '0', stuck: '0', dismissed: '0', matched: '7', new_product: '3', total: '10' }] };
+      }
+      if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '3' }] };
+      return { rows: [{ id: 'sale-2', kickio_status: 'synced' }] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    const res = await app.inject({ method: 'GET', url: '/api/admin/sales?product_match=new' });
+
+    expect(res.statusCode).toBe(200);
+    const listCall = query.mock.calls.find(([sql]) => (sql as string).includes('FROM sales sa\n'));
+    expect(listCall?.[0]).toContain(`sa.kickio_product_matched_by = 'new'`);
+    await app.close();
+  });
+
+  it('rejects an invalid product_match value rather than building bad SQL from it', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('count(*) FILTER')) {
+        return { rows: [{ synced: '0', held: '0', stuck: '0', dismissed: '0', matched: '0', new_product: '0', total: '0' }] };
+      }
+      if (sql.includes('count(*) FROM sales')) return { rows: [{ count: '0' }] };
+      return { rows: [] };
+    });
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    vi.doMock('../src/middleware/adminAuth.js', () => ({ requireAdminSession: async () => undefined }));
+
+    const { adminSalesRoutes } = await import('../src/routes/admin/sales.js');
+    const app = Fastify();
+    await app.register(adminSalesRoutes);
+
+    await app.inject({ method: 'GET', url: "/api/admin/sales?product_match='; DROP TABLE sales; --" });
+
+    const listCall = query.mock.calls.find(([sql]) => (sql as string).includes('FROM sales sa\n'));
+    expect(listCall?.[0]).not.toContain('DROP TABLE');
     await app.close();
   });
 });

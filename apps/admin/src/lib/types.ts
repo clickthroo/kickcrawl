@@ -147,6 +147,14 @@ export interface Sale {
   kickio_sync_dismissed_at: string | null;
   /** Computed server-side (routes/admin/sales.ts) from the four columns above, so the UI never duplicates the MAX_SYNC_ATTEMPTS threshold. */
   kickio_status: 'synced' | 'held' | 'stuck' | 'dismissed';
+  /**
+   * Kickio's own import_kickio_product response for this sale's push -
+   * whether it matched an existing product on Kickio's side (appended to
+   * it) or created a brand new one ('new'). Null for a sale synced before
+   * migration 033 added these columns, or not yet synced at all.
+   */
+  kickio_product_matched_by: string | null;
+  kickio_product_action: string | null;
 }
 
 export interface KickioSyncCounts {
@@ -155,6 +163,11 @@ export interface KickioSyncCounts {
   stuck: number;
   dismissed: number;
   total: number;
+}
+
+export interface ProductMatchCounts {
+  matched: number;
+  new: number;
 }
 
 export interface PriceChange {
