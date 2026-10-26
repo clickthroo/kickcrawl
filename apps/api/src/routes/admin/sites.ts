@@ -173,7 +173,11 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
       // real site (footballfinery.co.uk) whose sitemap alone exceeds the
       // old 5000 limit here, silently truncating discovery well short of
       // its real catalog.
-      const urls = await runMap(site.base_url, site.id, { limit: MAX_CRAWL_PAGES });
+      const urls = await runMap(site.base_url, site.id, {
+        limit: MAX_CRAWL_PAGES,
+        includePaths: site.allowed_paths ?? [],
+        excludePaths: site.denied_paths ?? [],
+      });
       return reply.send({ success: true, total: urls.length });
     } catch (err) {
       return reply

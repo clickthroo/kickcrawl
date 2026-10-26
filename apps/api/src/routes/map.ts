@@ -19,7 +19,13 @@ export async function mapRoutes(app: FastifyInstance): Promise<void> {
     const { url, search, limit, includeSubdomains } = parsed.data;
 
     const site = await getOrCreateSiteForUrl(url);
-    const urls = await runMap(url, site.id, { search, limit, includeSubdomains });
+    const urls = await runMap(url, site.id, {
+      search,
+      limit,
+      includeSubdomains,
+      includePaths: site.allowed_paths,
+      excludePaths: site.denied_paths,
+    });
 
     return reply.send({ success: true, links: urls, total: urls.length });
   });
