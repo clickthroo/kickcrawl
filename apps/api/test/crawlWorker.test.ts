@@ -607,3 +607,52 @@ describe('recordItemProfile', () => {
     expect(params[4]).toBe(75); // new_price
   });
 });
+
+describe('insertFrontierBatch', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    vi.doUnmock('../src/db.js');
+  });
+
+  // This is the actual production fix: seeding a crawl's frontier from a
+  // large sitemap (Vintage Football Shirts' is ~15,000 urls) in a single
+  // INSERT with every url bound as its own parameter failed every single
+  // night with Postgres's own "bind message has 30453 parameters" protocol
+  // error (0 pages, 1 error, crawl never even starts) - well under
+  // Postgres's documented 65,535-parameter ceiling, but still enough to
+  // break node-postgres's own Bind-message encoding. Splitting into fixed-
+  // size batches keeps every single INSERT's parameter count small
+  // regardless of how many urls are being seeded.
+  it('splits a large url list into multiple bounded INSERTs instead of one unbounded one', async () => {
+    const query = vi.fn(async (_sql: string, params: unknown[]) => ({ rowCount: (params.length - 1) / 2 }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    const { insertFrontierBatch, FRONTIER_INSERT_CHUNK_SIZE: chunkSize } = await import('../src/workers/crawlWorker.js');
+
+    const urls = Array.from({ length: chunkSize * 2 + 10 }, (_, i) => `https://example.com/products/item-${i}`);
+    const total = await insertFrontierBatch('job-1', urls, 0);
+
+    expect(query).toHaveBeenCalledTimes(3);
+    for (const [, params] of query.mock.calls) {
+      // jobId + 2 params (url, depth) per row in that chunk - never anywhere
+      // near the tens-of-thousands range that broke production.
+      expect((params as unknown[]).length).toBeLessThanOrEqual(1 + chunkSize * 2);
+    }
+    expect(total).toBe(urls.length);
+  });
+
+  it('issues no query at all for an empty url list', async () => {
+    const query = vi.fn(async () => ({ rowCount: 0 }));
+    vi.doMock('../src/db.js', () => ({ pool: { query } }));
+    const { insertFrontierBatch } = await import('../src/workers/crawlWorker.js');
+
+    const total = await insertFrontierBatch('job-1', [], 0);
+
+    expect(query).not.toHaveBeenCalled();
+    expect(total).toBe(0);
+  });
+});

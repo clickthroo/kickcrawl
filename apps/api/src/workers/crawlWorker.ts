@@ -171,6 +171,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// A single INSERT with every link's (jobId, url, depth) bound as its own
+// $N parameter scales its parameter count with the link list - confirmed in
+// production as the actual cause of a crawl failing instantly (0 pages, 1
+// error, "bind message has 30453 parameters") every single night on
+// Vintage Football Shirts: its sitemap alone seeds ~15,000 urls, and node-
+// postgres's own Bind-message encoding breaks well under Postgres's
+// documented 65,535-parameter ceiling once a query's parameter count gets
+// into the tens of thousands. Chunking into fixed-size batches keeps every
+// single INSERT's parameter count small regardless of how many links are
+// being seeded, so a large catalog can never reproduce this again.
+export const FRONTIER_INSERT_CHUNK_SIZE = 500;
+
+export async function insertFrontierBatch(jobId: string, urls: string[], depth: number): Promise<number> {
+  let totalInserted = 0;
+  for (let i = 0; i < urls.length; i += FRONTIER_INSERT_CHUNK_SIZE) {
+    const chunk = urls.slice(i, i + FRONTIER_INSERT_CHUNK_SIZE);
+    const values: string[] = [];
+    const params: unknown[] = [jobId];
+    for (const link of chunk) {
+      params.push(link, depth);
+      values.push(`($1, $${params.length - 1}, $${params.length}, 'pending')`);
+    }
+    const inserted = await pool.query(
+      `INSERT INTO crawl_frontier (job_id, url, depth, status) VALUES ${values.join(', ')} ON CONFLICT (job_id, url) DO NOTHING`,
+      params,
+    );
+    totalInserted += inserted.rowCount ?? 0;
+  }
+  return totalInserted;
+}
+
 async function getJobStatus(jobId: string): Promise<string | undefined> {
   const { rows } = await pool.query<{ status: string }>('SELECT status FROM jobs WHERE id = $1', [jobId]);
   return rows[0]?.status;
@@ -481,19 +512,10 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
 
     if (newSitemapUrls.length > 0) {
       for (const link of newSitemapUrls) visited.add(link);
-      const values: string[] = [];
-      const params: unknown[] = [jobId];
-      for (const link of newSitemapUrls) {
-        params.push(link, 0);
-        values.push(`($1, $${params.length - 1}, $${params.length}, 'pending')`);
-      }
-      const inserted = await pool.query(
-        `INSERT INTO crawl_frontier (job_id, url, depth, status) VALUES ${values.join(', ')} ON CONFLICT (job_id, url) DO NOTHING`,
-        params,
-      );
-      pendingCount += inserted.rowCount ?? 0;
+      const insertedCount = await insertFrontierBatch(jobId, newSitemapUrls, 0);
+      pendingCount += insertedCount;
       console.log(
-        `[crawlWorker] job ${jobId} seeded ${inserted.rowCount ?? 0} url(s) from ${origin}'s sitemap ` +
+        `[crawlWorker] job ${jobId} seeded ${insertedCount} url(s) from ${origin}'s sitemap ` +
           `(${sitemapUrls.length} found, ${candidateUrls.length} after filtering, ${freshRows.length} already known & skipped)`,
       );
     } else {
@@ -717,23 +739,13 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
         await upsertDiscoveredUrls(siteId, itemLinks);
         if (newLinks.length > 0) {
           for (const link of newLinks) visited.add(link);
-          const values: string[] = [];
-          const params: unknown[] = [jobId];
-          for (const link of newLinks) {
-            params.push(link, next.depth + 1);
-            values.push(`($1, $${params.length - 1}, $${params.length}, 'pending')`);
-          }
           // ON CONFLICT DO NOTHING is what makes re-discovering the same
           // URL from a different page a safe no-op - the same guarantee
           // the old in-memory visited Set gave the queue.push() this
           // replaces, now also holding across a resumed job whose
           // in-memory `visited` above was only just repopulated from the
           // table, not accumulated fresh over this run's own traversal.
-          const inserted = await pool.query(
-            `INSERT INTO crawl_frontier (job_id, url, depth, status) VALUES ${values.join(', ')} ON CONFLICT (job_id, url) DO NOTHING`,
-            params,
-          );
-          pendingCount += inserted.rowCount ?? 0;
+          pendingCount += await insertFrontierBatch(jobId, newLinks, next.depth + 1);
         }
       }
     }
