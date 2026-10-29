@@ -22,7 +22,12 @@ export const config = {
   databaseUrl: env('DATABASE_URL', 'postgresql://kickcrawl:kickcrawl@localhost:5432/kickcrawl'),
   redisUrl: env('REDIS_URL', 'redis://localhost:6379'),
   port: Number(process.env.PORT ?? 3000),
-  appUrl: env('APP_URL', 'http://localhost:3000'),
+  // Used to build the password-reset link (routes/admin/auth.ts) printed to
+  // the deploy logs - falls back to Railway's own auto-injected public
+  // domain (set on every service with a public domain, see
+  // RAILWAY_PUBLIC_DOMAIN) rather than the dev-only localhost default,
+  // since production never sets APP_URL explicitly today.
+  appUrl: env('APP_URL', process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 'http://localhost:3000'),
   openaiApiKey: process.env.OPENAI_API_KEY ?? '',
   openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
   openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',

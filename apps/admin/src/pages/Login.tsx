@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { ApiError } from '../lib/api';
 import { Button, ErrorBanner, Input } from '../components/ui';
@@ -66,7 +66,7 @@ export default function Login() {
             required
           />
         </div>
-        <div className="mb-4">
+        <div className="mb-2">
           <Input
             label="Password"
             type="password"
@@ -74,6 +74,11 @@ export default function Login() {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
+        </div>
+        <div className="mb-4 text-right">
+          <Link to="/forgot-password" className="text-sm text-brand-600 hover:underline">
+            Forgot password?
+          </Link>
         </div>
         <Button type="submit" disabled={submitting} className="w-full">
           {submitting ? 'Signing in…' : 'Sign in'}
