@@ -199,7 +199,7 @@ export async function fetchWithBrowser(
       // path. This used to live in crawlWorker.ts, checked AFTER
       // scrapePage() had already returned - by then withBrowserSlot's slot
       // below had already been released, so a different concurrently
-      // running job (concurrency: 3) could already be mid-fetch on a brand
+      // running job (concurrency: 2) could already be mid-fetch on a brand
       // new browser instance by the time that stale check ran, and its
       // closeBrowser() call would tear that job's healthy browser out from
       // under it. That victim's own fetch would then fail with the exact

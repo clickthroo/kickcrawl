@@ -77,7 +77,7 @@ export async function closeBrowser(): Promise<void> {
 /**
  * Caps how many browser-driven page loads run at once, across every caller
  * that shares this process's single memoized Chromium instance - the
- * crawl worker (concurrency: 3), the recheck worker, and manual scrape/
+ * crawl worker (concurrency: 2), the recheck worker, and manual scrape/
  * extract requests can all be mid-fetch simultaneously, and each one holds
  * a full rendered page (page.content()) plus whatever a JS-heavy site's own
  * bundle allocates. Verified in production: running Vinted's catalog page
@@ -91,15 +91,19 @@ export async function closeBrowser(): Promise<void> {
  * Railway memory usage: 8GB limit, ~0.6GB peak / ~0.36GB average over the
  * prior 24h under real load (a full site crawl plus a recheck running
  * together), so 1 concurrent fetch was leaving most of that budget unused.
- * Still deliberately conservative rather than jumping straight to
- * crawlWorker's own concurrency:3 - the documented crash above happened at
- * exactly this "a couple concurrent" order of magnitude, and a catalog/
- * listing page (fetched during any crawl alongside item pages) can hold far
- * more DOM/JS than a single product page, so this needs its own real
- * production memory measurement at 2 before going any higher. A crash here
- * kills every in-flight job across the whole app, not just one page, so
- * under-provisioning is always the safer failure mode - watch
- * MEMORY_USAGE_GB on Railway after this deploys before raising it further.
+ * Still deliberately conservative rather than raising this further - the
+ * documented crash above happened at exactly this "a couple concurrent"
+ * order of magnitude, and a catalog/listing page (fetched during any crawl
+ * alongside item pages) can hold far more DOM/JS than a single product
+ * page, so this needs its own real production memory measurement before
+ * going any higher. A crash here kills every in-flight job across the
+ * whole app, not just one page, so under-provisioning is always the safer
+ * failure mode - watch MEMORY_USAGE_GB on Railway before raising it
+ * further. crawlWorker's own BullMQ concurrency was separately lowered
+ * from 3 to 2 (2026-10-29, see crawlWorker.ts) after a real production OOM
+ * traced to the PLAIN-HTTP path's job concurrency, not this browser-driven
+ * one - the two caps are independent, and this one was never implicated in
+ * that particular crash.
  */
 const MAX_CONCURRENT_BROWSER_FETCHES = 2;
 let activeBrowserFetches = 0;

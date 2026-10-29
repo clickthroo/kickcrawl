@@ -208,7 +208,7 @@ export async function adminSiteRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Queues a crawl for every active site in one call. BullMQ's crawl worker
-  // runs with concurrency 3 (see workers/crawlWorker.ts), so queuing many
+  // runs with concurrency 2 (see workers/crawlWorker.ts), so queuing many
   // sites at once is safe - they queue up and process a few at a time,
   // each still respecting its own per-site rate_limit_rps. Inactive sites
   // are skipped, matching the scoping already used for scraping elsewhere

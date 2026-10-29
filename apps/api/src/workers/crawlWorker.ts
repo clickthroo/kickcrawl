@@ -235,6 +235,22 @@ const FRONTIER_RETRY_BACKOFF_MINUTES = 2;
 // for long.
 const FRONTIER_RETRY_POLL_MS = 5_000;
 
+// See the heap-usage circuit breaker at the end of the main loop below for
+// why this exists. Picked with real margin below the ~640MB this job's own
+// heap logging actually recorded at the moment of a real production OOM
+// crash, and well above this job's own healthy baseline (confirmed in the
+// same production logs: ~70-200MB heapUsed right after a fresh restart,
+// climbing well past this threshold only once several large-frontier jobs
+// are genuinely running concurrently) - so this fires on real sustained
+// pressure across jobs, not on one job's ordinary per-page fluctuation.
+export const HEAP_BACKOFF_THRESHOLD_MB = 450;
+// Deliberately longer than a single page fetch - this needs to actually
+// give the GC (and every other concurrently running job, which hits this
+// same check on its own next iteration) a real chance to bring usage back
+// down, not just insert a token pause before immediately piling on the
+// next allocation.
+export const HEAP_BACKOFF_MS = 5_000;
+
 // How long an already-known url stays exempt from being reseeded into a
 // FRESH crawl's frontier. A crawl's real job is finding what's NEW since
 // last time - stock/price movement on an already-known item is already
@@ -357,7 +373,7 @@ async function scrapePageOnce(
   // fatal browser error used to happen here too, AFTER scrapePage() had
   // already returned. By that point services/browser.ts's own
   // withBrowserSlot had already released its single app-wide slot, so a
-  // different concurrently running job (concurrency: 3) could already be
+  // different concurrently running job (concurrency: 2) could already be
   // mid-fetch on a brand new browser instance - and this outer,
   // context-unaware closeBrowser() call would tear that healthy browser
   // out from under it, producing the exact same "browser has been closed"
@@ -760,9 +776,30 @@ async function processCrawl(job: Job<CrawlJobData>): Promise<void> {
     // released. Logging Node's own heap after every page shows the real
     // growth curve instead of guessing at another cause blind.
     const mem = process.memoryUsage();
+    const heapUsedMB = mem.heapUsed / 1_048_576;
     console.log(
-      `[crawlWorker] job ${jobId} heap after ${next.url}: heapUsed=${(mem.heapUsed / 1_048_576).toFixed(1)}MB rss=${(mem.rss / 1_048_576).toFixed(1)}MB external=${(mem.external / 1_048_576).toFixed(1)}MB`,
+      `[crawlWorker] job ${jobId} heap after ${next.url}: heapUsed=${heapUsedMB.toFixed(1)}MB rss=${(mem.rss / 1_048_576).toFixed(1)}MB external=${(mem.external / 1_048_576).toFixed(1)}MB`,
     );
+
+    // Heap-usage circuit breaker. Confirmed in production (2026-10-29): a
+    // real "FATAL ERROR: ... JavaScript heap out of memory" crash with
+    // heapUsed around 640MB, no single site misconfigured - just this job
+    // (Vintage Football Shirts, a large frontier) and another large-frontier
+    // job (The Soccer Archive) both mid-crawl at once, their combined
+    // allocations crossing V8's heap limit even though every individual
+    // site's own settings were healthy. Every concurrently running
+    // crawlWorker/recheckWorker job hits this same check on its own next
+    // iteration, so one job backing off here gives the process's shared
+    // heap (and the GC) real room to recover instead of every job piling
+    // further allocations on top of an already-high heap until V8 kills the
+    // whole process for us - the one failure mode nothing else in this file
+    // can catch or retry around.
+    if (heapUsedMB > HEAP_BACKOFF_THRESHOLD_MB) {
+      console.log(
+        `[crawlWorker] job ${jobId} heap backoff: heapUsed=${heapUsedMB.toFixed(1)}MB exceeds ${HEAP_BACKOFF_THRESHOLD_MB}MB threshold, pausing ${HEAP_BACKOFF_MS}ms`,
+      );
+      await sleep(HEAP_BACKOFF_MS);
+    }
   }
 
   const finalStatus = cancelled ? 'cancelled' : 'completed';
@@ -795,7 +832,16 @@ export function startCrawlWorker(): Worker<CrawlJobData> {
     },
     {
       connection: redisConnection,
-      concurrency: 3,
+      // Lowered from 3 to 2 (2026-10-29): confirmed in production that 3
+      // concurrent jobs landing on large-frontier sites at once (Vintage
+      // Football Shirts + The Soccer Archive) crossed V8's heap limit and
+      // crashed the process even with every individual site's settings
+      // healthy - see the heap-usage circuit breaker above for the other,
+      // complementary half of this fix. Matches
+      // services/browser.ts's own MAX_CONCURRENT_BROWSER_FETCHES=2, so the
+      // plain-HTTP path is no longer allowed to run meaningfully more
+      // concurrent big pipelines than the browser-driven path already is.
+      concurrency: 2,
       // recoverOrphanedJobs() (lib/jobRecords.ts) marks any job still
       // 'running' at boot as 'failed', on the assumption that a
       // single-instance app never has a live process to resume it. But

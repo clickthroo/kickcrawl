@@ -327,7 +327,7 @@ describe('scrapePageWithTimeout', () => {
   // error used to happen here too, checked AFTER scrapePage() had already
   // returned - by which point withBrowserSlot (services/browser.ts) had
   // already released its single app-wide slot, so a different concurrent
-  // job (concurrency: 3) could already be mid-fetch on a brand new browser
+  // job (concurrency: 2) could already be mid-fetch on a brand new browser
   // instance that this stale, context-unaware check would then tear down,
   // producing the exact same fatal-looking error and making THAT job
   // recycle too - a self-sustaining storm from one initial crash. That
@@ -421,6 +421,31 @@ describe('scrapePageWithTimeout', () => {
 
     expect(calls).toBe(2);
     expect(result).toBe(crashedResult);
+  });
+});
+
+describe('heap-usage circuit breaker constants', () => {
+  // Confirmed in production (2026-10-29): a real "JavaScript heap out of
+  // memory" crash recorded heapUsed around 640MB via this file's own heap
+  // logging, with several large-frontier jobs running concurrently. The
+  // threshold needs real margin below that crash point - low enough to
+  // actually act before V8 does - while staying comfortably above this
+  // job's own healthy single-job baseline (confirmed in the same
+  // production logs at ~70-200MB right after a fresh restart), so it
+  // doesn't throttle perfectly ordinary single-job operation.
+  it('threshold sits with real margin below the heap level that actually crashed the process', async () => {
+    const { HEAP_BACKOFF_THRESHOLD_MB } = await import('../src/workers/crawlWorker.js');
+    expect(HEAP_BACKOFF_THRESHOLD_MB).toBeLessThan(600);
+  });
+
+  it("threshold sits above this job's own healthy single-job baseline", async () => {
+    const { HEAP_BACKOFF_THRESHOLD_MB } = await import('../src/workers/crawlWorker.js');
+    expect(HEAP_BACKOFF_THRESHOLD_MB).toBeGreaterThan(250);
+  });
+
+  it('backs off long enough to give the GC (and other concurrent jobs) a real chance to recover, not just a token pause', async () => {
+    const { HEAP_BACKOFF_MS } = await import('../src/workers/crawlWorker.js');
+    expect(HEAP_BACKOFF_MS).toBeGreaterThanOrEqual(3_000);
   });
 });
 
