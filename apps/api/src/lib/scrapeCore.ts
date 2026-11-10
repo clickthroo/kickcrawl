@@ -6,6 +6,15 @@ import { htmlToMarkdown } from '../services/markdown.js';
 import { extractLinks } from '../services/links.js';
 import { extractBySelectors, type SelectorMap } from '../services/extractor.js';
 import { extractStructuredProductData } from '../services/structuredData.js';
+import {
+  extractEmbeddedShopifyProduct,
+  fetchShopifyProduct,
+  isShopifyHtml,
+  selectShopifyVariantOptions,
+  shopifyOptionsToExtracted,
+  shopifyProductHandle,
+  shopifyVariantIdFromUrl,
+} from '../services/shopifyProduct.js';
 import { withQueryParam, stripQueryParam } from './queryParams.js';
 import type { SiteConfig } from './siteResolver.js';
 
@@ -190,6 +199,36 @@ export async function scrapePage(
     if (structured.images.length > 0) {
       metadata.images = [...new Set([...metadata.images, ...structured.images])];
       metadata.image = metadata.image ?? metadata.images[0];
+    }
+
+    // A Shopify product's own variant options (Condition, Size) - the only
+    // place some retailers state either at all (vintagefootballshirts.com:
+    // never in the title/description). Read from product JSON the theme
+    // embedded in the page when there is any, otherwise from Shopify's
+    // public /products/<handle>.js endpoint - one extra request, made only
+    // for a Shopify product page and only when nothing above already
+    // supplied both fields. Same "selector/structured data always wins"
+    // precedence as everything else merged into `extracted` here.
+    const extractedLower = () => new Set(Object.keys(extracted).map((k) => k.toLowerCase()));
+    const needsVariantFields = () => {
+      const keys = extractedLower();
+      return !keys.has('condition') || !keys.has('size');
+    };
+    if (needsVariantFields() && shopifyProductHandle(finalResult.finalUrl) && isShopifyHtml(finalResult.html)) {
+      const product =
+        extractEmbeddedShopifyProduct($, finalResult.finalUrl) ??
+        (await fetchShopifyProduct(finalResult.finalUrl, {
+          proxyUrl: site?.use_proxy ? process.env.PROXY_URL : undefined,
+          rateLimitRps: site?.rate_limit_rps,
+        }));
+      if (product) {
+        const variantId = shopifyVariantIdFromUrl(url) ?? shopifyVariantIdFromUrl(finalResult.finalUrl);
+        const fields = shopifyOptionsToExtracted(selectShopifyVariantOptions(product, variantId));
+        const keys = extractedLower();
+        for (const [key, value] of Object.entries(fields)) {
+          if (!keys.has(key)) extracted[key] = value;
+        }
+      }
     }
 
     if (Object.keys(extracted).length > 0) out.extracted = extracted;

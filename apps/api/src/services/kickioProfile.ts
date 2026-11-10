@@ -1643,6 +1643,64 @@ export function extractSizeFromTitle(text: string | null | undefined): string | 
     const s = norm(trailingBare[1]);
     if (s) return s;
   }
+  // The same trailing size, once the page <title>'s own site-name suffix
+  // is cut off - what buildKickioProfile actually receives as `title` is
+  // the page's <title> text, which on vintagefootballshirts.com reads
+  // "... Beckham #7 M | Vintage Football Shirts", so the end-anchored
+  // check above never saw the size at the end at all. Deliberately
+  // narrower than that check: the size must directly follow a shirt
+  // number ("#7 M") or the kit word itself ("Home Shirt M"), optionally
+  // with this retailer's own trailing stock code after it ("Shirt S
+  // 112587", "Shirt M HA8318") - "Beckham #7 M" is a size, but a bare
+  // letter after any arbitrary word (an initial, an abbreviation) is not
+  // safe to read as one.
+  const withoutSubtitle = stripTitleSubtitle(text).trim();
+  const anchored = withoutSubtitle.match(
+    /(?:#\d{1,3}[a-z]?|\b(?:shirt|jersey|top|kit))\s+(xxs|xs|s|m|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl|6xl)(?:\s+(?:\d{2,7}|[a-z]{1,3}\d{2,7}))?$/i,
+  );
+  if (anchored) {
+    const s = norm(anchored[1]);
+    if (s) return s;
+  }
+  if (withoutSubtitle !== text.trim()) {
+    const strippedTrailing = withoutSubtitle.match(/\b(xxs|xs|s|m|l|xl|xxl|xxxl|2xl|3xl|4xl|5xl|6xl)$/i);
+    if (strippedTrailing) {
+      const s = norm(strippedTrailing[1]);
+      if (s) return s;
+    }
+  }
+  return null;
+}
+
+const KICKIO_AGE_BANDS = new Set(Object.values(YOUTH_AGE_MAP));
+
+/**
+ * A size given as a value on its own - a Shopify "Size" variant option
+ * ("Medium", "XL", "S", "Youth L", "M Boys", "9-10 Years") - rather than
+ * embedded in a longer title. Strict whole-value matching only, so it
+ * returns null (letting the caller's looser fallbacks try) for anything
+ * that isn't plainly a size.
+ */
+export function normalizeSizeOption(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const v = raw.replace(/\s+/g, ' ').trim();
+  if (!v) return null;
+  const k = v.toLowerCase();
+  if (k === 'xxs') return ADULT_XXS_AGE_BAND;
+  if (SIZE_MAP[k]) return SIZE_MAP[k];
+  if (SIZE_MAP[k.replace(/\s+/g, '')]) return SIZE_MAP[k.replace(/\s+/g, '')];
+  const youthWords = '(?:youth|boys?|girls?|junior|juniors|kids?|child(?:ren)?s?|yth|jnr)';
+  const youth =
+    k.match(new RegExp(`^${youthWords}'?s?\\s+([a-z0-9-]+)$`)) ?? k.match(new RegExp(`^([a-z0-9-]+)\\s+${youthWords}$`));
+  if (youth) {
+    const band = YOUTH_AGE_MAP[youth[1]];
+    if (band) return band;
+  }
+  const age = k.match(/^(?:age\s*)?(\d{1,2})\s*-\s*(\d{1,2})\s*(?:years?|yrs?|y)?$/);
+  if (age) {
+    const band = `${Number(age[1])}-${Number(age[2])} Years`;
+    if (KICKIO_AGE_BANDS.has(band)) return band;
+  }
   return null;
 }
 
@@ -1690,14 +1748,22 @@ export type ConditionGrade = 'Brand New (With Tags)' | 'Mint' | 'Very Good' | 'G
 // treated here as Mint and Very Good respectively (no perceptible wear
 // vs. great-but-visibly-used), the more common convention in resale
 // grading; revisit if VFS's own usage turns out to rank them differently.
+//
+// The same grades also appear as each product's own "Condition" variant
+// option (see services/shopifyProduct.ts) - the only place this retailer
+// states a listing's condition at all - and that option's values on the
+// live store also include "Fair" plus hand-typed misspellings
+// ("Excelllent", "Exellent", "Excelelnt", "Excellentnt", "Minit"), hence
+// the deliberately loose Excel*/Exel*/Exell* and Min(i)t patterns.
 const VINTAGE_FOOTBALL_SHIRTS_CONDITIONS: [RegExp, ConditionGrade][] = [
   [/\bbnib\b/i, 'Brand New (With Tags)'],
   [/w\/\s*tags?\b/i, 'Brand New (With Tags)'],
-  [/\bmint\b/i, 'Mint'],
+  [/\bmini?t\b/i, 'Mint'],
   [/\bas\s*new\b/i, 'Mint'],
-  [/\bexcellent\b/i, 'Very Good'],
+  [/\bexc?el\w*/i, 'Very Good'],
   [/\bvery\s*good\b/i, 'Very Good'],
   [/\bgood\b/i, 'Good'],
+  [/\bfair\b/i, 'Fair'],
 ];
 
 // ---- footballfinery.co.uk ----
@@ -1731,6 +1797,15 @@ export const RETAILER_CONDITION_OVERRIDES: Record<string, [RegExp, ConditionGrad
 // this is a confirmed real description-writing convention on this one
 // site, not something to assume elsewhere without the same evidence.
 const CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION = new Set(['footballfinery.co.uk']);
+
+// Hostnames whose whole-page text must never be graded for condition -
+// only an explicit field (for vintagefootballshirts.com: its own Shopify
+// "Condition" variant option) or the title. Confirmed on that site: every
+// page's text carries its sitewide condition filter facets ("Mint",
+// "w/tags", "BNIB", ...), so the haystack fallback graded every single
+// listing Mint or Brand New (With Tags) - 184 of 184 sales pushed to
+// Kickio, against a real spread of mostly Very Good plus Good/Fair.
+const CONDITION_HAYSTACK_FALLBACK_DISABLED = new Set(['vintagefootballshirts.com']);
 
 /**
  * Pulls out just the text immediately after a retailer's own explicit
@@ -2536,10 +2611,16 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
     // over the retailer's own actual stated grade.
     const labeledCondition =
       hostname && CONDITION_FIELD_IS_LABELED_IN_DESCRIPTION.has(hostname) ? extractLabeledCondition(haystack) : null;
+    const haystackAllowed = !(hostname && CONDITION_HAYSTACK_FALLBACK_DISABLED.has(hostname));
     condition =
       (labeledCondition ? gradeConditionText(labeledCondition, hostname) : null) ??
       gradeConditionText(title, hostname) ??
-      gradeConditionText(haystack, hostname);
+      (haystackAllowed ? gradeConditionText(haystack, hostname) : null);
+    if (!condition && !haystackAllowed) {
+      reviewReasons.push(
+        "condition not found in the product's own Condition option or title (page text deliberately not graded for this retailer)",
+      );
+    }
   }
 
   // ---- Description ----
@@ -2557,7 +2638,10 @@ export function buildKickioProfile(input: KickioProfileInput): KickioProfile {
   // ---- Size ----
   const explicitSize = caseInsensitiveGet(extracted, 'size', 'variant');
   const size = explicitSize
-    ? extractSizeFromVariant(explicitSize) ?? extractSizeFromTitle(explicitSize) ?? explicitSize
+    ? normalizeSizeOption(explicitSize) ??
+      extractSizeFromVariant(explicitSize) ??
+      extractSizeFromTitle(explicitSize) ??
+      explicitSize
     : extractSizeFromTitle(title);
 
   // ---- Price / currency / quantity ----
