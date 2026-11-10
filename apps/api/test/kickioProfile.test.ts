@@ -11,6 +11,7 @@ import {
   extractSeasonSpan,
   extractSizeFromTitle,
   extractSizeFromVariant,
+  normalizeSizeOption,
   gradeConditionText,
   guessTeamFromTitle,
   matchKickioTeam,
@@ -2715,5 +2716,128 @@ describe('buildKickioProfile - keyword fields ignore page boilerplate outside th
       extracted: { team: 'England' },
     });
     expect(profile.identity.issue).toBe('Authentic/Player Version');
+  });
+});
+
+describe('vintagefootballshirts.com variant-option condition and size', () => {
+  const url =
+    'https://www.vintagefootballshirts.com/collections/umbro/products/1998-00-manchester-united-umbro-home-shirt-beckham-7-m-1';
+  const title = '1998-00 Manchester United Umbro Home Shirt Beckham #7 M | Vintage Football Shirts';
+  // This retailer's sitewide condition filter facets, present in every
+  // page's own text - what used to grade every listing Mint/BNWT.
+  const facetHaystack = 'Filter Condition Mint w/tags BNIB As New Excellent Very good Good Size S M L XL';
+
+  it('uses the Condition/Size variant options (real example: Fair / Medium)', () => {
+    const profile = buildKickioProfile({
+      url,
+      title,
+      description: facetHaystack,
+      extracted: { condition: 'Fair', size: 'Medium' },
+    });
+    expect(profile.listing.condition).toBe('Fair');
+    expect(profile.listing.size).toBe('M');
+  });
+
+  it('prefers the variant\'s own "Very Good" over facet words elsewhere on the page', () => {
+    const profile = buildKickioProfile({
+      url,
+      title,
+      description: facetHaystack,
+      extracted: { condition: 'Very Good' },
+    });
+    expect(profile.listing.condition).toBe('Very Good');
+  });
+
+  it('leaves condition null (not Mint) when neither a variant option nor the title states one', () => {
+    const profile = buildKickioProfile({ url, title, description: facetHaystack });
+    expect(profile.listing.condition).toBeNull();
+    expect(profile.needs_review).toBe(true);
+    expect(profile.review_reason).toMatch(/condition not found/);
+  });
+
+  it('still reads a condition stated in the title itself', () => {
+    const profile = buildKickioProfile({
+      url,
+      title: '2013-14 Leeds Macron Home Shirt *w/tags* M | Vintage Football Shirts',
+      description: facetHaystack,
+    });
+    expect(profile.listing.condition).toBe('Brand New (With Tags)');
+  });
+
+  it('still grades the whole page text for other retailers', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.example-shirts.com/products/x',
+      title: '1998-00 Manchester United Home Shirt',
+      description: 'Lovely shirt in good condition',
+    });
+    expect(profile.listing.condition).toBe('Good');
+  });
+
+  it('maps Fair and the misspellings seen on the live store', () => {
+    const host = 'vintagefootballshirts.com';
+    expect(gradeConditionText('Fair', host)).toBe('Fair');
+    for (const v of ['Excelllent', 'Exellent', 'Excelelnt', 'Excellentnt', 'Excellent']) {
+      expect(gradeConditionText(v, host)).toBe('Very Good');
+    }
+    expect(gradeConditionText('Minit', host)).toBe('Mint');
+    expect(gradeConditionText('Very good', host)).toBe('Very Good');
+    expect(gradeConditionText('As New', host)).toBe('Mint');
+    expect(gradeConditionText('BNIB', host)).toBe('Brand New (With Tags)');
+    expect(gradeConditionText('w/tags', host)).toBe('Brand New (With Tags)');
+  });
+});
+
+describe('normalizeSizeOption', () => {
+  it('maps Shopify size option values onto Kickio sizes', () => {
+    expect(normalizeSizeOption('Small')).toBe('S');
+    expect(normalizeSizeOption('Medium')).toBe('M');
+    expect(normalizeSizeOption('Large')).toBe('L');
+    expect(normalizeSizeOption('XL')).toBe('XL');
+    expect(normalizeSizeOption('XXL')).toBe('XXL');
+    expect(normalizeSizeOption('XXXL')).toBe('3XL');
+    expect(normalizeSizeOption('S')).toBe('S');
+    expect(normalizeSizeOption('M')).toBe('M');
+    expect(normalizeSizeOption('L')).toBe('L');
+  });
+
+  it('maps youth sizes onto Kickio age bands', () => {
+    expect(normalizeSizeOption('Youth L')).toBe('11-12 Years');
+    expect(normalizeSizeOption('M Boys')).toBe('9-10 Years');
+    expect(normalizeSizeOption('9-10 Years')).toBe('9-10 Years');
+    expect(normalizeSizeOption('13-14 yrs')).toBe('13-14 Years');
+  });
+
+  it('returns null for anything that is not plainly a size', () => {
+    expect(normalizeSizeOption('L / Red')).toBeNull();
+    expect(normalizeSizeOption('Default Title')).toBeNull();
+    expect(normalizeSizeOption('10-11 Years')).toBeNull();
+  });
+
+  it('feeds a youth size option through buildKickioProfile', () => {
+    const profile = buildKickioProfile({
+      url: 'https://www.vintagefootballshirts.com/products/x',
+      title: '2004-06 Chelsea Umbro Home Shirt',
+      extracted: { size: 'Youth M' },
+    });
+    expect(profile.listing.size).toBe('9-10 Years');
+  });
+});
+
+describe('extractSizeFromTitle - trailing size on a VFS-style title', () => {
+  it("reads the size behind the page <title>'s own site-name suffix", () => {
+    expect(
+      extractSizeFromTitle('1998-00 Manchester United Umbro Home Shirt Beckham #7 M | Vintage Football Shirts'),
+    ).toBe('M');
+    expect(extractSizeFromTitle('2004-06 Chelsea Umbro Home Shirt Lampard #8 XL | Vintage Football Shirts')).toBe('XL');
+  });
+
+  it('reads a size after "#number" or the kit word even with a stock code after it', () => {
+    expect(extractSizeFromTitle('1998-00 Manchester United Umbro Home Shirt Beckham #7 L 112587')).toBe('L');
+    expect(extractSizeFromTitle('2022-23 Celtic adidas Third Shirt M HA8318')).toBe('M');
+  });
+
+  it('does not read a bare letter after an arbitrary word once a stock code follows it', () => {
+    expect(extractSizeFromTitle('2025-26 Manchester City Puma Home Shirt L/S *w/tags* 78')).toBeNull();
+    expect(extractSizeFromTitle('1990 Juventus Home Shirt Roberto Baggio R 12345')).toBeNull();
   });
 });
